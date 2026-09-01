@@ -1,0 +1,49 @@
+# ============================================================
+# 个人偏好 / Personal preferences
+# 决定选题倾向、日报篇幅、输出语言与视频标记规则
+# Drives topic selection, digest length, output languages and the video flag.
+# ============================================================
+
+# 命中则加权，越靠前权重越高 / keywords that boost an item's score
+focus_keywords:
+  - 大模型
+  - 多模态
+  - 智能体
+  - 具身智能
+  - OpenVINO
+  - 推理优化
+  - 开源模型
+  - LLM
+  - agent
+  - inference
+
+# 命中则直接排除 / keywords that drop an item outright
+exclude_keywords:
+  - 招聘
+  - 广告
+  - 融资快讯
+
+# 命中则倾向标记 need_video（最终由 LLM 打分 + 规则共同判定，GUI 可人工覆盖）
+# Hints for the need_video flag; the final call combines LLM scoring with these
+# rules and can always be overridden by hand in the GUI.
+video_keywords:
+  - 发布
+  - 开源
+  - 突破
+  - 首个
+  - 演示
+  - release
+  - launch
+
+# 输出语言 / output languages: zh | en
+languages:
+  - zh
+
+# 每期日报最多收录条数 / max entries per issue
+digest_max_entries: 15
+
+# 每条总结的句数上限 / max sentences per summary
+summary_max_sentences: 2
+
+# 短视频口播稿目标时长区间（秒）/ target duration range for the short-video script
+video_duration_seconds: [20, 25]

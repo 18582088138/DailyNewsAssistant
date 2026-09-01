@@ -1,0 +1,52 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dailynewsassistant"
+version = "0.1.0"
+description = "Daily AI news assistant: collect -> digest -> graphic / video / podcast publishing"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+
+# 核心依赖（P0 即需要）/ core dependencies required from P0
+dependencies = [
+    "pydantic>=2.9",
+    "pydantic-settings>=2.4",
+    "python-dotenv>=1.0",
+    "PyYAML>=6.0",
+    "typer>=0.12",
+    "rich>=13.0",
+]
+
+[project.optional-dependencies]
+# 按阶段增量安装 / installed incrementally per phase
+sources = ["feedparser>=6.0", "trafilatura>=1.12", "beautifulsoup4>=4.12", "httpx>=0.27"]
+pipeline = ["scikit-learn>=1.5", "sentence-transformers>=3.0", "numpy>=1.26"]
+llm = ["openai>=1.40"]
+render = ["Jinja2>=3.1", "playwright>=1.45", "Pillow>=10.0", "markdown>=3.6"]
+tts = ["openvino>=2024.0", "transformers>=4.44", "soundfile>=0.12"]
+gui = ["nicegui>=2.0"]
+inbox = ["lark-oapi>=1.4"]
+scheduler = ["APScheduler>=3.10"]
+dev = ["pytest>=8.0", "pytest-cov>=5.0"]
+
+[project.scripts]
+dna = "frontends.cli.main:app"
+
+[tool.setuptools.packages.find]
+# 后端包在 src/，前端包在仓库根 —— 前端与核心物理隔离
+# Backend package lives in src/, frontends at repo root: physical separation by design.
+where = ["src", "."]
+include = ["dna*", "frontends*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src", "."]
+markers = [
+    "live: 需要联网 / 真实 LLM / 真实飞书连接，默认跳过 (requires network or live services)",
+    "slow: 耗时较长，如 TTS 合成与端到端 (long-running, e.g. TTS / E2E)",
+]
+# 默认只跑离线快测；跑全量用 `-m ''`
+addopts = "-q -m 'not live and not slow'"

@@ -1,0 +1,73 @@
+# ============================================================
+# 订阅源清单 / News source list
+# 可随时增删，改完无需重启（GUI 里点「重载配置」即可）
+# Edit freely; the GUI can hot-reload this file.
+#
+# kind: rss | rsshub | inbox | gui
+#   rss    —— 标准 RSS/Atom 地址
+#   rsshub —— 自建 RSSHub 路由（url 只填路由部分，如 /wechat/ce/xxxx）
+# lang: zh | en   源语言，用于判断是否需要翻译
+# tags: 自由标签，用于筛选与统计
+# ============================================================
+
+sources:
+  # ---- 中文 AI 资讯 / Chinese AI news ----
+  - id: jiqizhixin
+    name: 机器之心
+    kind: rss
+    url: https://www.jiqizhixin.com/rss
+    lang: zh
+    tags: [ai, cn]
+    enabled: true
+
+  - id: qbitai
+    name: 量子位
+    kind: rss
+    url: https://www.qbitai.com/feed
+    lang: zh
+    tags: [ai, cn]
+    enabled: true
+
+  - id: 36kr-ai
+    name: 36氪 · 人工智能
+    kind: rss
+    url: https://36kr.com/feed
+    lang: zh
+    tags: [startup, cn]
+    enabled: false
+
+  # ---- 英文 AI 资讯 / English AI news ----
+  - id: hackernews-front
+    name: Hacker News Front Page
+    kind: rss
+    url: https://hnrss.org/frontpage
+    lang: en
+    tags: [tech, en]
+    enabled: true
+
+  - id: techcrunch-ai
+    name: TechCrunch AI
+    kind: rss
+    url: https://techcrunch.com/category/artificial-intelligence/feed/
+    lang: en
+    tags: [ai, en]
+    enabled: true
+
+  - id: arxiv-cs-ai
+    name: arXiv cs.AI
+    kind: rss
+    url: https://rss.arxiv.org/rss/cs.AI
+    lang: en
+    tags: [paper, en]
+    max_items: 15
+    enabled: false
+
+  # ---- 平台源（需自建 RSSHub，P10 接入）/ platform sources via self-hosted RSSHub ----
+  # url 填 RSSHub 路由，基址取 .env 的 RSSHUB_BASE_URL
+  - id: zhihu-hot
+    name: 知乎热榜
+    kind: rsshub
+    url: /zhihu/hotlist
+    lang: zh
+    tags: [social, cn]
+    enabled: false
