@@ -1,0 +1,36 @@
+# ---- secrets 密钥 ----
+.env
+*.key
+
+# ---- outputs & data 产物与数据 ----
+outputs/
+data/
+*.db
+*.sqlite3
+*.wav
+*.mp3
+*.mp4
+
+# ---- python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.pytest_cache/
+.coverage
+htmlcov/
+.venv/
+venv/
+
+# ---- models & caches 模型与缓存 ----
+models/
+.cache/
+*.bin
+*.onnx
+
+# ---- editor / os ----
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
