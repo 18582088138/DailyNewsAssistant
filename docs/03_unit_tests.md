@@ -28,10 +28,22 @@ $PY -m pytest --cov=dna          # 覆盖率（需 pytest-cov）
 | 标记 | 含义 | 默认 |
 |---|---|---|
 | 无标记 | 纯离线，不联网不落真实盘 | ✅ 跑 |
-| `@pytest.mark.live` | 需联网 / 真实 LLM / 真实飞书长连接 | ⬜ 跳过 |
+| `@pytest.mark.live` | 真实调用外部服务，**产生实际费用** | ⬜ 跳过 |
 | `@pytest.mark.slow` | 耗时长（TTS 合成、端到端） | ⬜ 跳过 |
 
 默认跳过规则写在 `pyproject.toml` 的 `addopts = "-q -m 'not live and not slow'"`。
+
+### 💰 LLM 测试纪律（必须遵守）
+
+真实 LLM 调用**要花钱**，所以：
+
+1. **日常开发一律用假响应**——`tests/llm/fakes.py` 提供 `FakeOpenAIClient`（冒充 SDK）
+   与 `ScriptedProvider`（冒充 provider）。新增涉及 LLM 的功能时，单测断言的应该是
+   **提示词构造是否正确**与**返回解析是否正确**，而不是去问真实模型
+2. **`-m live` 只在阶段验收时手动跑一次**，不要放进日常循环
+3. `pytest`（默认）不会产生费用；⚠️ **`pytest -m ""` 会把 live 跑起来**，慎用
+4. **本地 LLM 测试已冻结**：`test_live_ollama` 标记为 skip。P1 已验证路径可用，
+   但本地方案当前不成熟，接口保留、测试冻结
 
 ---
 
@@ -156,12 +168,194 @@ $PY -m pytest tests/frontends/test_cli.py -v
 
 ---
 
+## P1 LLM 抽象层
+
+**最近一次全量结果：189 passed in 1.51s（0 failed，2 个 live 用例默认跳过）**
+
+### `tests/llm/test_parsing.py` — LLM 输出解析
+
+```bash
+$PY -m pytest tests/llm/test_parsing.py -v
+```
+
+| 覆盖点 | 说明 |
+|---|---|
+| 纯净 JSON | 对象与数组直接返回 |
+| 代码块 | ` ```json ` 与无语言标记的 ` ``` ` |
+| 夹带解释文字 | 「好的，结果如下：」这类前后缀 |
+| **字符串里的括号** | `{"note": "价格 } 上涨"}` 不能被截断——贪婪正则必然在此出错 |
+| 转义引号 | `\"` 不能被误判为字符串结束 |
+| 嵌套 | 嵌套对象、对象数组 |
+| 异常 | 空输出 / 无 JSON / 括号未闭合 → `ProviderResponseError`，且报错被截断不灌日志 |
+| 思维链 | `strip_think_tags` 去 `<think>…</think>`，含与 JSON 提取的组合场景 |
+
+**预期**：24 passed，< 1s，纯字符串处理无 I/O。
+
+### `tests/llm/test_provider.py` — Provider 实现
+
+```bash
+$PY -m pytest tests/llm/test_provider.py -v
+# 真实调用（需联网 / 需 Ollama 在跑）
+$PY -m pytest tests/llm/test_provider.py -m live -v
+```
+
+| 覆盖点 | 说明 |
+|---|---|
+| 正常返回 | 文本、token 用量、耗时 |
+| 参数传递 | model / temperature / max_tokens / messages 原样送达；未设 max_tokens 时不发该字段 |
+| 思维链 | 内联 `<think>` 剥离；**独立 `reasoning` 字段单独保存** |
+| **截断诊断** | `finish_reason=length` + 空正文 → 报错点明「被 max_tokens 截断、预算被思维链耗尽」，且**标记为不可重试**（见 issue 001） |
+| **错误分类** | 429→`RateLimitError`(可重试)、401→`AuthError`(**不可重试**)、timeout→`ProviderTimeoutError`、其它→可重试 |
+| chat_json | 纯净/代码块解析；校验失败带错误重试并修复；重试用尽抛错且次数 = `max_repair+1` |
+| **Schema 回声** | 模型抄回 Schema 时显式识别并给出针对性纠正（见 issue 002）；四种特征字段参数化 |
+| **服务端 JSON 模式** | `chat_json` 发 `response_format`；普通 chat 不发；端点不支持时自动降级重试 |
+| Ollama | base_url 归一化（4 种写法）、标记为本地、复用同一套解析 |
+| health_check | 成功与失败路径 |
+
+**预期**：离线 31 passed；`-m live` 时 DeepSeek 用例真实调用通过，Ollama 未运行则跳过。
+
+### `tests/llm/test_factory.py` — 工厂与容错
+
+```bash
+$PY -m pytest tests/llm/test_factory.py -v
+```
+
+| 覆盖点 | 说明 |
+|---|---|
+| build_provider | 5 种 provider；大小写不敏感；OpenVINO 占位调用时给出「P10 实现」的明确指引 |
+| 配置校验 | 缺 key / 缺 model → `ConfigError` 且指名要设哪个环境变量；未知名列出可选值 |
+| **退避策略** | 指数增长 1→2→4→8，被 `max_delay` 截断 |
+| **重试** | 可重试错误退避后成功，`attempts` 计数正确；**退避通过注入的假 sleep 完成，测试不真的等待** |
+| **不重试** | 鉴权失败一次即放弃，退避列表为空 |
+| **降级** | 主 provider 用尽 → 切备用；鉴权失败 → 立即切备用不浪费退避；主备都挂 → 抛最后一个错 |
+| get_llm 组装 | 备用与主相同 / 备用未配置 → 不挂备用（坏备用比没备用更糟） |
+| 类型契约 | `ResilientProvider` 本身是 `LLMProvider`，`chat_json` 可穿透使用 |
+
+**预期**：25 passed，< 2s。
+
+> 降级逻辑测得重是有原因的：OpenRouter 免费层限流已经在 doc_analyzer 上踩过（issue 002）。
+> 一期日报要跑十几次 LLM 调用，中途被限流就整期作废，而这类 bug 表现为「偶尔失败」，极难复现。
+
+### P1 真机验证结论
+
+| 项 | 结果 |
+|---|---|
+| DeepSeek（云端，默认） | ✅ 通过，`-m live` 自动化覆盖（**验收时才跑**） |
+| Ollama `qwen2.5:3b` | ✅ chat + chat_json 均一次通过 |
+| Ollama `qwen3.5:9b`（推理模型） | ✅ 通过，但回答一个字耗 **2244 tokens / 314 秒** |
+
+> ⏸ **本地 LLM 已于 P1 结束后冻结**：上述 Ollama 验证结果保留作为记录，
+> `test_live_ollama` 已标记 skip，后续阶段不再对本地 LLM 做功能开发与测试。
+
+真机验证暴露并修复了两个问题，均已归档：
+[issue 001](issues/001-ollama-reasoning-token-budget.md)（推理 token 预算）、
+[issue 002](issues/002-small-model-echoes-json-schema.md)（小模型抄回 Schema）。
+
+---
+
+## P2 信息源与抽取层
+
+**最近一次全量结果：316 passed in 2.31s（0 failed）** —— 本阶段**完全不涉及 LLM**，无费用。
+
+### `tests/core/test_urls.py` — URL 规范化
+
+```bash
+$PY -m pytest tests/core/test_urls.py -v
+```
+
+| 覆盖点 | 说明 |
+|---|---|
+| 大小写 | scheme/host 转小写，**path 保持大小写敏感**（bilibili 的 BV 号等 id 大小写有意义） |
+| 端口 | 省略 http:80 / https:443，非默认端口保留 |
+| **剔除追踪参数** | `utm_*` 前缀 + `fbclid`/`spm`/`from`/`share_source` 等具名参数，10 个参数化用例 |
+| **保留内容参数** | `?id=123`、微信的 `__biz/mid/idx/sn`——清空会把不同文章合并成一条 |
+| 参数排序 | 仅顺序不同的 URL 规范化为同一个 |
+| fragment / 斜杠 | 去 `#comments`、去末尾斜杠（根路径除外） |
+| `url_hash` | 稳定、跨追踪参数一致、不同文章不同、定长 16 位 |
+| `extract_urls` | 中文文本提取、去重保序、**剥掉结尾中英文标点**（手机转发几乎必带） |
+
+**预期**：41 passed，< 1s。
+
+> 规则太松会让同一篇文章在日报里出现两次；太严会把不同文章合并、丢内容。
+> 两种错误都只在生产数据上才显形，所以这里测得细。
+
+### `tests/sources/test_rss.py` — RSS 解析与源装配
+
+```bash
+$PY -m pytest tests/sources/test_rss.py -v
+```
+
+| 覆盖点 | 说明 |
+|---|---|
+| 正常解析 | 标题、链接、摘要、发布时间 |
+| 标题空白 | 换行与连续空格必须压平（否则污染目录 slug 与排版） |
+| **缺 pubDate → None** | 不能回填「现在」，否则这条永远排最前且跨日去重失真 |
+| **缺 link/title → 跳过** | 没有链接就无法抽正文，留着变成空条目 |
+| 瑕疵容忍 | bozo 但有条目的 feed 继续可用（真实 feed 十有八九带瑕疵） |
+| **HTML 错误页必须报错** | 站点改版后返回 200 + HTML 404 页；**feedparser 对此 bozo=False**，靠 bozo 判断会静默记成「成功 0 条」（issue 003-A） |
+| **合法空 feed 不算错** | 低频源今天没新内容是正常的 |
+| RSSHub 路由 | 5 种写法的拼接容错 |
+| **registry 错误隔离** | 一个源抛异常（含未预期类型）不中断整轮；per-source 计数；summary 体现失败数 |
+
+**预期**：25 passed，< 2s，全程离线（用 `tests/fixtures/sample_feed.xml`）。
+
+### `tests/sources/test_user_link.py` — 用户投递
+
+```bash
+$PY -m pytest tests/sources/test_user_link.py -v
+```
+
+| 覆盖点 | 说明 |
+|---|---|
+| 文本→条目 | 中文句子里提链接、多链接保序、标题留空待抽取层补 |
+| **按规范化 URL 去重** | 微信分享（`from=groupmessage`）与浏览器复制（`utm_source`）指向同一文章时只留一条 |
+| via 标记 | GUI 手动粘贴 vs 飞书投递 |
+| UserLinkSource | 累积、**跨批次去重**、fetch 上限、clear |
+
+**预期**：16 passed，< 1s。
+
+### `tests/extract/test_extract.py` — 正文与媒体抽取
+
+```bash
+$PY -m pytest tests/extract/test_extract.py -v
+```
+
+| 覆盖点 | 说明 |
+|---|---|
+| 正文抽取 | 抽出正文且**不含导航/侧栏/页脚**（去模板是本层核心价值） |
+| 标题 | og:title 优先于 `<title>`（后者常带「_站点名」后缀） |
+| **失败降级** | 抽不到正文时降级为「仅标题+链接」而非抛异常——链接本身仍有价值 |
+| 畸形 HTML | 4 种坏 HTML 不崩 |
+| 图片优先级 | og:image 优先，但**必须先过图标过滤** |
+| **懒加载** | 取 `data-src` 而非占位 `src`，否则每条配图都是同一张 loading 图 |
+| **logo 过滤** | og:image 是站点 logo 时过滤（实测量子位如此），否则每条日报封面都一样（issue 003-B） |
+| **按词匹配** | `overhead-view.jpg`/`iconic-moment.jpg` 等真实配图不能被误杀；只看 path 不看域名 |
+| 追踪像素 | 1x1 gif 过滤 |
+| 地址补全 | 相对路径与协议相对（`//cdn...`）地址 |
+| 视频 | bilibili iframe 识别为官方视频；广告 iframe 不误判 |
+| **出处可追溯** | 每个资产必带 `source_url` 与 `credit`——发布合规要求，事后补不回来 |
+
+**预期**：26 passed，< 3s，全程离线（用 `tests/fixtures/sample_article.html`）。
+
+### P2 真机验证
+
+```bash
+$PY -m frontends.cli.main fetch --limit 3            # 采集预览
+$PY -m frontends.cli.main fetch --source qbitai --limit 1 --extract   # 含正文抽取
+```
+
+**不调用 LLM，无费用**，可放心重复执行。
+
+验证结果：4 个源可用（量子位 / InfoQ / HackerNews / arXiv），发现并处理了 3 个失效源；
+正文抽取 4137 字、结构干净；配图修复后 5 张全部为真实文章图。
+过程中发现的三个问题见 [issue 003](issues/003-p2-live-verification-findings.md)。
+
+---
+
 ## 待补（随阶段推进填写）
 
 | 阶段 | 测试文件 | 状态 |
 |---|---|---|
-| P1 | `tests/llm/test_llm_provider.py` | ⬜ |
-| P2 | `tests/sources/test_rss.py` `test_user_link.py` `tests/extract/test_extract.py` | ⬜ |
 | P3 | `tests/pipeline/test_clean.py` `test_dedup.py` `test_score.py` `test_summarize.py` `test_translate.py` `test_trend.py` | ⬜ |
 | P4 | `tests/store/test_output_layout.py` `test_ledger.py` `test_history.py` | ⬜ |
 | P5 | `tests/apps/test_graphic_daily.py` | ⬜ |

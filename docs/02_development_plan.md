@@ -8,6 +8,7 @@
 > - **v3**：产物落盘去掉 `issue/`（曾拟改名 `daily/`）中间层，期次目录直接命名为 `YYYYMMDD-DailyNews`
 > - **v4**：远程投递由「邮箱 IMAP」改为「**飞书机器人 + 长连接**」——核实到飞书/钉钉均已支持长连接模式，无需公网回调，v3 的排除理由已失效
 > - **v5**：明确**飞书功能不在公司电脑运行**，部署在用户私人电脑。取消代理 WSS spike；邮箱兜底降为预留不实现；`feishu_bot.py` 与 SDK 解耦以支持离线单测；**部署文档 `08_feishu_bot_deployment.md` 提前交付**
+> - **v6**：**本地 LLM（Ollama / OpenVINO）功能冻结**——只保留接口与 P1 已完成的代码，不做进一步开发与功能测试，待本地方案成熟后再启动；后续开发一律以 API LLM（DeepSeek）为主；**LLM 真实调用产生费用，不得频繁测试**，日常单测一律用假响应
 
 ---
 
@@ -284,11 +285,34 @@ class LLMProvider(ABC):
     def info(self) -> ProviderInfo: ...                        # name/model/是否本地
 ```
 
-| 实现 | 覆盖 | 阶段 |
+| 实现 | 覆盖 | 状态 |
 |---|---|---|
-| `OpenAICompatProvider` | **DeepSeek（默认）** / OpenRouter（备，充值问题解决后启用）/ vLLM | P1 |
-| `OllamaProvider` | 本地 qwen3.5:9b | P1 |
-| `OpenVINOProvider` | 本地 OV IR | P10（接口先占位） |
+| `OpenAICompatProvider` | **DeepSeek（默认，后续开发主力）** / OpenRouter（备）/ vLLM | ✅ P1 完成 |
+| `OllamaProvider` | 本地 Ollama | ✅ 代码完成，⏸ **功能冻结** |
+| `OpenVINOProvider` | 本地 OV IR | ⏸ 接口占位，**冻结** |
+
+### ⏸ 本地 LLM 冻结说明（v6）
+
+用户决定：**本地 LLM 方案当前不够成熟，只保留接口，不做进一步功能开发与功能测试**，
+待本地方案状态核实后再启动。P1 已完成的 `OllamaProvider` 代码保留不动，
+其 live 测试标记为 skip（`tests/llm/test_provider.py::test_live_ollama`）。
+
+依据（P1 真机实测）：`qwen3.5:9b` 回答一个字耗 2244 tokens / 314 秒，
+按每期 15 条估算纯摘要环节即需 1~2 小时，尚不具备实用性。详见 `issues/001`。
+
+**对后续阶段的影响**：P3–P9 全部基于 DeepSeek 开发验证；原计划 P10 的
+「OpenVINO LLM provider」改为**待定**，解冻后再排期。抽象层已经就位，
+解冻时业务代码零改动。
+
+### 💰 LLM 测试纪律（v6）
+
+真实调用**产生实际费用**，因此：
+
+- 日常开发与单元测试**一律使用 `tests/llm/fakes.py` 的测试替身**，断言的是
+  「提示词构造是否正确」与「返回解析是否正确」，而不是去问真实模型
+- `@pytest.mark.live` 用例**只在阶段验收时手动跑一次**
+- 默认的 `pytest` 命令已排除 live，不会产生费用；`pytest -m ""` 会跑 live，慎用
+- 新增涉及 LLM 的功能时，**先用固定假响应把逻辑测透**，最后才做一次真机验收
 
 `factory.py` 统一处理超时、指数退避、限流自动降级、token 计数（计数写入 `productions` 表）。
 业务代码只见 `LLMProvider`——**换模型零改动**，这是「先 API 验证、后 Local 迁移」的落点。
@@ -312,7 +336,7 @@ class LLMProvider(ABC):
 | **P7** | **场景3 播客版**（复用 P6 的 script_builder/voiceover）：单人/双人脚本 + 整期音频 | `script.*.md` + `podcast.*.wav` | `test_podcast_script`（离线）+ `@slow` 音频 |
 | **P8** | 前端：CLI 全命令 + NiceGUI 主界面 + **后台台账控制台（产出矩阵/筛选/重做/统计）** | 可交互使用 | `test_cli` `test_redo`；GUI 走人工审阅 |
 | **P9** | **远程投递接口**（飞书机器人长连接 + 白名单 + hashtag 指令 + 即时回执 + 交互卡片）+ APScheduler 定时。**公司电脑只交付代码与离线测试**，联调在私人电脑 | 可运行的 `dna.inbox.service` + 部署文档 | `test_inbox_parse` `test_inbox_whitelist` `test_inbox_commands`（构造事件，零网络）；真连接测试标 `@live` 默认跳过 |
-| **P10** | 自建 RSSHub 接入 + OpenVINO LLM provider + E2E + 打包 | 端到端一键日报 | `test_e2e`（`@slow`） |
+| **P10** | 自建 RSSHub 接入 + E2E + 打包（~~OpenVINO LLM~~ 随本地 LLM 一并冻结，解冻后另行排期） | 端到端一键日报 | `test_e2e`（`@slow`） |
 
 **人工审阅节点**：P5 / P6 / P7 各自完成后停下来给你审内容质量；P8 后整体审阅一次。
 
@@ -359,6 +383,7 @@ test_dedup.py — 去重与聚类单元测试 / Dedup & clustering unit tests
 | `docs/07_db_schema.md` | 台账表结构与统计口径 | P4 |
 | `docs/08_feishu_bot_deployment.md` | 飞书机器人 + 长连接**部署指南**：后台配置、权限、发布、open_id 获取、私人电脑部署、Windows 常驻、验证清单、排错表 | ✅ **已完成** |
 | `docs/09_packaging.md` | 部署/打包 | P10 |
+| `docs/10_sources_guide.md` | **添加信息源指南**：`dna probe` 用法、验证步骤、找不到 feed 的出路、当前源清单状态 | ✅ **已完成** |
 | `docs/issues/NNN-*.md` | 现象 + 复现脚本 + 精确命令 + 结论 | 随时 |
 | `docs/git_commands.md` | 各阶段 git 命令汇总（**你手动执行**） | 每阶段 |
 

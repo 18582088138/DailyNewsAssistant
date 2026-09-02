@@ -37,8 +37,8 @@
 | 正文/媒体抽取 | `trafilatura` + `bs4` 兜底；og:image / 正文图 / 官方视频，强制记录来源 |
 | 处理架构 | **单 Pipeline + LLM 节点**（不用 Multi-Agent） |
 | 去重聚类 | URL 规范化 + SimHash（一级）→ `bge-m3` 向量层次聚类（二级） |
-| 云 LLM | **DeepSeek（默认）** / OpenRouter（备，待充值问题解决） |
-| 本地 LLM | Ollama `qwen3.5:9b` → 后续 OpenVINO |
+| 云 LLM | **DeepSeek（默认，后续开发一律以 API LLM 为主）** / OpenRouter（备，待充值问题解决） |
+| 本地 LLM | ⏸ **已冻结**：Ollama / OpenVINO **只保留接口，不做功能开发与测试**，待本地方案成熟后再启动 |
 | TTS | **Qwen3-TTS OpenVINO**（`Qwen3-TTS-CustomVoice-0.6B-OV`，Intel CPU/GPU，中英双语，本地已验证） |
 | 长图 | Jinja2 HTML + **Playwright 截图** |
 | 前端 | CLI + **NiceGUI**（含后台台账控制台） |
@@ -54,8 +54,8 @@
 | 构建方案 | 架构、目录、数据模型、分阶段计划 | ✅ 完成 | — | `02_development_plan.md` v1 |
 | 方案调整 | 并入用户 7 点反馈 → 方案 v2 | ✅ 完成 | — | `02_development_plan.md` v2 |
 | P0 脚手架 | 配置/模型/命名/日志/环境自检 + CLI | ✅ **完成** | 95 passed (0.49s) | `03_unit_tests.md` · `README.md` |
-| P1 LLM 抽象层 | DeepSeek 默认，3 provider 可互换 | ⬜ | — | — |
-| P2 信息源 + 抽取 | RSS / user_link / article / media | ⬜ | — | — |
+| P1 LLM 抽象层 | DeepSeek 默认，5 provider 可互换 + 重试降级 | ✅ **完成** | 189 passed (1.5s) + 真机验证 | `03_unit_tests.md` · `issues/001` `issues/002` |
+| P2 信息源 + 抽取 | RSS / RSSHub / user_link / article / media | ✅ **完成** | 316 passed (2.3s) + 真机验证 | `03_unit_tests.md` · `issues/003` |
 | P3 Pipeline 核心 | 去重聚类→打分→摘要→**双语**→趋势 | ⬜ | — | — |
 | P4 落盘 + 台账 DB | 目录规则 / references / SQLite ledger | ⬜ | — | — |
 | P5 场景1 图文版 | md/html 双语 + 长图 | ⬜ | — | 🔍 人工审阅 |
@@ -64,6 +64,18 @@
 | P8 前端 | CLI + NiceGUI + **后台台账控制台/重做** | ⬜ | — | 🔍 人工审阅 |
 | P9 远程投递 | 飞书机器人长连接 + 白名单 + hashtag + 回执卡片 + 定时调度（离线单测；联调在私人电脑） | ⬜ | — | ✅ 部署文档已交付 |
 | P10 集成 | RSSHub/OV LLM/E2E/打包 | ⬜ | — | — |
+
+---
+
+## 四 bis、LLM 使用与测试纪律（2026-09-01 确立，**后续阶段必须遵守**）
+
+| 约束 | 说明 |
+|---|---|
+| **本地 LLM 冻结** | Ollama / OpenVINO **只保留接口与已有代码，不做进一步功能开发，不做功能测试**。P1 已验证路径可用（见 issues/001、002），但本地方案当前不成熟（qwen3.5:9b 回答一个字要 2244 tokens / 314 秒）。待用户核实本地方案状态后再启动 |
+| **以 API LLM 为主** | 后续所有功能开发与验证均基于 DeepSeek（云端 API） |
+| **不频繁测试 LLM** | 真实调用**产生实际费用**。日常开发一律用 `tests/llm/fakes.py` 的测试替身；`@pytest.mark.live` 用例**只在阶段验收时手动跑一次** |
+| 默认命令是安全的 | `pytest` 默认排除 `live`，不会产生费用。⚠️ `pytest -m ""` 会把 live 跑起来，需要时再用 |
+| 新阶段的写法 | 涉及 LLM 的新功能，单元测试一律用固定的假响应（fixture），断言**提示词构造与结果解析**，而不是去问真实模型 |
 
 ---
 
@@ -85,7 +97,17 @@
 
 | # | 问题 | 状态 | 记录 |
 |---|---|---|---|
-| — | 暂无 | — | — |
+| 001 | 推理模型（qwen3.5:9b）的 token 预算被思维链耗尽，`max_tokens` 偏小时正文为空；原报错指不到根因 | ✅ 已修复 + ⚠️ 遗留性能结论 | [issues/001](issues/001-ollama-reasoning-token-budget.md) |
+| 002 | 小模型（qwen2.5:3b）把 JSON Schema 原样抄回，且修复重试的反馈无效导致三次全废 | ✅ 已修复并真机复验 | [issues/002](issues/002-small-model-echoes-json-schema.md) |
+| 003 | P2 三个发现：①feed 失效被静默记成「成功 0 条」（feedparser 的 bozo 不可靠）②og:image 是站点 logo 时成为日报封面 ③三个订阅源实测失效 | ✅ 全部处理完毕 | [issues/003](issues/003-p2-live-verification-findings.md) |
+
+**issue 001 对后续阶段的约束**（重要）：`qwen3.5:9b` 回答一个字耗 2244 tokens / 314 秒，
+按每期 15 条估算纯摘要就要 1~2 小时。因此：P3 起本地模型**不要设小的 `max_tokens`**
+（控长度靠提示词约束句数）；Local 迁移优先选非推理模型（本机已有 `...nothink` 变体）；
+P3–P7 功能验证走云端 DeepSeek，本地性能评估放到 P10。
+
+**issue 002 对 P3 的约束**：所有打分类字段必须在 Pydantic 模型上写清 `ge`/`le` 与
+`description`——实测两个模型对无约束的 `score: float` 分别脑补了 0–100 和 0–10 两种量纲。
 
 ---
 

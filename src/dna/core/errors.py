@@ -27,7 +27,46 @@ class ExtractionError(DNAError):
 
 
 class ProviderError(DNAError):
-    """LLM / TTS 提供方调用失败 / An LLM or TTS provider call failed."""
+    """
+    LLM / TTS 提供方调用失败 / An LLM or TTS provider call failed.
+
+    子类用 `retryable` 区分「重试可能有用」与「重试没意义」，
+    工厂层据此决定是退避重试还是直接切备用 provider。
+    Subclasses expose `retryable` so the factory can decide between backing off
+    and switching straight to the fallback provider.
+    """
+
+    retryable: bool = False
+
+
+class RateLimitError(ProviderError):
+    """触发限流，退避后重试通常有效 / Rate-limited; backing off usually helps."""
+
+    retryable = True
+
+
+class ProviderTimeoutError(ProviderError):
+    """调用超时 / The provider call timed out."""
+
+    retryable = True
+
+
+class ProviderResponseError(ProviderError):
+    """
+    返回内容不可用（空回复、JSON 解析失败、结构校验不通过）。
+    The response was unusable: empty, unparseable JSON, or failing schema validation.
+    """
+
+    retryable = True
+
+
+class AuthError(ProviderError):
+    """
+    鉴权失败。重试没有意义，应直接切换到备用 provider。
+    Authentication failed. Retrying is pointless; switch to the fallback instead.
+    """
+
+    retryable = False
 
 
 class RenderError(DNAError):
