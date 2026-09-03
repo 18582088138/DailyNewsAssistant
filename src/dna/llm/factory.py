@@ -28,6 +28,7 @@ from dataclasses import dataclass, replace
 from dna.core.config import Settings, get_settings
 from dna.core.errors import ConfigError, ProviderError
 from dna.core.logging import get_logger
+from dna.llm.cache import CachedProvider
 from dna.llm.base import ChatMessage, ChatResult, LLMProvider, ProviderInfo
 from dna.llm.ollama_provider import OllamaProvider
 from dna.llm.openai_compat import OpenAICompatProvider
@@ -273,6 +274,7 @@ def get_llm(
     provider: str | None = None,
     with_fallback: bool = True,
     policy: RetryPolicy | None = None,
+    cache: bool | None = None,
 ) -> LLMProvider:
     """
     取一个可直接使用的 LLM / Get a ready-to-use LLM.
@@ -281,6 +283,7 @@ def get_llm(
         provider:      覆盖 .env 中的 LLM_PROVIDER / overrides LLM_PROVIDER
         with_fallback: 是否挂备用 provider / whether to attach the fallback
         policy:        自定义重试策略 / custom retry policy
+        cache:         是否启用磁盘响应缓存；None 表示按 .env 的 LLM_CACHE_ENABLED
 
     备用 provider 只在「已配置好」且「与主 provider 不同」时才挂上。
     The fallback is attached only when it is properly configured and differs from
@@ -302,11 +305,19 @@ def get_llm(
     logger.info(
         "LLM: %s%s", primary.info, f"（备用 {fallback.info}）" if fallback else "（无备用）"
     )
-    return ResilientProvider(primary, fallback, policy=policy)
+    resilient = ResilientProvider(primary, fallback, policy=policy)
+
+    # 缓存包在重试之外：命中时整条重试链路都不用进
+    # The cache wraps the retry layer so a hit skips that machinery entirely.
+    use_cache = s.llm_cache_enabled if cache is None else cache
+    if not use_cache:
+        return resilient
+    return CachedProvider(resilient, s.llm_cache_path)
 
 
 __all__ = [
     "CLOUD_PROVIDERS",
+    "CachedProvider",
     "KNOWN_PROVIDERS",
     "ResilientProvider",
     "RetryPolicy",

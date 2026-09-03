@@ -123,6 +123,12 @@ class ScriptedProvider(LLMProvider):
         self._outcomes = list(outcomes)
         self.call_count = 0
         self.json_mode_calls: list[bool] = []
+        # 记下每次收到的消息：pipeline 的测试重点是「提示词构建得对不对」，
+        # 断言模型说了什么既贵又不稳定，断言我们问了什么才是可靠的。
+        # Every received message list is recorded: the pipeline tests target prompt
+        # construction, since asserting what we asked is reliable while asserting what
+        # the model answered is neither cheap nor stable.
+        self.messages: list[list[ChatMessage]] = []
 
     @property
     def info(self) -> ProviderInfo:
@@ -139,6 +145,7 @@ class ScriptedProvider(LLMProvider):
     ) -> ChatResult:
         self.call_count += 1
         self.json_mode_calls.append(json_mode)
+        self.messages.append(list(messages))
         outcome = self._outcomes.pop(0) if self._outcomes else "默认回复"
         if isinstance(outcome, Exception):
             raise outcome

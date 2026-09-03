@@ -288,7 +288,7 @@ def test_active_provider_is_reported() -> None:
 
 def test_get_llm_attaches_fallback(cfg: Settings) -> None:
     """主备不同且都配置好时应挂上备用 / Attaches the fallback when it differs and is configured."""
-    llm = get_llm(cfg)
+    llm = get_llm(cfg, cache=False)
     assert isinstance(llm, ResilientProvider)
     assert llm.primary.info.name == "deepseek"
     assert llm.fallback is not None
@@ -298,7 +298,7 @@ def test_get_llm_attaches_fallback(cfg: Settings) -> None:
 def test_get_llm_skips_identical_fallback(cfg: Settings) -> None:
     """备用与主相同则不挂 / No fallback when it is the same as the primary."""
     same = cfg.model_copy(update={"llm_fallback_provider": "deepseek"})
-    assert get_llm(same).fallback is None  # type: ignore[union-attr]
+    assert get_llm(same, cache=False).fallback is None  # type: ignore[union-attr]
 
 
 def test_get_llm_skips_unconfigured_fallback(cfg: Settings) -> None:
@@ -308,18 +308,18 @@ def test_get_llm_skips_unconfigured_fallback(cfg: Settings) -> None:
     it wastes another round of retries after the primary already failed.
     """
     broken = cfg.model_copy(update={"openrouter_api_key": ""})
-    assert get_llm(broken).fallback is None  # type: ignore[union-attr]
+    assert get_llm(broken, cache=False).fallback is None  # type: ignore[union-attr]
 
 
 def test_get_llm_provider_override(cfg: Settings) -> None:
     """可用参数覆盖 .env 中的 provider / The provider can be overridden per call."""
-    llm = get_llm(cfg, provider="ollama")
+    llm = get_llm(cfg, provider="ollama", cache=False)
     assert llm.primary.info.name == "ollama"  # type: ignore[union-attr]
 
 
 def test_get_llm_without_fallback(cfg: Settings) -> None:
     """可以显式关闭备用 / The fallback can be disabled explicitly."""
-    assert get_llm(cfg, with_fallback=False).fallback is None  # type: ignore[union-attr]
+    assert get_llm(cfg, with_fallback=False, cache=False).fallback is None  # type: ignore[union-attr]
 
 
 # --- 包装后仍是完整的 LLMProvider / the wrapper is still a full provider --------

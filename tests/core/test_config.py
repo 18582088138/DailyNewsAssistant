@@ -241,3 +241,43 @@ def test_shipped_config_files_load() -> None:
     profile = load_profile()
     assert profile.digest_max_entries > 0
     assert len(profile.focus_keywords) > 0
+
+
+def test_ledger_follows_the_data_directory(tmp_path: Path) -> None:
+    """
+    台账必须跟着 DATA_DIR 走。
+
+    按仓库根解析的话，改了 DATA_DIR 会让文章落盘搬家而台账留在原地，两者静默失联——
+    台账里记着 store_dir，指向的却是空目录。这个 bug 是写 P3 取数层的测试时
+    才暴露的：测试用 tmp_path 建库，实际却在写真实的项目数据库。
+    """
+    s = Settings(_env_file=None, data_dir=tmp_path / "mydata", db_path=Path("./data/dna.db"))
+
+    assert s.db_file.parent == s.data_path
+    assert s.db_file == tmp_path / "mydata" / "dna.db"
+
+
+def test_absolute_db_path_is_used_as_is(tmp_path: Path) -> None:
+    """绝对路径原样使用——便于刻意把台账放到别处（如共享盘）。"""
+    elsewhere = tmp_path / "elsewhere" / "ledger.db"
+    s = Settings(_env_file=None, data_dir=tmp_path / "mydata", db_path=elsewhere)
+
+    assert s.db_file == elsewhere
+
+
+def test_legacy_db_path_prefix_is_not_duplicated(tmp_path: Path) -> None:
+    """
+    旧配置里 DB_PATH 写成 `./data/dna.db`，不能变成 `<data>/data/dna.db`。
+
+    .env 里现存的就是这个写法，改动不能让已有部署找不到自己的台账。
+    """
+    s = Settings(_env_file=None, data_dir=tmp_path / "data", db_path=Path("./data/dna.db"))
+
+    assert s.db_file == tmp_path / "data" / "dna.db"
+
+
+def test_relative_db_path_only_contributes_its_file_name(tmp_path: Path) -> None:
+    """相对路径只贡献文件名——换位置请用绝对路径，语义更清楚。"""
+    s = Settings(_env_file=None, data_dir=tmp_path / "d", db_path=Path("./whatever/ledger.db"))
+
+    assert s.db_file == tmp_path / "d" / "ledger.db"
