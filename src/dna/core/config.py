@@ -73,6 +73,12 @@ class Settings(BaseSettings):
     # ---- Embeddings ----
     embedding_model: str = "BAAI/bge-m3"
 
+    # LLM 响应缓存：相同请求直接读盘，不再计费。默认开启——
+    # 开发期反复调提示词时，只有真正改动过的那部分需要重新付费。
+    # Identical requests are served from disk instead of being billed again. On by
+    # default: while iterating on prompts, only what actually changed costs money.
+    llm_cache_enabled: bool = True
+
     # ---- TTS ----
     tts_provider: str = "qwen3_ov"
     qwen3_tts_model_dir: str = ""
@@ -146,9 +152,40 @@ class Settings(BaseSettings):
         return self.resolve(self.data_dir)
 
     @property
+    def llm_cache_path(self) -> Path:
+        """LLM 响应缓存目录（绝对路径）/ Absolute path of the LLM response cache."""
+        return self.data_path / "llm_cache"
+
+    @property
     def db_file(self) -> Path:
-        """SQLite 台账文件（绝对路径）/ Absolute path of the SQLite ledger."""
-        return self.resolve(self.db_path)
+        """
+        SQLite 台账文件（绝对路径）/ Absolute path of the SQLite ledger.
+
+        相对路径按**数据目录**解析，不是按仓库根——台账和它索引的落盘文章必须
+        待在一起。按仓库根解析的话，改了 `DATA_DIR` 会让文章搬家而台账留在原地，
+        两者静默失联：台账里记着 store_dir，指向的却是空目录。
+        A relative path resolves against the data directory rather than the repo root:
+        the ledger and the articles it indexes must stay together. Resolving against the
+        repo root would let a changed `DATA_DIR` move the articles while the ledger
+        stayed behind, silently desynchronising the two — every store_dir would point at
+        nothing.
+
+        规则 / The rule:
+            绝对路径 → 原样使用（可以刻意把台账放到共享盘等别处）
+            相对路径 → **只取文件名**，放进数据目录
+
+        只取文件名而不是拼接整个相对路径，是为了让 `.env` 里现存的
+        `DB_PATH=./data/dna.db` 不会变成 `<data>/data/dna.db`。相对路径在这里的
+        实际用途只是「给台账换个文件名」，需要换位置时用绝对路径表达更清楚。
+        Only the file name is taken from a relative path so the existing
+        `DB_PATH=./data/dna.db` does not become `<data>/data/dna.db`. A relative value
+        here only ever serves to rename the ledger; relocating it is expressed more
+        clearly with an absolute path.
+        """
+        if self.db_path.is_absolute():
+            return self.db_path
+
+        return self.data_path / (self.db_path.name or "dna.db")
 
     @property
     def feishu_allowed_user_list(self) -> list[str]:
@@ -233,6 +270,44 @@ def reload_settings() -> Settings:
 # ---------------------------------------------------------------------------
 
 
+class SourceFilter(BaseModel):
+    """
+    条目过滤规则 / Item filtering rules.
+
+    在**抓正文之前**执行，因此过滤掉的条目完全不产生网络与存储开销。
+    Applied before the body is fetched, so filtered items cost no network or storage.
+
+    规则次序 / Rule order:
+        exclude 命中 → 丢弃（优先级最高，宁可少收不要错收）
+        include 非空且一条都没命中 → 丢弃
+        标题过短 / 过旧 → 丢弃
+    """
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True)
+
+    include: list[str] = Field(
+        default_factory=list,
+        description="命中任一才保留；留空表示不限制 / keep only if one matches; empty means no limit",
+    )
+    exclude: list[str] = Field(
+        default_factory=list, description="命中任一即丢弃 / drop if any matches"
+    )
+    min_title_length: int = Field(
+        default=0, ge=0, description="标题最少字数，滤掉「快讯」这类空标题 / minimum title length"
+    )
+    max_age_days: int | None = Field(
+        default=None,
+        ge=0,
+        description="只要最近 N 天的；None 表示不限 / keep only the last N days, None means no limit",
+    )
+
+    def is_empty(self) -> bool:
+        """是否没有任何规则 / Whether no rule is configured at all."""
+        return not (
+            self.include or self.exclude or self.min_title_length or self.max_age_days is not None
+        )
+
+
 class SourceConfig(BaseModel):
     """一个订阅源的配置 / Configuration of a single news source."""
 
@@ -246,6 +321,9 @@ class SourceConfig(BaseModel):
     tags: list[str] = Field(default_factory=list)
     max_items: int | None = Field(default=None, description="覆盖全局上限 / overrides the global cap")
     lang: Language | None = Field(default=None, description="源语言，用于决定是否需要翻译 / source language")
+    filters: SourceFilter | None = Field(
+        default=None, description="该源专属的过滤规则 / filtering rules specific to this source"
+    )
 
 
 class Profile(BaseModel):
@@ -313,6 +391,7 @@ __all__ = [
     "Profile",
     "Settings",
     "SourceConfig",
+    "SourceFilter",
     "get_settings",
     "load_profile",
     "load_sources",
