@@ -22,7 +22,21 @@ dependencies = [
 
 [project.optional-dependencies]
 # 按阶段增量安装 / installed incrementally per phase
-sources = ["feedparser>=6.0", "trafilatura>=1.12", "beautifulsoup4>=4.12", "httpx>=0.27"]
+# yt-dlp 解析播放器嵌入的视频（腾讯视频/B站/YouTube）；直链 mp4 不需要它。
+# 它跟着平台改版走，需要定期升级：pip install -U yt-dlp
+# yt-dlp resolves player-embedded videos; plain .mp4 links do not need it. It tracks
+# platform changes and needs periodic upgrading.
+sources = [
+    "feedparser>=6.0",
+    "trafilatura>=1.12",
+    "beautifulsoup4>=4.12",
+    "httpx>=0.27",
+    "yt-dlp>=2025.1.1",
+]
+# 语义聚类是去重的第三级，可选：缺失时前两级（URL / SimHash）照常工作，
+# 只是合并得少一些。模型有 GB 级，公司网络下不一定拉得下来。
+# Semantic clustering is dedup's optional third tier: without it the URL and SimHash
+# tiers still run and simply merge less. The model is gigabytes and may be unreachable.
 pipeline = ["scikit-learn>=1.5", "sentence-transformers>=3.0", "numpy>=1.26"]
 llm = ["openai>=1.40"]
 render = ["Jinja2>=3.1", "playwright>=1.45", "Pillow>=10.0", "markdown>=3.6"]
@@ -45,8 +59,12 @@ include = ["dna*", "frontends*"]
 testpaths = ["tests"]
 pythonpath = ["src", "."]
 markers = [
-    "live: 需要联网 / 真实 LLM / 真实飞书连接，默认跳过 (requires network or live services)",
+    # live 用例会真实调用 API，**产生实际费用**。只在阶段验收时手动跑一次，
+    # 日常开发一律用 tests/llm/fakes.py 里的测试替身。
+    # Live cases hit real APIs and cost real money: run them once per phase sign-off,
+    # never in the routine loop. Day-to-day work uses the fakes instead.
+    "live: 真实调用外部服务，**产生费用**，默认跳过 (hits real APIs, costs money)",
     "slow: 耗时较长，如 TTS 合成与端到端 (long-running, e.g. TTS / E2E)",
 ]
-# 默认只跑离线快测；跑全量用 `-m ''`
+# 默认只跑离线快测。注意：`-m ''` 会把 live 也跑起来并产生费用，需要时再用。
 addopts = "-q -m 'not live and not slow'"
