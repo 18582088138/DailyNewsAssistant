@@ -384,6 +384,7 @@ test_dedup.py — 去重与聚类单元测试 / Dedup & clustering unit tests
 | `docs/08_feishu_bot_deployment.md` | 飞书机器人 + 长连接**部署指南**：后台配置、权限、发布、open_id 获取、私人电脑部署、Windows 常驻、验证清单、排错表 | ✅ **已完成** |
 | `docs/09_packaging.md` | 部署/打包 | P10 |
 | `docs/10_sources_guide.md` | **添加信息源指南**：`dna probe` 用法、验证步骤、找不到 feed 的出路、当前源清单状态 | ✅ **已完成** |
+| `docs/11_article_store_guide.md` | **文章总表与落盘指南**：`dna list/show/add/refetch/stats`、状态含义、落盘目录结构、后续功能如何取用 | ✅ **已完成** |
 | `docs/issues/NNN-*.md` | 现象 + 复现脚本 + 精确命令 + 结论 | 随时 |
 | `docs/git_commands.md` | 各阶段 git 命令汇总（**你手动执行**） | 每阶段 |
 

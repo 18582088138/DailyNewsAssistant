@@ -56,7 +56,9 @@
 | P0 脚手架 | 配置/模型/命名/日志/环境自检 + CLI | ✅ **完成** | 95 passed (0.49s) | `03_unit_tests.md` · `README.md` |
 | P1 LLM 抽象层 | DeepSeek 默认，5 provider 可互换 + 重试降级 | ✅ **完成** | 189 passed (1.5s) + 真机验证 | `03_unit_tests.md` · `issues/001` `issues/002` |
 | P2 信息源 + 抽取 | RSS / RSSHub / user_link / article / media | ✅ **完成** | 316 passed (2.3s) + 真机验证 | `03_unit_tests.md` · `issues/003` |
-| P3 Pipeline 核心 | 去重聚类→打分→摘要→**双语**→趋势 | ⬜ | — | — |
+| P2+ 落盘与台账 | 文章总表(SQLite) / 正文与图片落盘 / 按源过滤 / dna add·list·show·refetch·stats | ✅ **完成**（应用户要求从 P4 提前） | 402 passed (4.7s) + 真机验证 | `11_article_store_guide.md` · `issues/004` |
+| P2++ 视频落盘与人工补正文 | 视频下载(直链 + yt-dlp) / 配图上限 10 / 属性级装饰图过滤 / `dna sync` 回写人工正文 | ✅ **完成** | 445 passed (5.6s) + 真机验证（微信 ×2、知乎 ×1） | `11_article_store_guide.md` · `issues/005` |
+| P3 Pipeline 核心 | clean → dedup → score → summarize → translate → trend → `_digest.json`；LLM 响应缓存；`dna digest` | ✅ **完成** | 610 passed (6.9s) + 真机验证（DeepSeek，8 次调用） | `06_prompt_spec.md` · `12_digest_guide.md` · `issues/006` |
 | P4 落盘 + 台账 DB | 目录规则 / references / SQLite ledger | ⬜ | — | — |
 | P5 场景1 图文版 | md/html 双语 + 长图 | ⬜ | — | 🔍 人工审阅 |
 | P6 场景2 视频版 | narration 公用层 + 口播稿 + 素材 + 音频 | ⬜ | — | 🔍 人工审阅 |
@@ -99,6 +101,9 @@
 |---|---|---|---|
 | 001 | 推理模型（qwen3.5:9b）的 token 预算被思维链耗尽，`max_tokens` 偏小时正文为空；原报错指不到根因 | ✅ 已修复 + ⚠️ 遗留性能结论 | [issues/001](issues/001-ollama-reasoning-token-budget.md) |
 | 002 | 小模型（qwen2.5:3b）把 JSON Schema 原样抄回，且修复重试的反馈无效导致三次全废 | ✅ 已修复并真机复验 | [issues/002](issues/002-small-model-echoes-json-schema.md) |
+| 004 | 落盘验证暴露两个问题：①图床防盗链导致配图全部 403 ②抽取降级时站点通用标题覆盖了 RSS 正确标题且不可恢复 | ✅ 已修复并真机复验 | [issues/004](issues/004-image-hotlink-and-title-overwrite.md) |
+| 006 | P3 开发中发现：①`db_path` 不跟随 `DATA_DIR`，改数据目录会让台账与落盘静默失联（测试因此写进了真实数据库）②NFKC 归一化把中文逗号折成半角，中文稿读起来像机翻 | ✅ 已修复 | [issues/006](006-p3-config-and-normalisation.md) |
+| 005 | 微信/知乎真机验证：①知乎强反爬 403（外部限制，改为人工补正文 + `dna sync` 回写）②配图上限 5 张偏少→10 ③微信作者头像被当成正文配图 ④重抓时旧图片残留成孤儿文件 ⑤失败文章全叫「(抓取失败)」⑥视频只记链接不下文件 | ✅ 已修复并真机复验 | [issues/005](issues/005-wechat-zhihu-live-verification.md) |
 | 003 | P2 三个发现：①feed 失效被静默记成「成功 0 条」（feedparser 的 bozo 不可靠）②og:image 是站点 logo 时成为日报封面 ③三个订阅源实测失效 | ✅ 全部处理完毕 | [issues/003](issues/003-p2-live-verification-findings.md) |
 
 **issue 001 对后续阶段的约束**（重要）：`qwen3.5:9b` 回答一个字耗 2244 tokens / 314 秒，

@@ -352,11 +352,169 @@ $PY -m frontends.cli.main fetch --source qbitai --limit 1 --extract   # 含正�
 
 ---
 
+## P2+ 落盘与台账（应用户要求从 P4 提前）
+
+**最近一次全量结果：402 passed in 4.67s（0 failed）** —— 本阶段**完全不涉及 LLM**，无费用。
+
+### `tests/sources/test_filters.py` — 条目过滤
+
+```bash
+$PY -m pytest tests/sources/test_filters.py -v
+```
+
+| 覆盖点 | 说明 |
+|---|---|
+| exclude | 命中即丢，**优先级高于 include**（同时命中也丢） |
+| include | 非空时一条未命中即丢；留空 = 不限制 |
+| 匹配范围 | **标题 + 源自带摘要**，大小写不敏感（软文标题常看不出来，摘要才露馅） |
+| min_title_length | 滤掉「快讯」这类空标题 |
+| max_age_days | 滤旧条目；**没有发布时间的条目不受此限**（很多 feed 不给 pubDate，误判会整源误杀） |
+| 规则合并 | 全局排除词对所有源生效并去重；**include 只取源级不从全局继承** |
+| 快路径 | 无规则时全量保留，不逐条判断 |
+| 丢弃原因统计 | 用户要能知道「今天为什么只有 N 条」 |
+
+**预期**：22 passed，< 1s，纯函数无 I/O。
+
+### `tests/store/test_ledger.py` — 文章台账（总表）
+
+```bash
+$PY -m pytest tests/store/test_ledger.py -v
+```
+
+| 覆盖点 | 说明 |
+|---|---|
+| 建库 | 首次使用自动建库建表；重复打开不重置数据 |
+| **跨日去重** | 二次登记返回 is_new=False；**带不同追踪参数的同一篇算一篇** |
+| **feed_title** | 源自带标题单独保存、每次采集从源刷新——防止降级抽取污染后不可恢复（issue 004-B） |
+| 抓取结果 | ok / **degraded（不是 failed）** / failed；fetch_count 累加；重抓成功清除旧错误 |
+| 错误截断 | 超长错误信息截断，避免撑爆数据库 |
+| 查询 | 按状态 / 来源 / 关键词筛选，按首次出现时间倒序 |
+| 统计 | count_by_status / count_by_source / total / pending_ids |
+
+**预期**：23 passed，< 2s，只在 tmp_path 下建库。
+
+### `tests/store/test_article_store.py` — 文章落盘
+
+```bash
+$PY -m pytest tests/store/test_article_store.py -v
+```
+
+| 覆盖点 | 说明 |
+|---|---|
+| 目录命名 | 日期 + 标题 slug + id 后缀；同标题不同文章不冲突 |
+| article.md | frontmatter 可 YAML 解析；**标题里的冒号转义**（否则解析直接失败） |
+| 降级标记 | 降级抽取在文件里明确警示，避免人工核对时误以为抓成功 |
+| meta.json | 可反序列化回 Article——重做输出时不必重抓 |
+| **Referer** | 下载配图必须带原文地址，否则图床防盗链全部 403（issue 004-A） |
+| **文件头判格式** | 不信 URL 后缀（`.php` 返 JPEG、`.jpg` 返 HTML 都很常见） |
+| 过小文件 | 下载后按字节数剔除图标（抽取阶段无法判断，很多站点不写宽高） |
+| 出处 sidecar | 每张图配同名 .json，图片被单独拷走时信息不丢 |
+| **失败隔离** | 单张图失败不影响正文落盘，原因记入 skipped_images |
+
+**预期**：20 passed，< 2s，图片下载全部 monkeypatch 拦截，不联网。
+
+### P2+ 真机验证
+
+```bash
+dna add <文章链接>          # 抓指定链接
+dna show <id>               # 核对抓取结果
+dna list                    # 总表
+dna fetch --limit 2         # 全量采集入库
+dna stats                   # 统计
+```
+
+验证结果：14 条采集、4 条降级、0 条失败；指定链接抓取正文 4137 字 + 配图 5 张。
+过程中发现并修复两个问题，见 [issue 004](issues/004-image-hotlink-and-title-overwrite.md)。
+
+---
+
+## P2++ 视频落盘与人工补正文（445 passed）
+
+| 测试文件 | 覆盖 | 条数 |
+|---|---|---|
+| `tests/store/test_video_store.py` | 直链判定 · 文件头校验 · 防盗链 Referer · 失败隔离 · 限量 · yt-dlp 分发 | 18 |
+| `tests/store/test_article_store.py` | 新增：粘贴标记 · `read_body` / `read_title` 回读 · 旧目录清理 · 重抓清空旧图 · 视频清单 | +10 |
+| `tests/store/test_ledger.py` | 新增：`set_body` 升级状态与标题 · 视频数记下载成功数 | +4 |
+| `tests/core/test_urls.py` | 新增：`title_from_url` 七种 URL 形态 + 两篇失败文章不同名 | +8 |
+| `tests/extract/test_extract.py` | 新增：按 class/alt 过滤作者头像与二维码，且不误伤正文图 | +2 |
+
+复测：
+
+```bash
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest tests/store/test_video_store.py -v
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest   # 全量 445 passed
+```
+
+**yt-dlp 与网络全部被 monkeypatch 拦截**，不联网、不下载、不产生费用。
+
+### P2++ 真机验证
+
+用户提供的三个真实链接：
+
+```bash
+dna add "https://mp.weixin.qq.com/s/XhU4W02gvLxm77el13cpIQ?scene=1&click_id=338847213"         "https://zhuanlan.zhihu.com/p/2067333343717355528"         "https://mp.weixin.qq.com/s/VgO-WiLWNRzuSGSweHrY7g"
+```
+
+| 链接 | 结果 |
+|---|---|
+| 微信 MiniMax H3 | ✅ 正文 3151 字，配图 2 张（原文只有 1 张正文图，头像已正确过滤） |
+| 微信 DeepSeek-V4-Flash | ✅ 正文 4069 字，配图 **10 张**（上限提升前是 5 张） |
+| 知乎专栏 | ❌ 403 强反爬，降级保存；手工补正文后 `dna sync` 回写为 `ok / 47 字`，标题同步更新 |
+
+发现并修复 6 个问题，见 [issue 005](issues/005-wechat-zhihu-live-verification.md)。
+视频下载路径三个链接均未涉及（都没有嵌入视频），仅由单元测试覆盖。
+
+---
+
+## P3 Pipeline 核心（610 passed）
+
+| 测试文件 | 覆盖 | 条数 |
+|---|---|---|
+| `tests/pipeline/test_clean.py` | NFKC 折半角但保中文标点 · 样板整行剥离 · 成稿门槛 · 脏数据返回 None | 35 |
+| `tests/pipeline/test_dedup.py` | SimHash 跨进程稳定 · 词序敏感 · 三级合并 · **不同事件不误合并** · 向量层降级 | 22 |
+| `tests/pipeline/test_score.py` | 权重合计 1.0 · 五个信号 · need_video 三条件 · 先排序后截断 | 23 |
+| `tests/pipeline/test_summarize.py` | 提示词构建 · 截断 · 多源说明 · 禁止编造 · **失败降级为标题** | 13 |
+| `tests/pipeline/test_translate.py` | 按 id 对齐 · 未知 id 丢弃 · 漏译不填空串 · 分批隔离 | 13 |
+| `tests/pipeline/test_trend.py` | 编号输入 · 禁止逐条复述 · 条目不足不调用 · 失败返回 None | 11 |
+| `tests/pipeline/test_flow.py` | **dry_run 零调用** · 字段齐全 · refs 取整簇 · 双语回填 · 统计 | 17 |
+| `tests/pipeline/test_source.py` | 正文从 meta.json 读回 · 状态筛选 · 目录缺失降级 · 人工指定 id | 12 |
+| `tests/llm/test_cache.py` | **第二次不调用底层 provider** · 键包含模型与参数 · 损坏当未命中 · 失败不缓存 | 16 |
+| `tests/core/test_config.py` | 新增：台账跟随 `DATA_DIR`（issue 006-A 回归） | +3 |
+
+复测：
+
+```bash
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest tests/pipeline/ -v
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest   # 全量 610 passed
+```
+
+**全部使用假 provider（`tests/llm/fakes.py`），零 LLM 调用、零费用、不联网、
+不加载向量模型。**
+
+### P3 真机验证（一次，DeepSeek）
+
+```bash
+dna digest --dry-run --limit 8    # 免费：确认选题与排序
+dna digest --limit 5              # 计费：6 次调用 / 10.7 秒
+dna digest --limit 5              # 复跑：0 次调用 / 0.1 秒（缓存 6/6 命中）
+dna digest --limit 5 --bilingual  # 2 次调用（摘要走缓存）
+```
+
+结果：`outputs/20260902-DailyNews/_digest.json`，5 条中英双语条目 + 主线综述。
+
+- 主线综述正确提炼出「效率与成本优化」这条跨条目共性，未逐条复述标题
+- 技术术语翻译原样保留：`2TP×4USP`、`XPU Kernel`、`Layer-wise Offloading`
+- **总计 8 次 LLM 调用**——缓存让复跑与调试不再计费
+
+开发过程中发现并修复 2 个问题，见 [issue 006](issues/006-p3-config-and-normalisation.md)。
+
+---
+
 ## 待补（随阶段推进填写）
 
 | 阶段 | 测试文件 | 状态 |
 |---|---|---|
-| P3 | `tests/pipeline/test_clean.py` `test_dedup.py` `test_score.py` `test_summarize.py` `test_translate.py` `test_trend.py` | ⬜ |
+| P3 | 见上 | ✅ |
 | P4 | `tests/store/test_output_layout.py` `test_ledger.py` `test_history.py` | ⬜ |
 | P5 | `tests/apps/test_graphic_daily.py` | ⬜ |
 | P6 | `tests/narration/test_duration.py` `tests/apps/test_video_brief.py` `tests/tts/test_tts.py`(slow) | ⬜ |

@@ -8,18 +8,25 @@
 #   rsshub —— 自建 RSSHub 路由（url 只填路由部分，如 /wechat/ce/xxxx）
 # lang: zh | en   源语言，用于判断是否需要翻译
 # tags: 自由标签，用于筛选与统计
+# max_items: 该源单次最多取几条，覆盖全局上限
+#
+# filters: 该源专属的过滤规则（可选），在**抓正文之前**执行，
+#          被过滤掉的条目不产生网络与存储开销，也不会进入 LLM 环节。
+#   include:          命中任一才保留；留空 = 不限制
+#   exclude:          命中任一即丢弃（优先级最高）
+#   min_title_length: 标题最少字数，滤掉「快讯」这类空标题
+#   max_age_days:     只要最近 N 天的（没有发布时间的条目不受此限）
+#
+# 全局排除词写在 config/profile.yaml 的 exclude_keywords，对所有源生效；
+# 这里的 exclude 是在其之上追加。
+#
+# 下方 enabled: true 的源均已实测可用。
+# 核对命令 / verify with:  dna fetch --limit 3 --dry-run
+# 新增源的探测：           dna probe <网站地址>
 # ============================================================
 
 sources:
   # ---- 中文 AI 资讯 / Chinese AI news ----
-  - id: jiqizhixin
-    name: 机器之心
-    kind: rss
-    url: https://www.jiqizhixin.com/rss
-    lang: zh
-    tags: [ai, cn]
-    enabled: true
-
   - id: qbitai
     name: 量子位
     kind: rss
@@ -28,15 +35,27 @@ sources:
     tags: [ai, cn]
     enabled: true
 
-  - id: 36kr-ai
-    name: 36氪 · 人工智能
+  - id: infoq-cn
+    name: InfoQ 中文
     kind: rss
-    url: https://36kr.com/feed
+    url: https://www.infoq.cn/feed
     lang: zh
-    tags: [startup, cn]
-    enabled: false
+    tags: [tech, cn]
+    enabled: true
 
   # ---- 英文 AI 资讯 / English AI news ----
+  - id: arxiv-cs-ai
+    name: arXiv cs.AI
+    kind: rss
+    url: https://rss.arxiv.org/rss/cs.AI
+    lang: en
+    tags: [paper, en]
+    max_items: 15   # 该源单日条目极多（实测 302 条），必须限量
+    enabled: true
+    # 论文源噪声大：只留与本项目关注方向相关的
+    filters:
+      include: [LLM, language model, multimodal, agent, reasoning, inference, benchmark]
+
   - id: hackernews-front
     name: Hacker News Front Page
     kind: rss
@@ -44,6 +63,108 @@ sources:
     lang: en
     tags: [tech, en]
     enabled: true
+    # HN 首页什么都有，滤掉招聘帖与明显无关的内容
+    filters:
+      exclude: [Is Hiring, "Who is hiring", Ask HN, Show HN]
+      min_title_length: 10
+
+  - id: oschina
+    name: 开源中国
+    kind: rss
+    url: https://www.oschina.net/news/rss
+    lang: zh
+    tags: [tech, opensource, cn]
+    max_items: 15   # 该源单次返回 50 条
+    enabled: true
+
+  - id: openai-news
+    name: OpenAI News
+    kind: rss
+    url: https://openai.com/news/rss.xml
+    lang: en
+    tags: [ai, official, en]
+    max_items: 10   # 该源返回全量存档（实测 1159 条），必须限量
+    enabled: true
+
+  - id: venturebeat-ai
+    name: VentureBeat AI
+    kind: rss
+    url: https://venturebeat.com/category/ai/feed/
+    lang: en
+    tags: [ai, en]
+    enabled: true
+
+  # ---- 已实测可用，按需开启 / verified working, enable as needed ----
+  # 默认关闭是为了控制日报篇幅与 LLM 调用量，不是因为源有问题。
+
+  - id: sspai
+    name: 少数派
+    kind: rss
+    url: https://sspai.com/feed
+    lang: zh
+    tags: [tech, consumer, cn]
+    enabled: false
+
+  - id: arstechnica
+    name: Ars Technica
+    kind: rss
+    url: https://feeds.arstechnica.com/arstechnica/index
+    lang: en
+    tags: [tech, en]
+    enabled: false
+
+  - id: theverge
+    name: The Verge
+    kind: rss
+    url: https://www.theverge.com/rss/index.xml
+    lang: en
+    tags: [tech, en]
+    enabled: false
+
+  - id: hackernews-best
+    name: Hacker News Best
+    kind: rss
+    url: https://hnrss.org/best
+    lang: en
+    tags: [tech, en]
+    enabled: false   # 与 hackernews-front 二选一即可，best 信噪比更高
+
+  - id: arxiv-cs-cl
+    name: arXiv cs.CL（计算语言学）
+    kind: rss
+    url: https://rss.arxiv.org/rss/cs.CL
+    lang: en
+    tags: [paper, nlp, en]
+    max_items: 10
+    enabled: false
+
+  - id: arxiv-cs-lg
+    name: arXiv cs.LG（机器学习）
+    kind: rss
+    url: https://rss.arxiv.org/rss/cs.LG
+    lang: en
+    tags: [paper, ml, en]
+    max_items: 10
+    enabled: false
+
+  # ---- 已实测失效，保留记录以免重复踩坑 / verified broken, kept as a record ----
+  # 复核日期 2026-09-01，详见 docs/issues/003-dead-feed-urls.md
+
+  - id: jiqizhixin
+    name: 机器之心
+    kind: rss
+    url: https://www.jiqizhixin.com/rss
+    lang: zh
+    tags: [ai, cn]
+    enabled: false   # 该地址已返回 HTML 页面而非 feed，站点疑似改版
+
+  - id: 36kr
+    name: 36氪
+    kind: rss
+    url: https://36kr.com/feed
+    lang: zh
+    tags: [startup, cn]
+    enabled: false   # 同上，返回 HTML
 
   - id: techcrunch-ai
     name: TechCrunch AI
@@ -51,16 +172,10 @@ sources:
     url: https://techcrunch.com/category/artificial-intelligence/feed/
     lang: en
     tags: [ai, en]
-    enabled: true
+    enabled: false   # 公司网络下不可达（代理返回 504），非证书配置问题
 
-  - id: arxiv-cs-ai
-    name: arXiv cs.AI
-    kind: rss
-    url: https://rss.arxiv.org/rss/cs.AI
-    lang: en
-    tags: [paper, en]
-    max_items: 15
-    enabled: false
+  # 以下在公司网络下被代理阻断（SSL / 超时），换个网络环境可能可用：
+  # huxiu(超时) · feedburner/阮一峰 · MIT Tech Review · Google Research · HuggingFace Blog
 
   # ---- 平台源（需自建 RSSHub，P10 接入）/ platform sources via self-hosted RSSHub ----
   # url 填 RSSHub 路由，基址取 .env 的 RSSHUB_BASE_URL
@@ -70,4 +185,4 @@ sources:
     url: /zhihu/hotlist
     lang: zh
     tags: [social, cn]
-    enabled: false
+    enabled: false   # 待 P10 自建 RSSHub 后启用

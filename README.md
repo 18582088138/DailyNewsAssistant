@@ -52,7 +52,18 @@ dna doctor                # 环境自检
 dna doctor          # 环境自检（有阻塞项时退出码 1）
 dna config          # 查看生效配置（密钥自动脱敏）
 dna sources         # 列出已启用的订阅源
+dna probe <url>     # 探测网站的 RSS 地址，给出可粘贴的配置片段
+
+dna fetch           # 采集入库：采集→过滤→抓正文→落盘→记台账
+dna fetch --dry-run # 只预览采集到什么，不写文件
+dna add <url>...    # 直接抓取指定链接
+dna list            # 文章总表（后续选文做日报/口播/视频的依据）
+dna show <id>       # 核对某篇的抓取结果与落盘位置
+dna refetch <id>    # 重新抓取
+dna stats           # 台账统计
 dna version
+
+# 以上命令全部不调用 LLM，不产生费用
 ```
 
 ---
@@ -84,6 +95,8 @@ python -m pytest -m live      # 仅需要联网/真实服务的测试
 | [docs/02_development_plan.md](docs/02_development_plan.md) | 架构方案与 P0–P10 计划 |
 | [docs/03_unit_tests.md](docs/03_unit_tests.md) | 每个单元测试的用途、命令、预期 |
 | [docs/08_feishu_bot_deployment.md](docs/08_feishu_bot_deployment.md) | 飞书机器人部署指南 |
+| [docs/10_sources_guide.md](docs/10_sources_guide.md) | **怎么添加信息源**：`dna probe` 探测、按源过滤、当前源清单 |
+| [docs/11_article_store_guide.md](docs/11_article_store_guide.md) | **文章总表与落盘**：`dna list/show/add/refetch`、状态含义、落盘结构 |
 | [docs/git_commands.md](docs/git_commands.md) | 各阶段 git 命令汇总 |
 
 ---

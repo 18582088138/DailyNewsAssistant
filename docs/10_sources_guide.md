@@ -82,6 +82,50 @@ dna fetch --source <你的id> -n 3 # 实际抓一次
 
 ---
 
+## 三 bis、过滤掉不想要的文章
+
+每个源可以在 `config/sources.yaml` 里配自己的过滤规则。**过滤在抓正文之前执行**——
+被滤掉的条目不发 HTTP 请求、不下载图片、不占存储，后续也不进 LLM。省下的是全链路成本。
+
+```yaml
+  - id: hackernews-front
+    name: Hacker News Front Page
+    url: https://hnrss.org/frontpage
+    filters:
+      exclude: [Is Hiring, "Who is hiring", Ask HN, Show HN]
+      min_title_length: 10
+
+  - id: arxiv-cs-ai
+    name: arXiv cs.AI
+    url: https://rss.arxiv.org/rss/cs.AI
+    max_items: 15
+    filters:
+      include: [LLM, language model, multimodal, agent, reasoning, inference, benchmark]
+```
+
+| 规则 | 含义 |
+|---|---|
+| `include` | 命中任一才保留；**留空 = 不限制**。适合噪声大的源（如 arXiv） |
+| `exclude` | 命中任一即丢弃，**优先级最高**（同时命中 include 也丢） |
+| `min_title_length` | 标题最少字数，滤掉「快讯」这类空标题 |
+| `max_age_days` | 只要最近 N 天的。**没有发布时间的条目不受此限**——很多 feed 不给 pubDate，把「没时间」当「很旧」会把整个源误杀 |
+
+匹配范围是**标题 + 源自带的摘要**，大小写不敏感。只匹配标题会漏掉那些标题含蓄、
+摘要里才点明主题的条目。
+
+**全局排除词**写在 `config/profile.yaml` 的 `exclude_keywords`，对所有源生效；
+源级 `exclude` 在其之上追加。注意 `focus_keywords` **不是过滤条件**——它是给 P3
+打分加权用的，全局强制「必须命中某关键词」会误杀大量正常资讯。
+
+验证过滤效果：
+
+```bash
+dna fetch --limit 10 --dry-run   # 看采集到什么
+dna fetch --limit 10             # 实际入库，会打印「过滤明细」
+```
+
+---
+
 ## 四、几条实践经验
 
 **条目多的源必须限量。** 实测 arXiv cs.AI 单次返回 **302 条**、OpenAI News 返回 **1159 条**
