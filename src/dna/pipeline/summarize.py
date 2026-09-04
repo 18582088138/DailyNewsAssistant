@@ -37,14 +37,34 @@ logger = get_logger("pipeline.summarize")
 # 3000 characters is plenty for an accurate summary; more only scales the input bill.
 MAX_BODY_CHARS = 3000
 
+# 为什么要给指标排优先级 / Why the metrics are ranked
+#
+# 「1~2 句」是硬约束，装不下所有数字，所以**取舍规则必须写进提示词**。
+# 不写的话模型按原文出现顺序取，而技术文章的开头往往是模型体积、依赖版本这类
+# 次要细节；真正决定这条资讯价值的「激活参数只有 13B」可能在第三段。
+# 实测对照：模型自选写了「原生 8-bit 精度模型文件 167GB」，而人工撰写的参考摘要
+# 在同一位置写的是「激活参数 13B」——后者才是读者判断要不要点开的依据。
+# The one-to-two sentence limit cannot hold every figure, so the selection rule has to be
+# stated. Without it the model takes them in the order they appear, and technical articles
+# open on secondary detail like file size and dependency versions while the fact that
+# decides the item's worth sits three paragraphs down. Measured against a hand-written
+# reference, the model chose "167GB of 8-bit weights" where the reference chose "13B
+# activated parameters" — the latter is what tells a reader whether to open it.
 SYSTEM_PROMPT = """你是一位 AI 领域的资讯编辑，为每日 AI 日报撰写条目摘要。
 
 要求：
 1. 用 1~2 句话说清这条资讯的**核心事实**：谁、做了什么、关键数字或结论
-2. 只写原文里有的内容，**不做任何推测、评价或补充背景**
-3. 不要用「本文介绍了」「据报道」这类空话开头，直接说事实
-4. 中文输出，60~120 字
-5. 保留关键的产品名、公司名、版本号、性能数字——这些是读者最关心的
+2. **信息要完整**：原文讲了几件事就要都覆盖到。如果原文既讲了模型发布、
+   又讲了第三方的量化/部署方案，两件事各占一句，不要只写前一半
+3. **挑最有价值的指标，不是最先出现的指标**。优先级从高到低：
+   榜单排名与得分 > 架构关键参数（总参数、激活参数、上下文长度）>
+   能力对比结论 > 次要细节（文件体积、依赖版本号、硬件型号）
+   句子放不下就舍弃低优先级的那个
+4. **每句都要带数字或专有名词**，不要出现只有形容词的句子
+5. 只写原文里有的内容，**不做任何推测、评价或补充背景**
+6. 不要用「本文介绍了」「据报道」这类空话开头，直接说事实
+7. 中文输出，60~120 字
+8. 产品名、公司名、版本号、性能数字**原样保留**，不得四舍五入或改写
 
 如果正文信息不足（只有标题），就基于标题写一句话，不要编造细节。"""
 

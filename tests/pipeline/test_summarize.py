@@ -12,12 +12,14 @@ test_summarize.py —— 摘要节点单元测试 / Summarisation node unit test
     2. 正文超长时被截到 MAX_BODY_CHARS，不把整篇塞进去烧 token
     3. 多源报道时提示词里说明「另有 N 家媒体报道同一事件」
     4. 正文为空（抽取降级）时提示词明确要求「不要编造细节」
-    5. 正常响应被解析成 summary + tags
-    6. **LLM 失败时降级为标题，不抛异常**，且 degraded 标记为 True
-    7. 模型返回空摘要时也退回标题
-    8. tags 去空白、丢空串
-    9. 批量：一条失败不影响其余条目
-   10. 批量是串行的（DeepSeek 有速率限制，并发换来的是 429）
+    5. **提示词要求信息完整**：原文讲了几件事就都要覆盖到
+    6. **提示词给出指标取舍的优先级**：榜单与架构参数优先于文件体积这类次要细节
+    7. 正常响应被解析成 summary + tags
+    8. **LLM 失败时降级为标题，不抛异常**，且 degraded 标记为 True
+    9. 模型返回空摘要时也退回标题
+   10. tags 去空白、丢空串
+   11. 批量：一条失败不影响其余条目
+   12. 批量是串行的（DeepSeek 有速率限制，并发换来的是 429）
 
 为什么测提示词而不是测模型输出 / Why the prompt, not the model output:
     断言「我们问了什么」可靠且免费；断言「模型答了什么」既要花钱又每次都飘。
@@ -26,7 +28,7 @@ test_summarize.py —— 摘要节点单元测试 / Summarisation node unit test
     costs money and drifts. Real output quality is reviewed by hand at sign-off.
 
 预期 / Expected:
-    14 passed；耗时 < 1s；**全部使用假 provider，零 LLM 调用、零费用**
+    15 passed；耗时 < 1s；**全部使用假 provider，零 LLM 调用、零费用**
 """
 
 from __future__ import annotations
@@ -125,6 +127,37 @@ def test_system_prompt_is_present() -> None:
     messages = build_messages(make_cluster(make_item("某标题", "正文")))
     assert messages[0].role == "system"
     assert "日报" in messages[0].content
+
+
+def test_prompt_demands_information_completeness() -> None:
+    """
+    摘要必须**覆盖原文的全部主干**，不能只写前一半。
+
+    实测问题：一篇既讲模型发布、又讲第三方量化方案的文章，模型只写了发布部分，
+    量化方案整段丢失。1~2 句确实装不下所有细节，但「有几件事」这个层级的信息
+    必须完整——读者靠它判断这条值不值得点开。
+    """
+    prompt = build_messages(make_cluster(make_item("某标题", "正文")))[0].content
+
+    assert "信息要完整" in prompt
+    assert "原文讲了几件事就要都覆盖到" in prompt
+
+
+def test_prompt_ranks_which_metrics_to_keep() -> None:
+    """
+    提示词必须给出**指标的取舍优先级**，而不是只说「保留关键数字」。
+
+    「1~2 句」是硬约束，装不下所有数字。不给优先级，模型就按原文出现顺序取，
+    而技术文章的开头往往是文件体积、依赖版本这类次要细节。
+    实测对照：模型自选写了「模型文件 167GB」，人工撰写的参考摘要在同一位置
+    写的是「激活参数 13B」——后者才是决定这条资讯价值的数字。
+    """
+    prompt = build_messages(make_cluster(make_item("某标题", "正文")))[0].content
+
+    assert "挑最有价值的指标，不是最先出现的指标" in prompt
+    assert "榜单排名与得分" in prompt
+    assert "激活参数" in prompt
+    assert "次要细节" in prompt
 
 
 # --- 响应解析 / response parsing -----------------------------------------------

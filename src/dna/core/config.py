@@ -324,6 +324,12 @@ class SourceConfig(BaseModel):
     filters: SourceFilter | None = Field(
         default=None, description="该源专属的过滤规则 / filtering rules specific to this source"
     )
+    # 按源覆盖媒体上限：arXiv 摘要页根本没有配图，微信长文却可能有二十几张。
+    # 用一个全局值伺候所有源，要么浪费带宽要么漏素材。
+    # Per-source overrides: an arXiv abstract has no images at all while a long WeChat
+    # post may carry twenty. One global value either wastes bandwidth or misses material.
+    max_images: int | None = Field(default=None, description="覆盖 profile 的配图上限")
+    max_videos: int | None = Field(default=None, description="覆盖 profile 的视频上限")
 
 
 class Profile(BaseModel):
@@ -341,7 +347,45 @@ class Profile(BaseModel):
     languages: list[Language] = Field(default_factory=lambda: [Language.ZH])
     digest_max_entries: int = 15
     summary_max_sentences: int = 2
-    video_duration_seconds: tuple[int, int] = (20, 25)
+
+    # 每篇最多存几张图/几个视频。多存是为了攒素材：日报只用 1~3 张，但做长图、
+    # 口播配图、视频封面时都要挑图，而**重抓拿不回当初那些图**——站点会换图删图。
+    # Kept generous because the extras are a material library: the digest uses one to
+    # three, while long images, voice-over stills and covers all need choices, and a
+    # re-fetch cannot recover images the site has since swapped or deleted.
+    max_images_per_article: int = 10
+    max_videos_per_article: int = 2
+
+    # 三种文案的时长区间（秒）/ duration windows for the three script kinds
+    video_duration_seconds: tuple[int, int] = (25, 35)
+    narration_duration_seconds: tuple[int, int] = (60, 120)
+    # 长文案的下限是**下限而不是目标**：原文短就写短，宁可 6 分钟也不注水凑 15 分钟。
+    # 默认 300 与 `longform.MIN_TARGET_SECONDS` 一致——两处写不同的值，
+    # 就会出现「配置说 10 分钟起、代码按 5 分钟起」这种谁也说不清的行为。
+    # The lower bound is a floor, not a target: a short source yields a short script.
+    # Kept equal to `longform.MIN_TARGET_SECONDS`, since two different values would mean
+    # the config claims a ten-minute floor while the code applies five.
+    longform_duration_seconds: tuple[int, int] = (300, 900)
+
+    # 视频稿结尾的固定引导语 / the fixed sign-off at the end of a video script
+    #
+    # 放配置而不是写死在提示词里：这是**账号的品牌**，换账号、换栏目就要换，
+    # 而提示词是「怎么写好文案」的规则，两者的变更频率完全不同。
+    # Config rather than a hard-coded prompt line: this is channel branding that changes
+    # with the account, whereas the prompt encodes how to write well. They change at
+    # entirely different rates.
+    cta_line: str = "关注我，下期分享 AI 行业最新进展"
+
+    # 「NEW」标识挂多久（小时）/ how long the "new import" badge stays
+    #
+    # 标识的作用是**从几十行里找出刚粘进去的那几条**，所以必须有时间窗：
+    # 实测台账 37 篇里有 32 篇从来没生成过任何产物（RSS 存量大多如此），
+    # 只看「有没有产物」的话 NEW 会挂在 32 行上，等于没有这个标识。
+    # 设 0 表示不限时间，只看有没有产物。
+    # The badge exists to pick out the few links just pasted, so a window is required:
+    # 32 of 37 articles in the real ledger have no productions at all, and without the
+    # window the badge would sit on all of them. Zero disables the window.
+    new_badge_hours: int = 24
 
 
 def _read_yaml(path: Path) -> Any:
