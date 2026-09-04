@@ -756,6 +756,63 @@ rm -rf /c/tmp/headcheck
 
 ---
 
+## 清理（2026-09-04）：干净检出跑不过的那个测试 + 四处冗余
+
+补提交之后做了一次干净检出验证，发现**没有 `.env` 的克隆上有 1 个测试失败**，
+顺带查了一遍冗余。
+
+```bash
+cd /c/Users/test/Downloads/xkd/DailyNewsAssistant
+PY=/c/Users/test/miniforge3/envs/ov_env_py312/python.exe
+$PY -m pytest              # 预期 753 passed
+$PY -m frontends.cli.main doctor   # 预期 0 FAIL
+git status --short
+```
+
+```bash
+git add src/dna/core/config.py         src/dna/core/doctor.py         src/dna/narration/script_builder.py         src/dna/narration/longform.py         src/dna/pipeline/flow.py         src/dna/produce/__init__.py         src/dna/produce/service.py         src/dna/produce/tasks.py         src/dna/store/intake.py         frontends/nicegui_app/actions.py         tests/core/test_doctor.py         docs/03_unit_tests.md         docs/git_commands.md
+
+git commit -m "refactor: 修干净检出跑不过的测试，去掉四处冗余
+
+doctor.run_all 加 env_file 参数，测试注入临时 .env
+  .env 按约定不入库，干净克隆里没有它，check_env_file 于是 FAIL
+  写死路径的话这个检查读的是开发机上那个未跟踪的文件——
+  测试「在我机器上过、在干净克隆里挂」，而挂的原因和被测代码毫无关系
+  已验证：无 .env 的干净检出上 753 passed（此前 1 failed）
+  另加一条反向测试：.env 不存在时必须是阻塞项，不能降级为警告——
+  没有 .env 就没有 API key，所有花钱的节点都跑不了
+
+config 新增 safe_profile()，替掉四份抄来抄去的 _safe_profile
+  pipeline/flow、store/intake、produce/service、nicegui_app/actions 各有一份，
+  四份差别只有日志文案，而界面那份还漏了日志
+  文档里写清什么时候不该用它：dna config 这类「就是要显示配置对不对」的地方
+  要用 load_profile 让错误浮出来
+
+narration: _article_block 两份合一，改为公开的 article_block
+  longform 那份漏掉了「正文为空时禁止编造」这条——两份同样的东西一定会漂移，
+  而漂移的方向偏偏是把安全约束丢掉
+  （实际走不到：can_build_longform 要求正文 ≥800 字。但这是运气不是设计）
+
+删掉三个零引用的函数：
+  actions.kind_label —— 只是 spec(kind).label 的包装
+  actions.run_refetch —— 界面从没接过这个按钮；核心的 refetch_article 保留，
+    哪天要加「重抓」包一层就有（CLI 的 dna refetch 一直可用）
+  produce.available_kinds —— 设计上给界面禁用按钮用，但它每次还要再查一次库，
+    而表格里 record 已经在手上，ledger_table 用的是本地一行判断
+
+tasks.py: 删掉没用到的 Callable 导入，并修正模块文档
+  文档写着「每个任务声明四件事：输出文件名、生成函数、前置依赖、是否进批量」，
+  但 TaskSpec 里从来没有「生成函数」这个字段——分派在 service._generate
+  放在 tasks 里会让它反向依赖 narration 与 pipeline，而它现在是一张
+  零依赖的纯数据表，两个前端都能安全导入
+
+测试: 753 passed（+1 反向测试），干净检出同样 753 passed"
+```
+
+提交后跑一遍文件开头那两条检查。
+
+---
+
 ## 阶段：P4 落盘与产出台账
 
 > 待 P4 完成后补充。

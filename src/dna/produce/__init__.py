@@ -28,7 +28,6 @@ standing rule here, and it also means the two cannot break differently.
 
 from dna.produce.service import (
     ProduceResult,
-    available_kinds,
     is_new_article,
     produce,
     produce_all,
@@ -50,7 +49,6 @@ __all__ = [
     "ProduceResult",
     "ProductionKind",
     "TaskSpec",
-    "available_kinds",
     "is_new_article",
     "batch_kinds",
     "estimate_calls",

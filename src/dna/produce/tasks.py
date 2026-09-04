@@ -7,9 +7,16 @@ One table defines what the application can produce for an article. Both the CLI 
 GUI read it, so adding a production kind means editing this file only and neither
 front-end can drift out of sync.
 
-每个任务声明四件事 / Each task declares four things:
-    输出文件名、生成函数、前置依赖、**是否进批量**
-    the output filename, the generator, its prerequisite, and whether it joins the batch
+每个任务声明它的元数据 / Each task declares its metadata:
+    输出文件名、前置依赖、**是否进批量**、预估调用次数、是否要念出来
+    the output filename, its prerequisite, whether it joins the batch, the estimated call
+    count and whether it is meant to be spoken
+
+**不含生成函数**：分派在 `service._generate` 里。放这里会让 tasks 反向依赖
+narration 与 pipeline，而 tasks 现在是一张零依赖的纯数据表，两个前端都能安全导入。
+No generator function lives here; dispatch is in `service._generate`. Putting it here
+would make this table depend on `narration` and `pipeline`, whereas it is currently pure
+data that both front-ends can import without pulling in the world.
 
 为什么长文案不进批量 / Why long-form stays out of the batch:
     它是最贵的产物——提纲 1 次 + 每节 1 次，一篇要 5~9 次调用，
@@ -21,7 +28,6 @@ front-end can drift out of sync.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
 

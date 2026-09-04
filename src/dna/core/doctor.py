@@ -309,14 +309,26 @@ def check_git() -> CheckResult:
 # ---------------------------------------------------------------------------
 
 
-def run_all(settings: Settings | None = None) -> list[CheckResult]:
+def run_all(
+    settings: Settings | None = None, *, env_file: Path = DEFAULT_ENV_FILE
+) -> list[CheckResult]:
     """
     执行全部检查 / Run every check and return the results in display order.
+
+    参数 / Args:
+        env_file: `.env` 的位置。**可注入是必须的**——`.env` 按约定不入库，
+            而干净克隆里没有它，`check_env_file` 就会 FAIL。写死路径的话
+            这个检查会读开发机上那个未跟踪的文件，于是测试「在我机器上过、
+            在干净克隆里挂」，而挂的原因和被测代码毫无关系。
+            Injectable by necessity: `.env` is deliberately untracked, so a clean clone
+            has none and the check fails. With the path hard-coded the check reads an
+            untracked file on the developer's machine, and the test passes there while
+            failing on a fresh clone for a reason unrelated to the code under test.
     """
     s = settings or get_settings()
     results: list[CheckResult] = [check_python()]
     results.extend(check_packages())
-    results.append(check_env_file())
+    results.append(check_env_file(env_file))
     results.append(check_llm_config(s))
     results.append(check_playwright())
     results.append(check_tts_model(s))

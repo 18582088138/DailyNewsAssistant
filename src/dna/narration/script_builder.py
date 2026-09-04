@@ -294,7 +294,7 @@ def _generate(
     Saying only "too long" without the draft makes the model start over from scratch,
     discarding the parts that were already right.
     """
-    messages = [system(system_prompt), user(_article_block(article))]
+    messages = [system(system_prompt), user(article_block(article))]
     calls = 0
     result: ScriptResult | None = None
 
@@ -346,9 +346,16 @@ def _generate(
     return result  # pragma: no cover - 循环必然返回
 
 
-def _article_block(article: Article) -> str:
+def article_block(article: Article) -> str:
     """
     把文章组织成提示词里的输入块 / Lay the article out as the prompt's input block.
+
+    **`longform.py` 也用这一份。** 先前两个模块各写了一份，而 longform 那份
+    漏掉了「正文为空时禁止编造」这条——两份同样的东西一定会漂移，
+    漂移的方向还偏偏是把安全约束丢掉。
+    Shared with `longform.py`. The two modules previously kept separate copies and the
+    long-form one had lost the "do not fabricate when the body is empty" clause: two
+    copies of the same thing drift, and this one drifted by dropping a safety rule.
 
     正文截到 3000 字。技术资讯的核心事实与数字几乎总在前半篇，后面多是延伸讨论；
     全文送进去只是线性增加 input 费用。
@@ -370,6 +377,7 @@ def _article_block(article: Article) -> str:
 
 __all__ = [
     "DEFAULT_CTA",
+    "article_block",
     "MAX_BODY_CHARS",
     "MAX_REWRITES",
     "PROFESSIONALISM",

@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import date as Date
 from datetime import datetime
 
-from dna.core.config import Profile, Settings, get_settings, load_profile
+from dna.core.config import Profile, Settings, get_settings, safe_profile
 from dna.core.logging import get_logger
 from dna.core.models import (
     Cluster,
@@ -111,7 +111,7 @@ def run_daily(
     """
     started = time.perf_counter()
     s = settings or get_settings()
-    prof = profile or _safe_profile()
+    prof = profile or safe_profile()
     report = PipelineReport()
 
     limit = max_entries if max_entries is not None else prof.digest_max_entries
@@ -262,13 +262,6 @@ def _build_stats(
     )
 
 
-def _safe_profile() -> Profile:
-    """读取偏好，缺失时用默认值 / Load the profile, falling back to defaults."""
-    try:
-        return load_profile()
-    except Exception as exc:  # noqa: BLE001 - 偏好缺失不该阻断流水线
-        logger.warning("读取 profile.yaml 失败，使用默认值：%s", exc)
-        return Profile()
 
 
 __all__ = ["PipelineReport", "run_daily"]

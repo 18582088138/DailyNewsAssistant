@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 
-from dna.core.config import Profile, Settings, get_settings, load_profile
+from dna.core.config import Profile, Settings, get_settings, safe_profile
 from dna.core.logging import get_logger
 from dna.core.models import Article, Cluster, NewsItem
 from dna.llm.base import LLMProvider
@@ -110,7 +110,7 @@ def produce(
         llm:     注入 provider；不给则按 .env 构造（测试一律注入假的）
     """
     s = settings or get_settings()
-    prof = profile or _safe_profile()
+    prof = profile or safe_profile()
     task = spec(kind)
     ledger = Ledger(s.db_file)
 
@@ -243,7 +243,7 @@ def produce_all(
     summary's prerequisite, which `produce` handles itself.
     """
     provider = llm or get_llm()
-    prof = profile or _safe_profile()
+    prof = profile or safe_profile()
     return [
         produce(article_id, kind, force=force, settings=settings, profile=prof, llm=provider)
         for kind in batch_kinds()
@@ -292,30 +292,6 @@ def is_new_article(
     return (reference - record.first_seen_at) <= timedelta(hours=within_hours)
 
 
-def available_kinds(article_id: str, *, settings: Settings | None = None) -> dict[str, str]:
-    """
-    这篇文章现在能生成哪些产物 / Which kinds this article can currently produce.
-
-    返回 `{kind: ""}` 表示可以，`{kind: 原因}` 表示不行。GUI 用它决定按钮是否可点，
-    **在花钱之前**就把「本篇体量不支持长文案」告诉人。
-    A blank value means available and a non-blank one gives the reason. The workbench
-    uses it to disable buttons and to say "too short for a long-form script" before any
-    money is spent.
-    """
-    s = settings or get_settings()
-    record = Ledger(s.db_file).get(article_id)
-    result: dict[str, str] = {}
-
-    for kind, task in ((k, spec(k)) for k in ProductionKind):
-        if record is None:
-            result[str(kind)] = "台账里没有这篇文章"
-        elif not record.store_dir:
-            result[str(kind)] = "还没有落盘目录"
-        elif task.min_body_chars and record.text_len < task.min_body_chars:
-            result[str(kind)] = f"正文 {record.text_len} 字，不足 {task.min_body_chars} 字"
-        else:
-            result[str(kind)] = ""
-    return result
 
 
 def read_production(
@@ -477,13 +453,6 @@ def _front_matter(article: Article, label: str) -> str:
     return f"# {article.title}\n\n> {label}　·　来源：{article.url}\n\n"
 
 
-def _safe_profile() -> Profile:
-    """读取偏好，缺失时用默认值 / Load the profile, falling back to defaults."""
-    try:
-        return load_profile()
-    except Exception as exc:  # noqa: BLE001 - 偏好缺失不该阻断生成
-        logger.warning("读取 profile.yaml 失败，使用默认值：%s", exc)
-        return Profile()
 
 
 def _script_block(script: ScriptResult) -> str:
@@ -513,7 +482,6 @@ def _strip_front_matter(text: str) -> str:
 __all__ = [
     "DEFAULT_NEW_WINDOW_HOURS",
     "ProduceResult",
-    "available_kinds",
     "is_new_article",
     "produce",
     "produce_all",

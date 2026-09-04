@@ -44,7 +44,7 @@ from dna.core.logging import get_logger
 from dna.core.models import Article
 from dna.llm.base import LLMProvider, system, user
 from dna.narration.duration import estimate_seconds, prompt_char_budget
-from dna.narration.script_builder import MAX_BODY_CHARS, PROFESSIONALISM
+from dna.narration.script_builder import PROFESSIONALISM, article_block
 
 logger = get_logger("narration.longform")
 
@@ -338,7 +338,7 @@ def _build_outline(
 - 不要规划「背景介绍」占满一节。背景最多一两句带过，长稿的价值在细节不在铺垫"""
 
     return llm.chat_json(
-        [system(prompt), user(_article_block(article))], OutlinePlan, temperature=0.5
+        [system(prompt), user(article_block(article))], OutlinePlan, temperature=0.5
     )
 
 
@@ -413,7 +413,7 @@ def _expand_section(
 - 这是要被念出来的，写口语，但**不要白话**"""
 
     out = llm.chat_json(
-        [system(prompt), user(_article_block(article))], SectionScript, temperature=0.6
+        [system(prompt), user(article_block(article))], SectionScript, temperature=0.6
     )
 
     allowed = set(SPEAKERS[mode])
@@ -450,15 +450,6 @@ def _outline_map(sections: list[SectionPlan], current: int) -> str:
         else:
             marker = "（留给后面）"
         lines.append(f"{i}. {section.title}{marker}")
-    return "\n".join(lines)
-
-
-def _article_block(article: Article) -> str:
-    """把文章组织成提示词的输入块 / Lay the article out for the prompt."""
-    lines = [f"标题：{article.title}"]
-    if article.author:
-        lines.append(f"作者：{article.author}")
-    lines.append(f"\n正文：\n{article.text[:MAX_BODY_CHARS].strip()}")
     return "\n".join(lines)
 
 

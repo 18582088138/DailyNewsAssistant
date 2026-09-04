@@ -626,6 +626,30 @@ dna produce decef4a4 --all --force
 
 ---
 
+## 清理与干净检出验证（753 passed）
+
+| 测试文件 | 变化 |
+|---|---|
+| `tests/core/test_doctor.py` | `run_all` 现在注入临时 `.env`；新增「`.env` 缺失必须是阻塞项」的反向测试 | +1 |
+
+### 为什么之前干净检出会挂
+
+`.env` 按约定不入库，克隆里没有它，`check_env_file` 因此 FAIL。
+而 `run_all` 把路径写死，测试读的是**开发机上那个未跟踪的文件**——
+于是测试「在我机器上过、在干净克隆里挂」，挂的原因和被测代码毫无关系。
+
+**这类问题只有干净检出能发现**：工作区里文件都在，本地全绿。
+复现与验证：
+
+```bash
+git clone -q --no-hardlinks . /c/tmp/verify
+PYTHONPATH=/c/tmp/verify/src:/c/tmp/verify $PY -m pytest -p no:cacheprovider
+# 修复前：1 failed, 751 passed   修复后：753 passed
+rm -rf /c/tmp/verify
+```
+
+---
+
 ## 待补（随阶段推进填写）
 
 | 阶段 | 测试文件 | 状态 |

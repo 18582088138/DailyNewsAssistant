@@ -27,7 +27,7 @@ from pathlib import Path
 
 from nicegui import app, run
 
-from dna.core.config import Profile, get_settings, load_profile
+from dna.core.config import get_settings, safe_profile
 from dna.core.urls import extract_urls
 from dna.llm.factory import get_llm
 from dna.produce import (
@@ -39,7 +39,7 @@ from dna.produce import (
     spec,
 )
 from dna.produce.tasks import json_sidecar
-from dna.store import FetchStatus, Ledger, ProductionRecord, intake_urls, refetch_article
+from dna.store import FetchStatus, Ledger, ProductionRecord, intake_urls
 from dna.store.ledger import ArticleRecord
 
 
@@ -111,7 +111,7 @@ def load_rows(
     # 算、后几行按 15:00:00 算，边界上的那一行时有时无。
     # Evaluated against a single `now` so a row on the boundary does not flicker between
     # refreshes within the same screen.
-    window = _safe_profile().new_badge_hours
+    window = safe_profile().new_badge_hours
     now = datetime.now()
     rows = [
         RowView(
@@ -232,24 +232,6 @@ async def import_links(
     return await run.io_bound(_work)
 
 
-async def run_refetch(article_id: str) -> str:
-    """
-    重新抓取正文与媒体 / Re-fetch the body and media.
-
-    **不调用 LLM，不产生费用**——这是表格里唯一免费的「重做」。
-    Calls no LLM and costs nothing: the only free redo in the table.
-    """
-
-    def _work() -> str:
-        record = refetch_article(article_id)
-        if record is None:
-            return "重抓失败：文章不在台账里"
-        return (
-            f"{record.status}　正文 {record.text_len} 字，"
-            f"配图 {record.image_count} 张，视频 {record.video_count} 个"
-        )
-
-    return await run.io_bound(_work)
 
 
 def production_text(article_id: str, kind: ProductionKind | str) -> str:
@@ -366,19 +348,13 @@ def longform_estimate(record: ArticleRecord) -> str:
     from dna.core.models import Article
     from dna.narration.longform import plan_target_seconds
 
-    profile = _safe_profile()
+    profile = safe_profile()
     low, high = profile.longform_duration_seconds
     stub = Article(url=record.url, title=record.title, text="字" * record.text_len)
     seconds = plan_target_seconds(stub, low=low, high=high)
     return f"{seconds / 60:.0f} 分钟"
 
 
-def _safe_profile() -> Profile:
-    """读取偏好，缺失时用默认值 / Load the profile, falling back to defaults."""
-    try:
-        return load_profile()
-    except Exception:  # noqa: BLE001 - 界面不该因为配置读不到就崩
-        return Profile()
 
 
 def cache_status() -> str:
@@ -395,9 +371,6 @@ def cache_status() -> str:
     return llm.stats() if hasattr(llm, "stats") else "LLM 缓存：未启用"
 
 
-def kind_label(kind: ProductionKind) -> str:
-    """产物的中文名 / The Chinese label of a production kind."""
-    return spec(kind).label
 
 
 __all__ = [
@@ -405,7 +378,6 @@ __all__ = [
     "article_directory",
     "cache_status",
     "import_links",
-    "kind_label",
     "preview_links",
     "load_rows",
     "longform_estimate",
@@ -415,5 +387,4 @@ __all__ = [
     "production_sidecar",
     "production_text",
     "run_production",
-    "run_refetch",
 ]

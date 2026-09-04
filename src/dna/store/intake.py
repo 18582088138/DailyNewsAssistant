@@ -21,7 +21,7 @@ import json
 from dataclasses import dataclass, field
 from datetime import datetime
 
-from dna.core.config import Profile, Settings, SourceConfig, get_settings, load_profile
+from dna.core.config import Profile, Settings, SourceConfig, get_settings, safe_profile
 from dna.core.logging import get_logger
 from dna.core.models import RawItem, SourceKind
 from dna.core.urls import url_hash
@@ -107,7 +107,7 @@ def intake_sources(
         refetch:         已抓过的文章是否重抓
     """
     s = settings or get_settings()
-    prof = profile or _safe_profile()
+    prof = profile or safe_profile()
     ledger = Ledger(s.db_file)
 
     configs = _select_configs(source_ids)
@@ -193,7 +193,7 @@ def intake_urls(
         max_images=max_images,
         download_videos=download_videos,
         refetch=refetch,
-        profile=_safe_profile(),
+        profile=safe_profile(),
     )
 
     logger.info("链接入库完成：%s", result.summary())
@@ -244,7 +244,7 @@ def refetch_article(
         download_videos=download_videos,
         refetch=True,
         by_source={c.id: c for c in _select_configs(None)},
-        profile=_safe_profile(),
+        profile=safe_profile(),
     )
     return ledger.get(article_id)
 
@@ -442,13 +442,6 @@ def _dummy_config(source_id: str) -> SourceConfig:
     return SourceConfig(id=source_id, name=source_id, url="")
 
 
-def _safe_profile() -> Profile:
-    """读取偏好，缺失时用默认值 / Load the profile, falling back to defaults."""
-    try:
-        return load_profile()
-    except Exception as exc:  # noqa: BLE001 - 偏好缺失不该阻断采集
-        logger.warning("读取 profile.yaml 失败，使用默认值：%s", exc)
-        return Profile()
 
 
 __all__ = [

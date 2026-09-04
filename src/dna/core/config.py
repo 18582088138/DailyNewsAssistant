@@ -22,7 +22,12 @@ from pydantic import BaseModel, ConfigDict, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from dna.core.errors import ConfigError
+from dna.core.logging import get_logger
 from dna.core.models import Language, SourceKind
+
+# `dna.core.logging` 只依赖标准库与 rich，不反向依赖 config——不会循环导入。
+# `dna.core.logging` depends only on the stdlib and rich, so there is no import cycle.
+_logger = get_logger("core.config")
 
 # 仓库根目录：src/dna/core/config.py -> 上溯三层
 # Repository root: this file is at src/dna/core/config.py, so go up three levels.
@@ -428,6 +433,32 @@ def load_profile(path: Path | None = None) -> Profile:
     return Profile(**_read_yaml(path))
 
 
+def safe_profile(path: Path | None = None) -> Profile:
+    """
+    读取偏好，缺失或格式错误时用默认值 / Load preferences, falling back to defaults.
+
+    `load_profile` 会抛异常，而调用方几乎都不该因为偏好读不到就停下来：
+    采集、流水线、单篇生成、界面各有各的理由，但结论是同一个——**用默认值继续**。
+    先前这段 try/except 在四个模块里各抄了一份（`pipeline/flow`、`store/intake`、
+    `produce/service`、`nicegui_app/actions`），四份的差别只有日志文案，
+    而其中界面那份还漏了日志。
+    `load_profile` raises, and almost no caller should stop because preferences are
+    unreadable. This try/except previously existed in four copies differing only in log
+    wording — and the front-end copy had dropped the log entirely.
+
+    什么时候**不该**用它 / When not to use it:
+        `dna config` 这类「就是要显示配置对不对」的地方要用 `load_profile`，
+        让错误浮出来。静默降级只适合「配置是辅助、主流程不能停」的场合。
+        Commands whose whole purpose is to show whether the config is valid should call
+        `load_profile` and let the error surface.
+    """
+    try:
+        return load_profile(path)
+    except Exception as exc:  # noqa: BLE001 - 偏好缺失不该阻断主流程
+        _logger.warning("读取 profile.yaml 失败，使用默认值：%s", exc)
+        return Profile()
+
+
 __all__ = [
     "DEFAULT_CONFIG_DIR",
     "DEFAULT_ENV_FILE",
@@ -438,6 +469,7 @@ __all__ = [
     "SourceFilter",
     "get_settings",
     "load_profile",
+    "safe_profile",
     "load_sources",
     "reload_settings",
 ]

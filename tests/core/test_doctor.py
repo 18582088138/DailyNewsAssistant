@@ -229,10 +229,31 @@ def test_run_all_and_summary(settings: Settings) -> None:
     assert counts[Status.OK] > 0
 
 
-def test_has_failure_on_clean_settings(settings: Settings) -> None:
+def test_has_failure_on_clean_settings(settings: Settings, tmp_path: Path) -> None:
     """
     使用测试夹具的干净配置时不应有阻塞项。
     With the clean fixture settings there must be no blocking failure — this is the
     gate `dna doctor` uses to return exit code 0.
+
+    `env_file` 必须注入临时文件 / The env file must be injected:
+        `.env` 按约定不入库，**干净克隆里没有它**。不注入的话 `check_env_file`
+        会去读开发机上那个未跟踪的文件——测试于是「在我机器上过、在干净克隆里挂」，
+        而挂的原因和被测代码毫无关系。实测就是这么发现的。
+        `.env` is deliberately untracked, so a fresh clone has none. Without injection the
+        check reads an untracked file on the developer's machine and the test passes there
+        while failing on a clean clone for a reason unrelated to the code under test.
     """
-    assert has_failure(run_all(settings)) is False
+    env_file = tmp_path / ".env"
+    env_file.write_text("DEEPSEEK_API_KEY=sk-test\n", encoding="utf-8")
+
+    assert has_failure(run_all(settings, env_file=env_file)) is False
+
+
+def test_missing_env_file_is_a_blocking_failure(settings: Settings, tmp_path: Path) -> None:
+    """
+    `.env` 不存在时必须是阻塞项，不能降级为警告。
+
+    没有 `.env` 就没有 API key，所有花钱的节点都跑不了——这不是「提醒一下」
+    的级别。`dna doctor` 靠它返回退出码 1，可以直接做脚本门禁。
+    """
+    assert has_failure(run_all(settings, env_file=tmp_path / "不存在.env")) is True
