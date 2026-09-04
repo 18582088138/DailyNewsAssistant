@@ -392,3 +392,107 @@ def test_set_body_updates_the_title_when_given_one(ledger: Ledger) -> None:
 
     ledger.set_body(article_id, "正文", title="")
     assert ledger.get(article_id).title == "人工改对的标题"
+
+
+# --- 产物台账 / production ledger ----------------------------------------------
+
+
+def test_production_history_keeps_every_version(ledger: Ledger) -> None:
+    """
+    重做时插新行而不是原地更新。
+
+    原地更新会把上一版连同它的模型与时间一起抹掉，而内容出问题时
+    「这段稿子是哪天用哪个模型写的」是必须能回答的问题。
+    """
+    ledger.record_production("a1", "narration", chars=400, llm_model="deepseek-chat")
+    ledger.record_production("a1", "narration", chars=420, llm_model="deepseek-chat")
+
+    history = ledger.production_history("a1", "narration")
+
+    assert len(history) == 2
+    assert history[0].chars == 420, "最新版在前"
+    assert history[0].redo_of_id == history[1].id
+    assert history[1].redo_of_id is None
+
+
+def test_latest_production_disambiguates_within_one_second(ledger: Ledger) -> None:
+    """
+    按自增 id 而不是时间戳取最新。
+
+    同一秒内重做两次时时间戳相同，按时间排序会拿到不确定的那一版。
+    """
+    first = ledger.record_production("a1", "summary_zh", chars=100, now=NOW)
+    second = ledger.record_production("a1", "summary_zh", chars=200, now=NOW)
+
+    assert second > first
+    assert ledger.latest_production("a1", "summary_zh").id == second
+
+
+def test_production_matrix_fetches_everything_in_one_query(ledger: Ledger) -> None:
+    """
+    一次查出整页的产物状态。
+
+    GUI 一页 50 行 × 5 种产物，逐格查库是 250 次往返，界面会肉眼可见地卡。
+    """
+    ledger.record_production("a1", "summary_zh", chars=100)
+    ledger.record_production("a1", "narration", chars=400)
+    ledger.record_production("a2", "summary_zh", chars=120)
+
+    matrix = ledger.production_matrix(["a1", "a2", "a3"])
+
+    assert sorted(matrix["a1"]) == ["narration", "summary_zh"]
+    assert sorted(matrix["a2"]) == ["summary_zh"]
+    assert "a3" not in matrix
+
+
+def test_production_matrix_returns_only_the_latest_version(ledger: Ledger) -> None:
+    """矩阵里每种产物只出现最新一版，否则表格会显示过期内容。"""
+    ledger.record_production("a1", "summary_zh", chars=100)
+    ledger.record_production("a1", "summary_zh", chars=999)
+
+    assert ledger.production_matrix(["a1"])["a1"]["summary_zh"].chars == 999
+
+
+def test_failed_productions_are_recorded_too(ledger: Ledger) -> None:
+    """
+    失败也记一行，带原因。
+
+    不记的话表格显示「未生成」，人会以为没跑过，再点一次再失败一次——每次都在花钱。
+    """
+    ledger.record_production("a1", "longform", status="failed", error="正文太短")
+
+    record = ledger.latest_production("a1", "longform")
+    assert record is not None
+    assert not record.ok
+    assert record.error == "正文太短"
+
+
+def test_kind_counts_ignore_failures_and_old_versions(ledger: Ledger) -> None:
+    """统计只算最新版且成功的——失败和旧版本不该被计入产出量。"""
+    ledger.record_production("a1", "summary_zh", chars=100)
+    ledger.record_production("a1", "summary_zh", chars=200)   # 重做，仍算 1 篇
+    ledger.record_production("a2", "summary_zh", status="failed", error="x")
+
+    assert ledger.count_productions_by_kind() == {"summary_zh": 1}
+
+
+def test_empty_matrix_for_no_ids(ledger: Ledger) -> None:
+    """空输入不构造非法 SQL。"""
+    assert ledger.production_matrix([]) == {}
+
+
+def test_set_store_dir_touches_nothing_else(ledger: Ledger) -> None:
+    """
+    改写落盘目录时不该顺带改动状态或抓取次数——搬个位置不是一次「抓取」。
+    """
+    article_id, _ = ledger.register(raw())
+    ledger.record_fetch(article_id, article())
+    before = ledger.get(article_id)
+
+    ledger.set_store_dir(article_id, "articles/20260903/new__abcd1234")
+    after = ledger.get(article_id)
+
+    assert after.store_dir == "articles/20260903/new__abcd1234"
+    assert after.status is before.status
+    assert after.fetch_count == before.fetch_count
+    assert after.text_len == before.text_len

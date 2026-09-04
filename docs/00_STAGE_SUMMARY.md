@@ -42,7 +42,7 @@
 | TTS | **Qwen3-TTS OpenVINO**（`Qwen3-TTS-CustomVoice-0.6B-OV`，Intel CPU/GPU，中英双语，本地已验证） |
 | 长图 | Jinja2 HTML + **Playwright 截图** |
 | 前端 | CLI + **NiceGUI**（含后台台账控制台） |
-| 存储 | 文件系统（期次目录 `YYYYMMDD-DailyNews` / `topics` 标题目录）+ **SQLite 资产台账** |
+| 存储 | 文件系统：条目级 `outputs/articles/<日期>/<slug>__<id8>/`（**唯一权威**，正文·配图·视频·五种文案都在这）+ 期次级 `outputs/<日期>-DailyNews/`（只放整期产物，条目按 id 引用）+ **SQLite 资产台账**（`data/` 只放 `dna.db` 与 `llm_cache/`，不放产物） |
 
 ---
 
@@ -59,7 +59,9 @@
 | P2+ 落盘与台账 | 文章总表(SQLite) / 正文与图片落盘 / 按源过滤 / dna add·list·show·refetch·stats | ✅ **完成**（应用户要求从 P4 提前） | 402 passed (4.7s) + 真机验证 | `11_article_store_guide.md` · `issues/004` |
 | P2++ 视频落盘与人工补正文 | 视频下载(直链 + yt-dlp) / 配图上限 10 / 属性级装饰图过滤 / `dna sync` 回写人工正文 | ✅ **完成** | 445 passed (5.6s) + 真机验证（微信 ×2、知乎 ×1） | `11_article_store_guide.md` · `issues/005` |
 | P3 Pipeline 核心 | clean → dedup → score → summarize → translate → trend → `_digest.json`；LLM 响应缓存；`dna digest` | ✅ **完成** | 610 passed (6.9s) + 真机验证（DeepSeek，8 次调用） | `06_prompt_spec.md` · `12_digest_guide.md` · `issues/006` |
-| P4 落盘 + 台账 DB | 目录规则 / references / SQLite ledger | ⬜ | — | — |
+| P3.5 台账工作台 | NiceGUI 产出矩阵（5 列逐格重做）/ 单篇产物层 / 三种文案（25~35s·1~2min·5~15min 专题·访谈）/ 目录迁到 outputs / 媒体上限可配置 | ✅ **完成** | 705 passed (12.3s) + 真机验证（DeepSeek，11 次调用） | `07_db_schema.md` · `13_workbench_guide.md` · `issues/007` |
+| P3.5 bis 文案质量返工 | 信息密度列为第一要求 / 字数预算按中英混排密度换算 / 短视频改为覆盖主干 / 摘要加信息完整性与指标优先级 / profile 时长区间与 CTA 接通 | ✅ **完成** | 722 passed (12.9s) + 真机复验（DeepSeek，4 次调用） | `06_prompt_spec.md` · `13_workbench_guide.md` · `issues/008` |
+| P4 落盘 + 台账 DB | **期次级**目录规则 / `_references.md` / 期次装配。⚠️ DB 与条目级落盘已在 P2+ 与 P3.5 提前完成；条目布局以 P3.5 的 `outputs/articles/` 为唯一权威，`topics/` 与 `_history/` 均已取消（`02_development_plan.md` §9.2 §9.3） | ⬜ | — | — |
 | P5 场景1 图文版 | md/html 双语 + 长图 | ⬜ | — | 🔍 人工审阅 |
 | P6 场景2 视频版 | narration 公用层 + 口播稿 + 素材 + 音频 | ⬜ | — | 🔍 人工审阅 |
 | P7 场景3 播客版 | 复用 narration：单/双人脚本 + 整期音频 | ⬜ | — | 🔍 人工审阅 |
@@ -102,6 +104,8 @@
 | 001 | 推理模型（qwen3.5:9b）的 token 预算被思维链耗尽，`max_tokens` 偏小时正文为空；原报错指不到根因 | ✅ 已修复 + ⚠️ 遗留性能结论 | [issues/001](issues/001-ollama-reasoning-token-budget.md) |
 | 002 | 小模型（qwen2.5:3b）把 JSON Schema 原样抄回，且修复重试的反馈无效导致三次全废 | ✅ 已修复并真机复验 | [issues/002](issues/002-small-model-echoes-json-schema.md) |
 | 004 | 落盘验证暴露两个问题：①图床防盗链导致配图全部 403 ②抽取降级时站点通用标题覆盖了 RSS 正确标题且不可恢复 | ✅ 已修复并真机复验 | [issues/004](issues/004-image-hotlink-and-title-overwrite.md) |
+| 008 | 文案信息量不够：①**字数预算按纯中文语速折算，系统性少要三分之一**，而稿子时长照样达标、回炉不触发，错误完全静默 ②短视频「只讲一个点」导致技术正确却没把文章讲清楚 ③笼统的「不要白话」模型执行不了 ④正文截到 3000 字，最有价值的那条局限模型没看到 ⑤摘要选了文件体积而非激活参数 | ✅ 全部已修并真机复验 | [issues/008](008-copy-information-density.md) |
+| 007 | P3.5：①arXiv 抓到的「配图」是页脚基金会 logo ②长文案目标按字符数推导，与按秒数验收对不上（目标 15 分钟实测 7.4 分钟）③**图片水印实测无法在抓取时绕开**（发布方烧进像素） | ✅ ①②已修，③确认为外部限制、按用户决定不处理 | [issues/007](007-p35-workbench.md) |
 | 006 | P3 开发中发现：①`db_path` 不跟随 `DATA_DIR`，改数据目录会让台账与落盘静默失联（测试因此写进了真实数据库）②NFKC 归一化把中文逗号折成半角，中文稿读起来像机翻 | ✅ 已修复 | [issues/006](006-p3-config-and-normalisation.md) |
 | 005 | 微信/知乎真机验证：①知乎强反爬 403（外部限制，改为人工补正文 + `dna sync` 回写）②配图上限 5 张偏少→10 ③微信作者头像被当成正文配图 ④重抓时旧图片残留成孤儿文件 ⑤失败文章全叫「(抓取失败)」⑥视频只记链接不下文件 | ✅ 已修复并真机复验 | [issues/005](issues/005-wechat-zhihu-live-verification.md) |
 | 003 | P2 三个发现：①feed 失效被静默记成「成功 0 条」（feedparser 的 bozo 不可靠）②og:image 是站点 logo 时成为日报封面 ③三个订阅源实测失效 | ✅ 全部处理完毕 | [issues/003](issues/003-p2-live-verification-findings.md) |

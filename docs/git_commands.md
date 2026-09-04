@@ -5,6 +5,32 @@
 
 ---
 
+## 每次提交后必做的两条检查
+
+「按文件列表提交」有一个不会报错的失效模式：**某一轮的 add 块没执行，
+后面几轮各自只列自己改到的文件，漏下的就永远没人捡**。工作区里文件都在、
+测试全绿，只有干净克隆才会暴露。2026-09-04 就是这样发现 HEAD 起不来的
+（`produce/__init__.py` 与 `narration/__init__.py` 从没进过库），
+补救见[补提交](#补提交2026-09-04-把-p35-漏掉的文件一次补齐)。
+
+```bash
+# 1. 工作区必须干净——还有东西剩下就说明这一轮又漏了
+git status --short                 # 预期：空
+
+# 2. 把 HEAD 单独克隆出来试一次 import —— 唯一能发现「文件没进库」的办法
+rm -rf /c/tmp/headcheck
+git clone -q --no-hardlinks . /c/tmp/headcheck
+PY=/c/Users/test/miniforge3/envs/ov_env_py312/python.exe
+PYTHONPATH=/c/tmp/headcheck/src $PY -c \
+  "from dna.produce import produce, DISPLAY_ORDER; from dna.narration import estimate_seconds; print('HEAD import ok')"
+rm -rf /c/tmp/headcheck
+```
+
+第 2 条尤其要跑在**新增了包目录**的那一轮之后——新目录的 `__init__.py`
+是最容易漏的一个文件，而漏了它整个包在干净环境里就 import 不到。
+
+---
+
 ## 阶段：调研 + 构建方案 + 方案调整（2026-09-01）
 
 初始化仓库（首次执行一次）：
@@ -373,6 +399,360 @@ CLI: 新增 dna digest（--dry-run / --limit / --bilingual / -a 指定文章 / -
 
 测试: 610 passed，全部使用假 provider，零 LLM 调用、零费用、不联网"
 ```
+
+---
+
+## 阶段：P3.5 台账工作台
+
+> ⚠️ **这一块下面的命令没有被执行过**（`git log` 里没有对应提交），
+> 后面两个阶段的提交只带走了它们各自列出的文件，
+> 于是 P3.5 的代码**只进去了一半**。补救见文末的
+> [「补提交」](#补提交2026-09-04-把-p35-漏掉的文件一次补齐)。
+> 这里保留原样作为记录，**不要再单独执行**。
+
+> `docs/issues/` 在 .gitignore 里，issue 007 不要 `git add`。
+
+```bash
+git add src/dna/produce/         src/dna/narration/         src/dna/store/migrate_layout.py         src/dna/store/db.py         src/dna/store/ledger.py         src/dna/store/__init__.py         src/dna/store/article_store.py         src/dna/store/intake.py         src/dna/core/config.py         src/dna/extract/media.py         src/dna/pipeline/source.py         frontends/nicegui_app/         frontends/cli/main.py         tests/narration/         tests/produce/         tests/store/test_migrate_layout.py         tests/store/test_ledger.py         tests/extract/test_extract.py         tests/pipeline/test_source.py         config/profile.yaml         pyproject.toml         docs/00_STAGE_SUMMARY.md         docs/03_unit_tests.md         docs/06_prompt_spec.md         docs/07_db_schema.md         docs/13_workbench_guide.md         docs/git_commands.md
+
+git commit -m "feat(workbench): P3.5 台账工作台 —— GUI 产出矩阵 + 单篇五种产物
+
+目录迁移：文章目录从 data/ 搬到 outputs/articles/
+  里面全是产物——正文、配图、视频、各类文案，是要打开要拷走要发布的东西
+  data/ 只留台账数据库与 LLM 缓存
+  migrate_layout 先移文件再改库：反过来的话失败时每行都指向不存在的目录
+  没有台账引用的孤儿目录只报告不删除——盘上的东西是用户的
+
+store: schema v3 新增 productions 表
+  每次生成插新行、redo_of_id 指向上一版，不原地更新
+  原地更新会把上一版连同它的模型和时间一起抹掉，而内容出问题时
+  「这段稿子是哪天用哪个模型写的」必须能回答
+  失败也记一行：不记的话表格显示未生成，人会以为没跑过，再点一次再失败一次
+  production_matrix 一次查完整页——50 行 × 5 种产物逐格查库是 250 次往返
+
+narration: 三种文案，共用一套专业性约束
+  短视频 25~35s（一条只讲一个点）／口播 1~2min（必须有技术深度）
+  长文案 5~15min，专题单角色／访谈双角色
+  长文案分段生成：提纲 1 次 + 每节 1 次。3000~4000 字远超单次输出的可靠范围，
+  一次生成会丢结构、重复论述、越写越水——而不要白话正是核心要求
+  时长超区间带具体差多少字回炉，最多 2 次；仍不达标则返回结果而不是报错
+  长度只在时长空间定义一处，字数由它换算（原先两种单位并存已经出现矛盾）
+
+produce: 单篇产物层，CLI 与 GUI 调同一个 service
+  已有产物且未 force 时零调用——GUI 按钮就在手边，误触不该等于计费
+  长文案不进 --all：一篇 5~9 次调用，是其余四项加起来的两倍多
+  前置缺失自动补（英文总结依赖中文总结），不报错让人手动跑
+
+extract: 补 funder/sponsor/partner 标记
+  arXiv 摘要页没有配图，页脚的 simons-foundation.png 顶上成了条目封面
+
+config: 媒体上限可配置，命令行 > 源级 > profile 全局
+  arXiv 摘要页没有配图，微信长文可能有二十几张，一个全局值伺候所有源
+  要么浪费带宽要么漏素材
+
+GUI: dna gui —— 一篇文章一行，五种产物各一列，每格可单独重做
+  所有 LLM 调用走 run.io_bound，否则一次调用冻住整个界面像崩了一样
+  顶部常驻缓存命中率：看不见的成本最容易失控
+
+图片水印：实测无法在抓取时绕开（发布方烧进像素，探测过各种变体只有一个版本），
+按用户决定不处理
+
+真机验证（DeepSeek，11 次调用）：短视频 26s、口播 99s、访谈长文案 7.4min/29 轮
+  生成内容里的 304B、167GB、0.0102、UD-Q8_K_XL 等全部能在原文找到，零编造
+
+测试: 705 passed，全部假 provider，零 LLM 调用、零费用"
+```
+
+---
+
+## 阶段：P3.5 bis 文案质量返工
+
+> 用户给了人工撰写的参考稿，指出「信息量不够，同时没有把文章讲清楚」。
+> `docs/issues/` 在 .gitignore 里，issue 008 不要 `git add`。
+
+```bash
+git add src/dna/narration/duration.py \
+        src/dna/narration/script_builder.py \
+        src/dna/narration/longform.py \
+        src/dna/pipeline/summarize.py \
+        src/dna/produce/service.py \
+        src/dna/core/config.py \
+        tests/narration/ \
+        tests/produce/test_service.py \
+        tests/pipeline/test_summarize.py \
+        config/profile.yaml \
+        docs/03_unit_tests.md \
+        docs/06_prompt_spec.md \
+        docs/13_workbench_guide.md \
+        docs/git_commands.md
+
+git commit -m "fix(narration): 文案信息量不够 —— 字数换算用错了语速
+
+根因不在提示词措辞，在单位。先量了一遍参考稿与生成稿：
+  人工撰写的参考稿 199 字符 → 27.8 秒 ＝ 7.2 字符/秒
+  本系统生成的稿子 185 字符 → 25.8 秒 ＝ 7.2 字符/秒
+两篇长度几乎一样，所以问题不是稿子太短，而是同样的秒数里放的事实太少。
+
+duration: 拆出 prompt_char_budget，与 target_chars 分开
+  target_chars 是物理量（estimate_seconds 的严格逆运算，纯中文自洽）
+  prompt_char_budget 是要告诉模型写多少字，按中英混排实测密度放大 1.5 倍
+  按 4.5 字/秒折算，25~35 秒只要 112~157 字，而实测装得下 168~235 字
+  模型照少的写，时长恰好落在区间下沿：验收通过、回炉不触发、
+  信息量少掉三分之一，而且没有任何环节报错——这是完全静默的错误
+  验收仍然只走 estimate_seconds，放大只作用于提示词，不放松标准
+
+  回炉差值改按上一稿实测密度换算（observed_chars_per_second）
+  固定 4.5 字/秒对 8 字符/秒的技术稿只会少要求删一半，
+  第二稿仍然超时，那次调用白花
+
+  教训：换算系数必须来自实测，不能来自定义。4.5 字/秒是中文播报语速的
+  定义值，对纯中文稿成立；稿子里有三成英文时它就不是那个场景的答案了
+  （issue 007-C 修的是同一个量两种单位，这次是两种单位都对但用错了场合）
+
+script_builder: 信息密度列为第一要求
+  时长固定，而且发布时视频还会加速播放，成败在同样的秒数里装多少事实
+  每句必须携带至少一个具体信息点，写不出信息点的句子直接删掉
+  禁止的填充句式逐条点名，不再笼统说不要白话——笼统的禁令模型执行不了
+  四类都来自真机产出：提示词里的结构提示被原样写进稿子（这意味着什么）、
+  第一人称（我最关注的是）、形容词结尾、填充语
+
+  短视频从一条只讲一个点改为覆盖文章主干
+  初版产出技术正确却没把文章讲清楚：观众知道某个量化档位困惑度没变，
+  却不知道这是哪个模型、发布了没有
+  第一句必须是事件本身，之后每句换一个新事实
+  主标题写事件、副标题堆亮点（参考稿的写法）
+
+  口播也返回主副标题——1~2 分钟的稿子也是要发到平台上的视频
+  结尾落在具体建议或具体数字上，不用形容词收束
+
+  正文上限 3000 → 6000 字。4069 字的技术稿被切掉的尾部含采样参数
+  和一条关键局限（官方没给 Jinja chat template，能跑和跑对是两回事），
+  而那正是必须说局限这条规则要用的料，模型根本没看到
+  摘要节点保持 3000：它每条都跑，上限直接乘以条目数；文案单篇按需跑
+
+summarize: 加信息完整性与指标取舍优先级
+  原文讲了几件事就都要覆盖到，不要只写前一半
+  1~2 句装不下所有数字，所以取舍规则必须写进提示词；不写的话模型
+  按原文出现顺序取，而技术文章开头往往是文件体积这类次要细节
+  实测对照：模型自选写了模型文件 167GB，参考摘要写的是激活参数 13B
+
+config: cta_line 进 profile，时长区间接通到构建器
+  结尾引导语是账号品牌，换栏目就改配置；提示词只留怎么写好文案的规则
+  profile.yaml 里三行时长配置此前是死配置：构建器用自己的默认参数，
+  改了完全没反应——比不提供这个配置更糟，因为人会以为改生效了
+  longform 默认窗口 (600,900) → (300,900)，与代码下限对齐；
+  两处写不同的值会出现配置说 10 分钟起、代码按 5 分钟起
+
+参考稿里的得分 50、激活参数 13B、百万 Token 上下文在原文中都不存在
+（逐个检索确认），是撰稿人从别处知道的。提示词有硬约束不确定的宁可不写，
+所以系统不会写出这几个数字——这是正确行为。要让跨源事实进文案需要
+采集侧聚合多家来源，不是放松约束
+
+真机复验（DeepSeek，4 次调用，长文案未复跑）：
+  短视频 185字/26s → 289字/31s，8 个事实
+  口播 550字/99s → 840字/94s，无第一人称，新增 PD 分离与 KLD 差 8 倍
+  生成内容里的 304B、167GB、0.0102、0.0747、384K 等全部能在原文找到，零编造
+
+长文案实跑两篇后发现分节重复：CES 那篇第 7 节把第 6 节的产品逐个重讲一遍，
+9 个实体全部重复、238 字零新信息。根因是 previous_tail 只给上一节最后 120 字，
+模型不知道前面几节覆盖了什么，把「其他创新硬件」理解成再说一遍我知道的硬件
+
+longform: 每节提示词放完整提纲并标注已讲过/现在写这节/留给后面，不增加调用次数
+  提纲阶段要求各节互斥，禁止用「其他」「其余」「补充」命名任何一节
+  局限那条放宽为局限/代价/前提条件/未解决的问题，原文没明说时讲共同短板
+  复验同一篇：4078字/628秒/7节 → 5524字/902秒/8节含局限节
+  剩下的跨节重复是局限节在点评前文，属预期行为
+
+落盘路径以 P3.5 为准（用户决定）：条目级只存 outputs/articles/<日期>/<slug>__<id8>/
+  原方案的 topics/ 与 _history/ 取消，期次目录只放整期产物、条目按 id 引用
+  data/ 只放 dna.db 与 llm_cache/，不放任何产物
+  清理了 data/articles/ 下 2 个残留目录（标题改名前的旧副本，内容与新目录相同）
+  已核查全仓 22 处写文件位置，条目内容一律走 output_path / store_dir，目前没有散落
+
+测试: 725 passed，全部假 provider，零 LLM 调用、零费用"
+```
+
+---
+
+## 阶段：P3.5 ter 工作台改版 + 链接导入
+
+> `docs/issues/` 在 .gitignore 里，issue 008 不要 `git add`。
+
+```bash
+git add frontends/nicegui_app/         src/dna/produce/tasks.py         tests/frontends/test_workbench.py         docs/13_workbench_guide.md         docs/03_unit_tests.md         docs/git_commands.md
+
+git commit -m "feat(gui): 工作台改版 —— 修布局重叠、冻结表头、重做移出格子、链接导入
+
+布局：flex 换成 CSS Grid
+  先前 flex + 固定宽度 + no-wrap，窗口一窄，flex-1 的标题被压到零宽以下，
+  后面的固定宽度列就叠在标题上；Grid 配 min-width 从根上不可能重叠，
+  宽度不够出横向滚动条。已用 Playwright 在 1600px 与 900px 两种宽度下核对
+  标题按字符数截断（默认 42 字）。CSS 的 ellipsis 是按像素截的，
+  CJK 字符宽度是拉丁字母两倍，纯靠它中文标题露出的字数只有英文的一半，
+  而这张表以中文标题为主
+
+表头 sticky：表格自己是滚动容器，翻到第 30 行仍看得见哪列是哪个功能
+  列宽只有 108px，没有表头认不出「口播」和「短视频」
+
+列分隔线 + 抓取信息与产物之间加一道重线分组
+  文章多的时候没有竖线根本对不上哪一列是哪个功能
+
+重做按钮从格子移进展开面板
+  格子只有 108px 宽，重做按钮和「打开内容」的点击区域挨在一起，
+  而两者代价完全不对等：一个免费，一个是一次计费调用
+  现在点格子展开内容，重做在面板里，等于要求先看见内容再决定要不要重做——
+  这本来就是重做之前该走的一步。按钮琥珀色，和其它操作视觉上分开
+
+展开面板新增：下载文案 / 下载 TTS 用的 JSON / 打开产物目录 /
+  直接打开 images 与 videos（要拷的是素材本身，少点一层）
+  素材按钮只在目录真实存在且非空时出现——点开是空文件夹比没按钮更让人困惑
+  音频与成片按钮摆出来但禁用，tooltip 写明等 P6：不摆没人知道将来会有，
+  摆了却能点是骗人
+  打开文件夹在服务端执行，绑定地址不是本机时拒绝并说明原因，
+  否则会在服务器上悄悄弹窗而点的人什么也看不到
+
+展开内容改为按需读取：一页 50 行 × 5 种产物进页面就全读是 250 次磁盘 I/O
+
+配色：深色控制台，青绿=已生成复用不花钱，琥珀=会计费，红=失败
+  每种状态同时带形状符号（●○▲—），不只靠颜色——色觉障碍与黑白截图下都要能分辨
+  字体只用 Windows 本地有的栈，不走 CDN：公司代理会把 Google Fonts 拦下来
+
+tasks: TaskSpec 加 spoken 字段，标出哪些产物要被念出来
+  界面据此决定哪几格该有音频入口；P6/P7 的 TTS 也用它
+
+新增链接导入（右上角，不调用 LLM 不产生费用）
+  支持一次多条，也支持直接粘一整段带链接的文字——真实投递就是从群聊里
+  复制出来的一段话，链接夹在中文之间、结尾带中文句号
+  输入框下实时列出识别到的链接：粘一整段聊天记录时，这是唯一能提前发现
+  少粘一条或多认一个图片地址的机会，抓完再发现台账里已经有垃圾行了
+  走 intake_urls，与 dna add 同一个入口，不在界面里另写一套
+
+修：确认框里的长文案时长预估改走 plan_target_seconds
+  界面里原本自带一份 min(text_len*1.2, 4000)/4.5/60，是已废弃的按字符数推导，
+  核心改了之后报的分钟数和实际生成的对不上，而这个数字正是人决定花不花钱的依据
+
+修：表格容器排到筛选栏后面（NiceGUI 按创建顺序布局，原先表格跑到了筛选栏上面）
+
+新增 NEW 标识：标出刚导入、还没调过 LLM 的条目
+  判定在 dna.produce.is_new_article（产物层，不在前端）：
+  一条产物记录都没有（含失败的）且首次入库在 new_badge_hours 小时内（默认 24）
+  失败的尝试同样清掉标识——失败记录说明 LLM 已经调过、钱已经花了，
+  而且那一格显示 ▲，和 NEW 摆在一起是自相矛盾的信号
+  时间窗不是可选的：实测台账 37 篇里 32 篇从来没有任何产物（RSS 存量大多如此），
+  只看有没有产物的话 NEW 会挂在 32 行上，而这个标识的全部意义就是
+  从几十行里找出刚粘进去的那几条；设 0 可关掉时间窗
+  用第四种颜色（青蓝），和已生成的青绿、计费的琥珀、失败的红都分得开——
+  复用颜色会让人把「新导入」误读成「已完成」
+  整行左侧也加青蓝竖线：只靠标题旁一个小标签，横向滚动到右边就看不见了
+  减少动效偏好下只关呼吸动画，标识本身保留——动效是装饰，标识是信息
+  配套「只看新导入」筛选与「N 条新导入」计数
+
+测试: 752 passed
+  新增 tests/frontends/test_workbench.py 22 条 + tests/produce/test_service.py +5
+  锁的是纯函数与文件系统契约——布局观感测不出来，靠人工看；
+  但这些出错时界面会安静地显示错误的东西（该禁用的按钮没禁用、点下去 404、
+  表头与数据列错开一格、NEW 挂错行）"
+```
+
+---
+
+## 补提交（2026-09-04）：把 P3.5 漏掉的文件一次补齐
+
+> **当前 HEAD 是跑不起来的。** 已验证：把 HEAD 单独 clone 出来，
+> `from dna.produce import produce` 直接 `ImportError`——
+> `src/dna/produce/__init__.py` 与 `src/dna/narration/__init__.py` 从来没进过库。
+> 命令行的 `dna produce`、`dna gui` 在干净克隆上都会在 import 阶段就挂掉。
+
+### 怎么漏的
+
+P3.5 那一块的 `git add` 命令**没有被执行过**（`git log` 里没有 P3.5 的提交）。
+后面两个阶段（文案返工、工作台改版）的提交各自只列了自己改到的文件，
+于是 P3.5 的产物被切成了两半：
+
+| 已进库 | 漏在外面 |
+|---|---|
+| `produce/{tasks,service}.py`（被文案返工那次带走） | **`produce/__init__.py`** |
+| `narration/{duration,script_builder,longform}.py`（同上） | **`narration/__init__.py`** |
+| `frontends/nicegui_app/*`（被工作台改版那次带走） | `store/migrate_layout.py` |
+| | `store/{db,ledger,article_store,intake,__init__}.py` 的 P3.5 改动 |
+| | `extract/media.py`、`pipeline/source.py`、`cli/main.py` 的 P3.5 改动 |
+| | `docs/07_db_schema.md`、`tests/produce/__init__.py`、`tests/store/test_migrate_layout.py` |
+
+**根因不是手滑，是「按文件列表提交」这个做法本身**：每次只列「这一轮改了什么」，
+上一轮漏下的就永远不会被后一轮捡起来，而且**不会报错**——工作区里文件都在，
+测试全绿，只有干净克隆才会暴露。
+
+### 补提交
+
+```bash
+cd /c/Users/test/Downloads/xkd/DailyNewsAssistant
+
+# 先确认敏感路径都在忽略里（四条都应该有输出）
+git check-ignore -v .env outputs data docs/issues
+
+# 再确认没有别的东西混进来
+git status --short
+```
+
+```bash
+git add .gitignore         src/dna/produce/__init__.py         src/dna/narration/__init__.py         src/dna/store/migrate_layout.py         src/dna/store/__init__.py         src/dna/store/db.py         src/dna/store/ledger.py         src/dna/store/article_store.py         src/dna/store/intake.py         src/dna/extract/media.py         src/dna/pipeline/source.py         frontends/cli/main.py         tests/produce/__init__.py         tests/store/test_migrate_layout.py         tests/store/test_ledger.py         tests/extract/test_extract.py         tests/pipeline/test_source.py         docs/07_db_schema.md         docs/00_STAGE_SUMMARY.md         docs/02_development_plan.md         docs/git_commands.md
+
+git commit -m "fix(repo): 补齐 P3.5 漏提交的文件 —— HEAD 此前无法 import
+
+P3.5 的 git add 块没有被执行过，后面两个阶段的提交各自只带走了自己列出的
+文件，于是 P3.5 的代码只进去了一半。已验证 HEAD 单独 clone 出来
+from dna.produce import produce 直接 ImportError，dna produce 与 dna gui
+在干净克隆上都会在 import 阶段挂掉
+
+补进来的：
+  produce/__init__.py 与 narration/__init__.py —— 两个包的 __init__ 从没进库，
+    这是 HEAD 起不来的直接原因；子模块在，包的再导出不在
+  store/migrate_layout.py —— 文章目录从 data/ 迁到 outputs/
+    先移文件再改库：反过来的话失败时每行 store_dir 都指向不存在的目录
+    没有台账引用的孤儿目录只报告不删除——盘上的东西是用户的
+  store/db.py —— schema v3，productions 表
+    每次生成插新行、redo_of_id 指向上一版，不原地更新
+    原地更新会把上一版连同它的模型和时间一起抹掉，而换模型之后
+    「哪些产物是旧口径的」必须能筛出来，否则只能全部重跑
+  store/ledger.py —— ProductionRecord 与产物矩阵
+    production_matrix 一次查完整页：50 行 × 5 种产物逐格查库是 250 次往返
+    latest_production 按自增 id 倒序而不是 created_at——同一秒内重做两次
+    时间戳相同，按时间排序会拿到不确定的那一版
+  store/article_store.py + intake.py —— 落盘根目录改到 outputs/
+    里面全是产物（正文、配图、视频、文案），是要打开要拷走要发布的东西
+    data/ 只留台账数据库与 LLM 缓存
+  extract/media.py —— 补 funder/sponsor/partner 标记
+    arXiv 摘要页本来没有配图，页脚的 simons-foundation.png 顶上成了条目封面
+    沿用词边界匹配而非子串，partnership-diagram.png 这类真实配图不受影响
+  pipeline/source.py —— 按 article_ids 取单篇
+  cli/main.py —— dna produce / gui / migrate-layout
+  .gitignore —— docs/issues/ 不入库
+  docs/07_db_schema.md —— 两张表的结构与取舍
+
+历史顺序因此是乱的：P3.5 的代码排在依赖它的两个提交之后，
+中间那两个提交单独 checkout 出来是跑不起来的。不做 rebase 重写——
+手动提交的仓库改历史风险大于收益，往后不再断链即可
+
+以后每次提交后必须做的检查（见 git_commands.md 开头）：
+  git status --short 必须是空的；克隆 HEAD 试一次 import"
+```
+
+### 提交后必须验证（这一步是这次漏提交的真正修复）
+
+```bash
+# 1. 工作区必须干净——还有东西剩下就说明又漏了
+git status --short          # 预期：空
+
+# 2. 把 HEAD 单独克隆出来试着 import，这是唯一能发现「文件没进库」的办法
+#    工作区里文件都在、测试全绿，只有干净克隆才会暴露
+rm -rf /c/tmp/headcheck
+git clone -q --no-hardlinks . /c/tmp/headcheck
+PY=/c/Users/test/miniforge3/envs/ov_env_py312/python.exe
+PYTHONPATH=/c/tmp/headcheck/src $PY -c "from dna.produce import produce, DISPLAY_ORDER; print('HEAD import ok')"
+rm -rf /c/tmp/headcheck
+```
+
+预期最后一行输出 `HEAD import ok`。
 
 ---
 

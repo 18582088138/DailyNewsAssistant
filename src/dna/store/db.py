@@ -26,7 +26,7 @@ from dna.core.logging import get_logger
 
 logger = get_logger("store.db")
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS articles (
@@ -61,6 +61,40 @@ CREATE INDEX IF NOT EXISTS idx_articles_canonical ON articles(canonical_url);
 _MIGRATE_V2 = """
 ALTER TABLE articles ADD COLUMN feed_title TEXT NOT NULL DEFAULT '';
 UPDATE articles SET feed_title = title WHERE feed_title = '';
+"""
+
+
+# v3：单篇产物台账 / per-article production ledger
+#
+# 每生成一次产物就插一行，**不更新旧行**：`redo_of_id` 指向被替换的那版，
+# 历史因此可追溯——「这段口播稿是哪天用哪个模型生成的」是能回答的问题。
+# 只更新一行的话，重做会把上一版连同它的模型与时间一起抹掉。
+# Each generation inserts a row rather than updating one: `redo_of_id` points at the
+# version it replaces, so history survives and "which model wrote this script, and when"
+# stays answerable. Updating in place would erase the previous version along with the
+# model and timestamp that produced it.
+_MIGRATE_V3 = """
+CREATE TABLE IF NOT EXISTS productions (
+    id            INTEGER PRIMARY KEY,
+    article_id    TEXT NOT NULL,
+    kind          TEXT NOT NULL,              -- summary_zh|summary_en|shortvideo|narration|longform
+    variant       TEXT,                       -- longform 专用：feature|interview
+    status        TEXT NOT NULL,              -- ok|failed
+    output_path   TEXT,                       -- 相对 outputs/
+    chars         INTEGER NOT NULL DEFAULT 0,
+    est_seconds   REAL,                       -- 口播时长估算
+    llm_provider  TEXT,
+    llm_model     TEXT,
+    tokens        INTEGER NOT NULL DEFAULT 0,
+    calls         INTEGER NOT NULL DEFAULT 1, -- 长文案分段生成，会有多次
+    duration_ms   INTEGER NOT NULL DEFAULT 0,
+    error         TEXT,
+    created_at    TEXT NOT NULL,
+    redo_of_id    INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_productions_article ON productions(article_id);
+CREATE INDEX IF NOT EXISTS idx_productions_kind    ON productions(article_id, kind);
 """
 
 
@@ -109,10 +143,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
     """
     按版本号逐级迁移表结构 / Migrate the schema step by step by version number.
 
-    目前只有 v1；后续加字段时在这里追加分支，不要直接改 _SCHEMA_V1，
-    否则老库不会得到新列。
-    Only v1 exists so far. Later columns are added as new branches here rather than by
-    editing _SCHEMA_V1, which would leave existing databases without the new columns.
+    后续加字段时在这里追加分支，**不要直接改 _SCHEMA_V1**，否则老库不会得到新列。
+    Later columns are added as new branches here rather than by editing _SCHEMA_V1,
+    which would leave existing databases without them.
     """
     current = conn.execute("PRAGMA user_version").fetchone()[0]
 
@@ -134,6 +167,10 @@ def _migrate(conn: sqlite3.Connection) -> None:
         # 但至少从此以后源标题不会再丢。
         conn.executescript(_MIGRATE_V2)
         current = 2
+
+    if current == 2:
+        conn.executescript(_MIGRATE_V3)
+        current = 3
 
     conn.execute(f"PRAGMA user_version = {current}")
     conn.commit()

@@ -300,7 +300,7 @@ def show(article_id: str = typer.Argument(..., help="文章 id，前 8 位即可
         console.print("\n[yellow]尚未落盘。[/yellow]")
         return
 
-    directory = settings.data_path / record.store_dir
+    directory = settings.output_path / record.store_dir
     console.print(f"\n[bold]落盘位置：[/bold]{directory}")
 
     article_file = directory / "article.md"
@@ -353,7 +353,7 @@ def sync(article_id: str = typer.Argument(..., help="文章 id，前 8 位即可
         raise typer.Exit(code=1)
 
     if length == 0:
-        directory = get_settings().data_path / (updated.store_dir or "")
+        directory = get_settings().output_path / (updated.store_dir or "")
         console.print(
             f"[yellow]没有读到正文。[/yellow]请把原文粘进 {directory / 'article.md'} "
             "的「正文粘贴区」下面再试。"
@@ -398,6 +398,128 @@ def refetch(
     )
     if updated.error:
         console.print(f"[red]{updated.error}[/red]")
+
+
+@app.command()
+def produce(
+    article_id: str = typer.Argument(..., help="文章 id，前 8 位即可"),
+    kind: str | None = typer.Option(
+        None, "--kind", "-k", help="summary_zh | summary_en | shortvideo | narration | longform"
+    ),
+    all_kinds: bool = typer.Option(False, "--all", help="生成常规四项（不含长文案）"),
+    variant: str | None = typer.Option(
+        None, "--variant", help="长文案形式：feature（专题，单角色）| interview（访谈，双角色）"
+    ),
+    force: bool = typer.Option(False, "--force", help="已有产物也重做（会重新计费）"),
+) -> None:
+    """
+    为一篇文章生成产物 / Produce content for one article.
+
+    ⚠️ **本命令会调用 LLM 并产生费用。** 已有的产物默认直接复用、不重复计费，
+    要重做请加 --force。
+
+    长文案（10~15 分钟）**不在 --all 里**，必须显式 --kind longform：
+    它一篇要 5~9 次调用，是其余四项加起来的两倍多。
+    """
+    from dna.produce import ProductionKind, produce_all, spec
+    from dna.produce import produce as produce_one
+    from dna.produce.tasks import batch_kinds, estimate_calls
+
+    record = _resolve_article(article_id)
+
+    if not all_kinds and kind is None:
+        console.print("[yellow]请指定 --kind，或用 --all 生成常规四项。[/yellow]")
+        console.print(f"[dim]可选：{' | '.join(str(k) for k in ProductionKind)}[/dim]")
+        raise typer.Exit(code=1)
+
+    if all_kinds:
+        console.print(
+            f"[dim]将生成 {len(batch_kinds())} 项，预估 "
+            f"{estimate_calls(list(batch_kinds()))} 次 LLM 调用（已有产物会跳过）[/dim]"
+        )
+        with console.status(f"生成中：{record.title[:30]}…"):
+            results = produce_all(record.id, force=force)
+    else:
+        task = spec(kind)
+        if task.needs_variant and variant is None:
+            variant = "feature"
+            console.print("[dim]未指定 --variant，按专题（单角色）生成[/dim]")
+        console.print(f"[dim]预估 {task.approx_calls} 次 LLM 调用[/dim]")
+        with console.status(f"生成中：{task.label}…"):
+            results = [produce_one(record.id, kind, variant=variant, force=force)]
+
+    console.print(f"\n[bold]{record.title}[/bold]")
+    for result in results:
+        style = "green" if result.ok else "red"
+        marker = "[dim]○[/dim]" if result.skipped else f"[{style}]●[/{style}]"
+        console.print(f"  {marker} {result.summary()}")
+
+    if any(r.ok and not r.skipped for r in results):
+        console.print(f"\n[dim]产物目录：{get_settings().output_path / record.store_dir}[/dim]")
+
+
+@app.command()
+def gui(
+    host: str = typer.Option("127.0.0.1", "--host", help="监听地址"),
+    port: int = typer.Option(8080, "--port", "-p", help="端口"),
+    show: bool = typer.Option(True, "--show/--no-show", help="是否自动打开浏览器"),
+) -> None:
+    """
+    启动台账工作台 / Launch the article workbench.
+
+    一张大表：每篇文章一行，总结 / 英文总结 / 短视频 / 口播 / 长文案各一列，
+    每格都能单独重做。**打开界面本身不产生费用**，只有点生成按钮才会调用 LLM。
+    """
+    from frontends.nicegui_app.main import run
+
+    console.print(f"[green]台账工作台启动中：[/green]http://{host}:{port}")
+    console.print("[dim]打开界面不产生费用；点击生成按钮才会调用 LLM。Ctrl+C 退出。[/dim]")
+    run(host=host, port=port, show=show)
+
+
+@app.command(name="migrate-layout")
+def migrate_layout(
+    dry_run: bool = typer.Option(False, "--dry-run", help="只看会移动什么，不动文件"),
+) -> None:
+    """
+    把文章目录从 data/ 迁到 outputs/ / Move article directories into outputs/.
+
+    文章目录里放的是产物——正文、配图、视频、各类文案，都是要打开、要拷走、
+    要发布的东西，属于 outputs/。data/ 留给台账数据库与 LLM 缓存。
+
+    **先移文件再改数据库**，中途失败时数据库未动，重跑即可从断点继续。
+    """
+    from dna.store import migrate, plan_migration
+
+    plan = plan_migration() if dry_run else migrate()
+    console.print(f"[bold]{plan.summary()}[/bold]\n")
+
+    for source, target in plan.moves[:15]:
+        arrow = "将移动" if dry_run else "已移动"
+        console.print(f"  {arrow}　{source.name}", markup=False, highlight=False)
+    if len(plan.moves) > 15:
+        console.print(f"  [dim]… 另有 {len(plan.moves) - 15} 个[/dim]")
+
+    if plan.conflicts:
+        console.print("\n[yellow]两边都存在，未处理（请人工确认哪份是新的）：[/yellow]")
+        for source, _ in plan.conflicts:
+            console.print(f"  {source}", markup=False, highlight=False)
+
+    if plan.orphans:
+        console.print(
+            f"\n[yellow]旧位置还有 {len(plan.orphans)} 个目录没有任何台账行引用[/yellow]"
+            "（多半是历史遗留的重名副本）。**未删除**，请自行确认后处理："
+        )
+        for path in plan.orphans[:10]:
+            console.print(f"  {path}", markup=False, highlight=False)
+
+    if plan.errors:
+        console.print("\n[red]失败：[/red]")
+        for key, reason in plan.errors:
+            console.print(f"  {key}：{reason}", markup=False, highlight=False)
+
+    if dry_run:
+        console.print("\n[dim]这是 --dry-run，未改动任何文件。[/dim]")
 
 
 @app.command()

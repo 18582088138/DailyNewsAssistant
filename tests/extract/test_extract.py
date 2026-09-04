@@ -463,3 +463,39 @@ def test_attribute_filter_does_not_kill_normal_images() -> None:
 
     assert any("photo.jpg" in u for u in urls)
     assert any("chart.png" in u for u in urls)
+
+
+def test_arxiv_funder_logo_is_filtered() -> None:
+    """
+    arXiv 页脚的基金会 logo 不该成为文章配图。
+
+    实测抓 arXiv 论文时，落盘的唯一「配图」是
+    `arxiv.org/static/base/1.0.1/images/funders/simons-foundation.png`——
+    因为 arXiv 摘要页本身没有任何配图，这个赞助方标识就顶上了。
+    """
+    html = """
+    <html><body><article>
+      <img src="https://arxiv.org/static/base/1.0.1/images/funders/simons-foundation.png" />
+      <img src="https://arxiv.org/static/sponsors/acme-corp.png" />
+    </article></body></html>
+    """
+    assert extract_media(html, "https://arxiv.org/abs/2509.00001") == []
+
+
+def test_sponsor_markers_do_not_hit_normal_filenames() -> None:
+    """
+    新增的赞助方标记不能误伤正常配图。
+
+    `partnership-diagram.png` 是内容图——词边界匹配保证 `partner` 不会命中
+    `partnership`，这正是当初选词边界而非子串的理由。
+    """
+    html = """
+    <html><body><article>
+      <img src="https://cdn.example.com/partnership-diagram.png" />
+      <img src="https://cdn.example.com/sponsorship-model-chart.jpg" />
+    </article></body></html>
+    """
+    urls = [a.url for a in extract_media(html, "https://example.com/post")]
+
+    assert any("partnership-diagram" in u for u in urls)
+    assert any("sponsorship-model-chart" in u for u in urls)

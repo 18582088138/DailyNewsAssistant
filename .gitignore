@@ -4,6 +4,7 @@
 
 # ---- outputs & data 产物与数据 ----
 outputs/
+docs/issues/
 data/
 *.db
 *.sqlite3

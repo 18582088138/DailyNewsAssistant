@@ -105,6 +105,68 @@ class ArticleRecord:
         )
 
 
+@dataclass(frozen=True)
+class ProductionRecord:
+    """
+    一次产物生成的记录 / One production run.
+
+    记下 provider 与 model：内容出问题时要能回答「这段稿子是哪天用哪个模型写的」。
+    换了模型之后旧产物质量参差不齐，没有这两列就只能全部重做。
+    The provider and model are recorded so that "which model wrote this, and when" stays
+    answerable. After a model change, old output is uneven in quality, and without these
+    columns the only remedy would be redoing everything.
+    """
+
+    id: int
+    article_id: str
+    kind: str
+    variant: str | None
+    status: str
+    output_path: str | None
+    chars: int
+    est_seconds: float | None
+    llm_provider: str | None
+    llm_model: str | None
+    tokens: int
+    calls: int
+    duration_ms: int
+    error: str | None
+    created_at: datetime | None
+    redo_of_id: int | None
+
+    @property
+    def ok(self) -> bool:
+        """是否生成成功 / Whether this run succeeded."""
+        return self.status == "ok"
+
+    @property
+    def is_redo(self) -> bool:
+        """是否是重做出来的版本 / Whether this version replaced an earlier one."""
+        return self.redo_of_id is not None
+
+    @classmethod
+    def from_row(cls, row: sqlite3.Row) -> ProductionRecord:
+        """由数据库行构造 / Build from a database row."""
+        return cls(
+            id=row["id"],
+            article_id=row["article_id"],
+            kind=row["kind"],
+            variant=row["variant"],
+            status=row["status"],
+            output_path=row["output_path"],
+            chars=row["chars"],
+            est_seconds=row["est_seconds"],
+            llm_provider=row["llm_provider"],
+            llm_model=row["llm_model"],
+            tokens=row["tokens"],
+            calls=row["calls"],
+            duration_ms=row["duration_ms"],
+            error=row["error"],
+            created_at=_parse_dt(row["created_at"]),
+            redo_of_id=row["redo_of_id"],
+        )
+
+
 class Ledger:
     """
     文章台账的读写接口 / Read/write interface of the article ledger.
@@ -385,6 +447,157 @@ class Ledger:
             ).fetchall()
         return [r["id"] for r in rows]
 
+    def set_store_dir(self, article_id: str, store_dir: str) -> None:
+        """
+        改写落盘目录 / Rewrite where an article is stored.
+
+        目录迁移时用。单拎出来是因为它不该顺带改动状态、抓取次数等任何其它字段——
+        搬个位置不是一次「抓取」。
+        Used by the layout migration. It is separate precisely so that relocating an
+        article touches nothing else: moving a folder is not a fetch.
+        """
+        with open_db(self.db_path) as conn:
+            conn.execute(
+                "UPDATE articles SET store_dir = ? WHERE id = ?", (store_dir, article_id)
+            )
+
+    # -- 产物台账 / production ledger -----------------------------------------
+
+    def record_production(
+        self,
+        article_id: str,
+        kind: str,
+        *,
+        status: str = "ok",
+        variant: str | None = None,
+        output_path: str | None = None,
+        chars: int = 0,
+        est_seconds: float | None = None,
+        llm_provider: str | None = None,
+        llm_model: str | None = None,
+        tokens: int = 0,
+        calls: int = 1,
+        duration_ms: int = 0,
+        error: str | None = None,
+        now: datetime | None = None,
+    ) -> int:
+        """
+        记录一次产物生成 / Record one production run.
+
+        **每次都插入新行**，并把 `redo_of_id` 指向上一版，而不是原地更新。
+        原地更新会把上一版连同它的模型与时间一起抹掉，而「这段稿子是哪天用哪个模型
+        写的」在内容出问题时是必须能回答的。
+        A new row is always inserted, with `redo_of_id` pointing at the version it
+        replaces. Updating in place would erase the previous version along with the model
+        and timestamp behind it, and "which model wrote this, and when" has to stay
+        answerable when the content turns out wrong.
+
+        返回 / Returns:
+            新插入行的 id
+        """
+        previous = self.latest_production(article_id, kind)
+
+        with open_db(self.db_path) as conn:
+            cursor = conn.execute(
+                """
+                INSERT INTO productions (
+                    article_id, kind, variant, status, output_path, chars, est_seconds,
+                    llm_provider, llm_model, tokens, calls, duration_ms, error,
+                    created_at, redo_of_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    article_id,
+                    kind,
+                    variant,
+                    status,
+                    output_path,
+                    chars,
+                    est_seconds,
+                    llm_provider,
+                    llm_model,
+                    tokens,
+                    calls,
+                    duration_ms,
+                    (error or "")[:500] or None,
+                    _fmt_dt(now or datetime.now()),
+                    previous.id if previous else None,
+                ),
+            )
+            return int(cursor.lastrowid or 0)
+
+    def latest_production(self, article_id: str, kind: str) -> ProductionRecord | None:
+        """
+        取某篇某种产物的最新一版 / The newest production of one kind for one article.
+
+        按 id 倒序而不是 created_at：同一秒内重做两次时时间戳会相同，
+        而自增 id 永远能分出先后。
+        Ordered by id rather than created_at: two redos within the same second share a
+        timestamp, whereas the autoincrement id always disambiguates.
+        """
+        with open_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT * FROM productions WHERE article_id = ? AND kind = ? "
+                "ORDER BY id DESC LIMIT 1",
+                (article_id, kind),
+            ).fetchone()
+        return ProductionRecord.from_row(row) if row else None
+
+    def production_matrix(self, article_ids: Sequence[str]) -> dict[str, dict[str, ProductionRecord]]:
+        """
+        一次查出多篇文章的全部最新产物 / Latest productions for many articles at once.
+
+        返回 `{article_id: {kind: record}}`。GUI 的表格一页几十行、每行五种产物，
+        逐格查库会变成几百次查询，界面肉眼可见地卡。
+        Returns `{article_id: {kind: record}}`. The workbench table shows dozens of rows
+        with five production kinds each; querying per cell would mean hundreds of round
+        trips and visible lag.
+        """
+        if not article_ids:
+            return {}
+
+        placeholders = ",".join("?" * len(article_ids))
+        with open_db(self.db_path) as conn:
+            rows = conn.execute(
+                f"""
+                SELECT * FROM productions
+                WHERE id IN (
+                    SELECT MAX(id) FROM productions
+                    WHERE article_id IN ({placeholders})
+                    GROUP BY article_id, kind
+                )
+                """,
+                tuple(article_ids),
+            ).fetchall()
+
+        matrix: dict[str, dict[str, ProductionRecord]] = {}
+        for row in rows:
+            record = ProductionRecord.from_row(row)
+            matrix.setdefault(record.article_id, {})[record.kind] = record
+        return matrix
+
+    def production_history(self, article_id: str, kind: str) -> list[ProductionRecord]:
+        """某篇某种产物的全部历史版本，最新在前 / Every version, newest first."""
+        with open_db(self.db_path) as conn:
+            rows = conn.execute(
+                "SELECT * FROM productions WHERE article_id = ? AND kind = ? ORDER BY id DESC",
+                (article_id, kind),
+            ).fetchall()
+        return [ProductionRecord.from_row(r) for r in rows]
+
+    def count_productions_by_kind(self) -> dict[str, int]:
+        """按产物类型统计（只算最新版）/ Count the latest production per kind."""
+        with open_db(self.db_path) as conn:
+            rows = conn.execute(
+                """
+                SELECT kind, COUNT(*) AS n FROM productions
+                WHERE id IN (SELECT MAX(id) FROM productions GROUP BY article_id, kind)
+                  AND status = 'ok'
+                GROUP BY kind
+                """
+            ).fetchall()
+        return {r["kind"]: int(r["n"]) for r in rows}
+
 
 # ---------------------------------------------------------------------------
 # 时间格式 / datetime formatting
@@ -412,4 +625,4 @@ def _parse_dt(value: str | None) -> datetime | None:
         return None
 
 
-__all__ = ["ArticleRecord", "FetchStatus", "Ledger"]
+__all__ = ["ArticleRecord", "FetchStatus", "Ledger", "ProductionRecord"]

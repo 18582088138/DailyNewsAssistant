@@ -9,7 +9,7 @@ test_source.py —— 台账取数层单元测试 / Ledger-to-pipeline loading u
     dna digest --dry-run -a <id> -a <id>     # 人工指定几篇
 
 覆盖 / Covers:
-    1. 正文从 meta.json 读回（台账只存长度，内容在落盘目录里）
+    1. 正文从 outputs/ 下的 meta.json 读回（台账只存长度，内容在落盘目录里）
     2. 媒体资产一并读回，且损坏的单项不影响其余
     3. **failed / pending 的记录被跳过**——它们没有可用内容
     4. **degraded 的记录被保留**——只有标题也是真实资讯
@@ -80,7 +80,7 @@ def seed(
 
     store_dir = f"articles/20260902/{article_id[:8]}"
     if write_meta:
-        directory = settings.data_path / store_dir
+        directory = settings.output_path / store_dir
         directory.mkdir(parents=True, exist_ok=True)
         (directory / "meta.json").write_text(
             article.model_dump_json(indent=2), encoding="utf-8"
@@ -131,7 +131,7 @@ def test_corrupt_media_entry_does_not_lose_the_others(settings: Settings) -> Non
             MediaAsset(kind=MediaKind.IMAGE, url="https://e.com/i.jpg", source_url="https://e.com/1")
         ],
     )
-    meta_path = settings.data_path / f"articles/20260902/{article_id[:8]}/meta.json"
+    meta_path = settings.output_path / f"articles/20260902/{article_id[:8]}/meta.json"
     data = json.loads(meta_path.read_text(encoding="utf-8"))
     data["media"].append({"kind": "not-a-real-kind"})
     meta_path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
@@ -200,7 +200,7 @@ def test_missing_directory_degrades_to_title_and_link(settings: Settings) -> Non
 def test_corrupt_meta_json_degrades_instead_of_raising(settings: Settings) -> None:
     """meta.json 损坏时同样降级——读不到内容是遗憾，不是故障。"""
     article_id = seed(settings, title="meta 损坏的那篇文章")
-    meta_path = settings.data_path / f"articles/20260902/{article_id[:8]}/meta.json"
+    meta_path = settings.output_path / f"articles/20260902/{article_id[:8]}/meta.json"
     meta_path.write_text("{ 这不是合法 JSON", encoding="utf-8")
 
     items = load_candidates(settings=settings)

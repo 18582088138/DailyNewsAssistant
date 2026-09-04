@@ -52,6 +52,12 @@ _NON_CONTENT_MARKERS = (
     "pixel", "tracking", "beacon", "button", "badge", "qrcode", "qr-code",
     "footer", "header", "head", "banner", "watermark", "emoji", "loading",
     "default", "thumb-default", "nopic",
+    # 赞助方/合作方标识：arXiv 的页脚挂着 funders/simons-foundation.png，
+    # 而 arXiv 摘要页本身没有任何配图，于是这个基金会 logo 成了整条目的「配图」。
+    # Sponsor and partner marks: arXiv's footer carries funders/simons-foundation.png,
+    # and since an arXiv abstract page has no images of its own that logo ended up
+    # standing in as the entry's illustration.
+    "funder", "funders", "sponsor", "sponsors", "partner", "partners", "affiliate",
 )
 
 # 按「词」而非子串匹配 / match markers as words, not bare substrings

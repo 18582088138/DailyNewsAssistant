@@ -36,6 +36,7 @@ from dna.store.article_store import (
     save_article,
 )
 from dna.store.ledger import ArticleRecord, FetchStatus, Ledger
+from dna.store.video_store import DEFAULT_MAX_VIDEOS
 
 logger = get_logger("store.intake")
 
@@ -89,7 +90,7 @@ def intake_sources(
     limit_per_source: int | None = None,
     extract: bool = True,
     download_images: bool = True,
-    max_images: int = DEFAULT_MAX_IMAGES,
+    max_images: int | None = None,
     download_videos: bool = True,
     refetch: bool = False,
 ) -> IntakeResult:
@@ -100,7 +101,8 @@ def intake_sources(
         source_ids:      只处理指定的源；None 表示全部启用的源
         extract:         是否抓正文；关掉只登记标题与链接（快速预览）
         download_images: 是否下载配图
-        max_images:      每篇最多存几张配图（多存是为了给长图/口播攒素材）
+        max_images:      每篇最多存几张配图；**None 表示按配置**
+                         （源级 max_images > profile.max_images_per_article）
         download_videos: 是否下载官方视频（比图片慢得多）
         refetch:         已抓过的文章是否重抓
     """
@@ -142,6 +144,8 @@ def intake_sources(
         max_images=max_images,
         download_videos=download_videos,
         refetch=refetch,
+        by_source=by_source,
+        profile=prof,
     )
 
     logger.info("入库完成：%s", result.summary())
@@ -155,7 +159,7 @@ def intake_urls(
     via: SourceKind = SourceKind.GUI,
     source_id: str = "user",
     download_images: bool = True,
-    max_images: int = DEFAULT_MAX_IMAGES,
+    max_images: int | None = None,
     download_videos: bool = True,
     refetch: bool = False,
 ) -> IntakeResult:
@@ -189,6 +193,7 @@ def intake_urls(
         max_images=max_images,
         download_videos=download_videos,
         refetch=refetch,
+        profile=_safe_profile(),
     )
 
     logger.info("链接入库完成：%s", result.summary())
@@ -200,7 +205,7 @@ def refetch_article(
     *,
     settings: Settings | None = None,
     download_images: bool = True,
-    max_images: int = DEFAULT_MAX_IMAGES,
+    max_images: int | None = None,
     download_videos: bool = True,
 ) -> ArticleRecord | None:
     """
@@ -238,6 +243,8 @@ def refetch_article(
         max_images=max_images,
         download_videos=download_videos,
         refetch=True,
+        by_source={c.id: c for c in _select_configs(None)},
+        profile=_safe_profile(),
     )
     return ledger.get(article_id)
 
@@ -270,7 +277,7 @@ def sync_manual_body(
     if record is None or not record.store_dir:
         return None, 0
 
-    directory = s.data_path / record.store_dir
+    directory = s.output_path / record.store_dir
     article_path = directory / "article.md"
     body = read_body(article_path)
     if not body:
@@ -308,8 +315,10 @@ def _ingest_items(
     result: IntakeResult,
     *,
     extract: bool,
+    by_source: dict[str, SourceConfig] | None = None,
+    profile: Profile | None = None,
     download_images: bool,
-    max_images: int,
+    max_images: int | None,
     download_videos: bool,
     refetch: bool,
 ) -> None:
@@ -346,10 +355,11 @@ def _ingest_items(
             saved = save_article(
                 article,
                 article_id,
-                root=settings.data_path,
+                root=settings.output_path,
                 download_images=download_images,
-                max_images=max_images,
+                max_images=_resolve_max_images(item, max_images, by_source, profile),
                 download_videos_too=download_videos,
+                max_videos=_resolve_max_videos(item, by_source, profile),
             )
         except OSError as exc:
             logger.warning("落盘失败 %s：%s", item.url, exc)
@@ -360,7 +370,7 @@ def _ingest_items(
         status = ledger.record_fetch(
             article_id,
             article,
-            store_dir=str(saved.directory.relative_to(settings.data_path)),
+            store_dir=saved.directory.relative_to(settings.output_path).as_posix(),
             image_count=saved.image_count,
             video_count=saved.video_count,
         )
@@ -368,6 +378,52 @@ def _ingest_items(
             result.fetched_ok += 1
         else:
             result.fetched_degraded += 1
+
+
+def _resolve_max_images(
+    item: RawItem,
+    override: int | None,
+    by_source: dict[str, SourceConfig] | None,
+    profile: Profile | None,
+) -> int:
+    """
+    定出这一条用多少张图的上限 / Work out this item's image cap.
+
+    优先级：**命令行显式指定 > 源级配置 > profile 全局 > 代码默认**。
+    命令行排最前是因为它是「就这一次，我知道自己在做什么」的表达；
+    源级排在全局前面，是因为 arXiv 摘要页根本没有配图、而微信长文可能有二十几张，
+    一个全局值伺候所有源要么浪费带宽要么漏素材。
+    Precedence: an explicit command-line value, then the per-source setting, then the
+    profile-wide one, then the code default. The command line wins because it expresses
+    "just this once, deliberately"; per-source beats global because an arXiv abstract has
+    no images while a long WeChat post may have twenty, and one number for both either
+    wastes bandwidth or misses material.
+    """
+    if override is not None:
+        return override
+
+    config = (by_source or {}).get(item.source_id)
+    if config is not None and config.max_images is not None:
+        return config.max_images
+
+    if profile is not None:
+        return profile.max_images_per_article
+
+    return DEFAULT_MAX_IMAGES
+
+
+def _resolve_max_videos(
+    item: RawItem,
+    by_source: dict[str, SourceConfig] | None,
+    profile: Profile | None,
+) -> int:
+    """定出这一条用多少个视频的上限 / Work out this item's video cap."""
+    config = (by_source or {}).get(item.source_id)
+    if config is not None and config.max_videos is not None:
+        return config.max_videos
+    if profile is not None:
+        return profile.max_videos_per_article
+    return DEFAULT_MAX_VIDEOS
 
 
 def _select_configs(source_ids: list[str] | None) -> list[SourceConfig]:

@@ -126,7 +126,7 @@ def _read_persisted(
     if not record.store_dir:
         return "", []
 
-    meta_path = settings.data_path / record.store_dir / "meta.json"
+    meta_path = settings.output_path / record.store_dir / "meta.json"
     try:
         data = json.loads(meta_path.read_text(encoding="utf-8"))
     except (OSError, ValueError) as exc:

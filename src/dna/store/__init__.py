@@ -25,7 +25,8 @@ from dna.store.intake import (
     refetch_article,
     sync_manual_body,
 )
-from dna.store.ledger import ArticleRecord, FetchStatus, Ledger
+from dna.store.ledger import ArticleRecord, FetchStatus, Ledger, ProductionRecord
+from dna.store.migrate_layout import MigrationPlan, migrate, plan_migration
 from dna.store.video_store import download_videos, is_direct_video_url
 
 __all__ = [
@@ -35,14 +36,18 @@ __all__ = [
     "MANUAL_BODY_MARKER",
     "IntakeResult",
     "Ledger",
+    "MigrationPlan",
+    "ProductionRecord",
     "SavedArticle",
     "article_dir",
     "connect",
     "download_videos",
     "intake_sources",
     "intake_urls",
+    "migrate",
     "is_direct_video_url",
     "open_db",
+    "plan_migration",
     "read_body",
     "read_title",
     "refetch_article",

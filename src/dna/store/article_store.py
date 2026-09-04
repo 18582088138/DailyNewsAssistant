@@ -6,13 +6,24 @@ Writes the extracted body and images to disk so the results can be opened and ch
 by hand.
 
 目录结构 / Layout:
-    data/articles/<YYYYMMDD>/<slug>__<id8>/
-    ├── article.md      正文（带 YAML frontmatter，可直接阅读）
-    ├── meta.json       完整的 Article 结构，供程序复用
-    ├── references.md   本篇的全部来源链接与图片出处
-    └── images/
-        ├── 01_<host>.jpg
-        └── 01_<host>.jpg.json   ← 每张图的来源与署名
+    outputs/articles/<YYYYMMDD>/<slug>__<id8>/
+    ├── article.md          正文（带 YAML frontmatter，可直接阅读）
+    ├── meta.json           完整的 Article 结构，供程序复用
+    ├── references.md       本篇的全部来源链接与媒体出处
+    ├── images/
+    │   ├── 01_<host>.jpg
+    │   └── 01_<host>.jpg.json   ← 每张图的来源与署名
+    ├── videos/
+    ├── summary.zh.md       中文总结         ┐
+    ├── summary.en.md       英文总结         │ 由 dna.produce 生成，
+    ├── shortvideo.zh.md    短视频文案 25~35s │ 每一项都可单独重做
+    ├── narration.zh.md     口播文案 1~2min  │
+    └── longform.zh.md/.json 长文案 10~15min ┘
+
+放在 `outputs/` 而不是 `data/`：这里全是**产物**——要打开、要拷走、要发布的东西。
+`data/` 留给程序自己的台账数据库与 LLM 缓存。
+These are deliverables — opened, copied out and published — so they live under
+`outputs/`, while `data/` keeps the ledger and cache that only the program cares about.
 
 为什么图片要配一个同名 .json / Why each image carries a sidecar .json:
     产物要发到公众号、小红书等公开平台，每张图都必须能追溯出处。
@@ -110,7 +121,7 @@ def save_article(
     把一篇文章落盘 / Persist one article to disk.
 
     参数 / Args:
-        root:               数据根目录（通常是 settings.data_path）
+        root:               产物根目录（settings.output_path）
         download_images:    是否下载配图；关掉可以快速验证正文抽取
         max_images:         最多下载几张图
         download_videos_too: 是否下载官方视频（比图片慢得多，可单独关掉）
