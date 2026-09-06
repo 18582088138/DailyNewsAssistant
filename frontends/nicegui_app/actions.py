@@ -38,7 +38,7 @@ from dna.produce import (
     read_production,
     spec,
 )
-from dna.produce.tasks import json_sidecar
+from dna.produce.tasks import audio_kind, json_sidecar
 from dna.store import FetchStatus, Ledger, ProductionRecord, intake_urls
 from dna.store.ledger import ArticleRecord
 
@@ -150,6 +150,7 @@ async def run_production(
     *,
     variant: str | None = None,
     force: bool = False,
+    progress: dict | None = None,
 ) -> ProduceResult:
     """
     在后台线程里生成一种产物 / Produce one kind on a worker thread.
@@ -158,12 +159,61 @@ async def run_production(
     放在事件循环里做同样会卡一下。
     The provider is built inside the thread: `get_llm()` reads `.env` and may open a
     connection, which would also stall the event loop.
+
+    **音频产物不构造 LLM。**它一分钱都不花，却会因为 `get_llm()` 而要求 API key ——
+    在没配 key 的机器上，合成语音本来是能跑的，却会在这一步先失败。
+    Audio kinds do not build an LLM: they spend nothing, yet `get_llm()` would demand an
+    API key and fail on a machine where synthesis would otherwise work fine.
+
+    `progress` 是一个**共享字典**，工作线程往里写、界面定时读。
+    跨线程直接改 NiceGUI 元素是不安全的；写字典再由 UI 侧轮询是最简单可靠的做法。
+    A shared dict written by the worker and polled by the UI: mutating NiceGUI elements
+    from another thread is unsafe, and polling a dict is the simplest safe alternative.
     """
+    is_audio = spec(kind).audio_of is not None
+
+    def _on_progress(done: int, total: int, seconds: float) -> None:
+        if progress is not None:
+            progress.update(done=done, total=total, seconds=seconds)
 
     def _work() -> ProduceResult:
-        return produce(article_id, kind, variant=variant, force=force, llm=get_llm())
+        return produce(
+            article_id,
+            kind,
+            variant=variant,
+            force=force,
+            llm=None if is_audio else get_llm(),
+            on_progress=_on_progress if is_audio else None,
+        )
 
     return await run.io_bound(_work)
+
+
+def audio_estimate_seconds(record: ArticleRecord, kind: ProductionKind | str) -> float:
+    """
+    合成这一格音频大约要等多久 / How long synthesising this cell will take.
+
+    按**稿子的估算时长 × 实测 RTF** 算。长文案要等半小时以上，
+    这个数字必须在按钮按下之前就摆出来——否则界面看起来就是卡死了。
+    Computed from the script's projected duration times the measured real-time factor. A
+    long-form script runs past half an hour, and without saying so up front the interface
+    merely looks frozen.
+    """
+    from dna.produce.tasks import spec as _spec
+    from dna.tts import estimate_synthesis_seconds
+
+    script_kind = _spec(kind).audio_of
+    if script_kind is None:
+        return 0.0
+
+    ledger = Ledger(get_settings().db_file)
+    script = ledger.latest_production(record.id, str(script_kind))
+    return estimate_synthesis_seconds(script.est_seconds or 0.0) if script else 0.0
+
+
+def audio_for(kind: ProductionKind | str) -> ProductionKind | None:
+    """这份稿子对应的音频产物 / The audio kind matching a script kind."""
+    return audio_kind(kind)
 
 
 def preview_links(text: str) -> list[str]:
@@ -376,6 +426,8 @@ def cache_status() -> str:
 __all__ = [
     "RowView",
     "article_directory",
+    "audio_estimate_seconds",
+    "audio_for",
     "cache_status",
     "import_links",
     "preview_links",

@@ -288,15 +288,69 @@ def _launch(row: RowView, kind: ProductionKind, *, force: bool, on_change) -> No
     """
     发起一次生成 / Kick off one production.
 
-    长文案先弹确认框：它一篇 5~9 次调用，是其余产物的好几倍，
-    **不该和其它按钮一样一点就跑**。
-    The long-form script asks first: at five to nine calls it costs several times more
-    than the others and should not fire on a single click like the rest.
+    两种情况先弹确认框 / Two kinds of production ask first:
+        长文案——一篇 5~9 次调用，是其余产物的好几倍，**不该一点就跑**
+        长音频——不花钱，但要跑几十分钟，同样不该一点就跑
+
+    两种代价不同，确认框的措辞也不同：一个说的是账单，一个说的是时间。
+    用同一句话糊过去，人就分不清刚才点掉的是钱还是半小时。
+    The two costs differ and so does the wording: conflating them leaves the user unsure
+    which of the two they just spent.
     """
-    if spec(kind).needs_variant:
+    task = spec(kind)
+    if task.needs_variant:
         _ask_longform(row, kind, force=force, on_change=on_change)
         return
+    if task.audio_of is not None:
+        _ask_audio(row, kind, force=force, on_change=on_change)
+        return
     _run(row, kind, variant=None, force=force, on_change=on_change)
+
+
+# 超过这么久就先问一句 / anything longer than this asks first
+#
+# 五分钟：短视频音频约 75 秒、口播约 4 分钟，都直接跑；长文案音频半小时以上，
+# 必须先问。门槛设在这里，日常的两项不会被确认框打断，而真正长的那项跑不掉。
+# Five minutes: the short-video and narration audio run straight away, while the
+# long-form audio always asks. The routine cases stay unobstructed.
+AUDIO_CONFIRM_SECONDS = 300
+
+
+def _ask_audio(row: RowView, kind: ProductionKind, *, force: bool, on_change) -> None:
+    """长音频的耗时确认 / Confirm a long synthesis run."""
+    wait = actions.audio_estimate_seconds(row.article, kind)
+    if wait < AUDIO_CONFIRM_SECONDS:
+        _run(row, kind, variant=None, force=force, on_change=on_change)
+        return
+
+    task = spec(kind)
+    with ui.dialog() as dialog, ui.card().classes("w-96").style(
+        "background: var(--wb-panel); border: 1px solid var(--wb-line-strong)"
+    ):
+        ui.label(f"合成{task.label}").classes("text-lg font-medium").style(
+            "color: var(--wb-accent)"
+        )
+        ui.label(theme.short_title(row.article.title, 60)).classes("wb-path")
+
+        ui.html(
+            f"本地合成，<b>不产生任何费用</b>，但预计要跑 "
+            f"<b>{wait / 60:.0f} 分钟</b>。"
+        ).classes("text-xs").style("color: var(--wb-warn)")
+        ui.label(
+            "期间界面可以继续用，进度会显示在提示条上；中途关掉页面会让这次合成白跑。"
+        ).classes("wb-path")
+
+        with ui.row().classes("w-full justify-end gap-2"):
+            ui.button("取消", on_click=dialog.close).props("flat no-caps")
+            ui.button(
+                "开始合成",
+                on_click=lambda: (
+                    dialog.close(),
+                    _run(row, kind, variant=None, force=force, on_change=on_change),
+                ),
+            ).props("no-caps")
+
+    dialog.open()
 
 
 def _ask_longform(row: RowView, kind: ProductionKind, *, force: bool, on_change) -> None:
@@ -341,21 +395,51 @@ def _ask_longform(row: RowView, kind: ProductionKind, *, force: bool, on_change)
 
 def _run(row: RowView, kind: ProductionKind, *, variant, force: bool, on_change) -> None:
     """执行生成并把结果告诉用户 / Run the production and report back."""
-    label = spec(kind).label
+    task = spec(kind)
+    label = task.label
+    is_audio = task.audio_of is not None
+
     notification = ui.notification(
-        f"{label} 生成中…（调用 LLM，请稍候）", spinner=True, timeout=None
+        f"{label} 合成中…（本地 TTS，不计费）" if is_audio else f"{label} 生成中…（调用 LLM，请稍候）",
+        spinner=True,
+        timeout=None,
     )
+
+    # 音频要跑几十分钟，一个不动的转圈无法区分「在跑」和「卡死了」。
+    # 工作线程往这个字典里写进度，界面每秒读一次。
+    # A motionless spinner cannot distinguish work from a hang over half an hour, so the
+    # worker writes progress here and the UI reads it once a second.
+    progress: dict = {}
+    ticker = None
+    if is_audio:
+        def _tick() -> None:
+            done, total = progress.get("done"), progress.get("total")
+            if total:
+                notification.message = (
+                    f"{label} 合成中… {done}/{total} 段"
+                    f"（已产出 {progress.get('seconds', 0):.0f} 秒音频）"
+                )
+        ticker = ui.timer(1.0, _tick)
 
     async def _go() -> None:
         try:
             result = await actions.run_production(
-                row.article.id, kind, variant=variant, force=force
+                row.article.id, kind, variant=variant, force=force, progress=progress
             )
         finally:
+            if ticker is not None:
+                ticker.deactivate()
             notification.dismiss()
 
         if result.ok and result.skipped:
             ui.notify(f"{label}：已存在，未重新生成", type="info")
+        elif result.ok and is_audio:
+            # 音频报的是**真实时长**，不是估算；缺段时明确说出来
+            warning = "" if result.within_target else "，⚠️ 部分段落合成失败，音频不完整"
+            ui.notify(
+                f"{label} 完成：{result.seconds or 0:.0f} 秒音频（{result.chars} 字）{warning}",
+                type="positive" if result.within_target else "warning",
+            )
         elif result.ok:
             warning = "，⚠️ 超出目标时长区间" if not result.within_target else ""
             ui.notify(

@@ -404,7 +404,13 @@ def refetch(
 def produce(
     article_id: str = typer.Argument(..., help="文章 id，前 8 位即可"),
     kind: str | None = typer.Option(
-        None, "--kind", "-k", help="summary_zh | summary_en | shortvideo | narration | longform"
+        None,
+        "--kind",
+        "-k",
+        help=(
+            "summary_zh | summary_en | shortvideo | narration | longform"
+            " | shortvideo_audio | narration_audio | longform_audio"
+        ),
     ),
     all_kinds: bool = typer.Option(False, "--all", help="生成常规四项（不含长文案）"),
     variant: str | None = typer.Option(
@@ -415,11 +421,14 @@ def produce(
     """
     为一篇文章生成产物 / Produce content for one article.
 
-    ⚠️ **本命令会调用 LLM 并产生费用。** 已有的产物默认直接复用、不重复计费，
+    ⚠️ **文案类产物会调用 LLM 并产生费用。** 已有的产物默认直接复用、不重复计费，
     要重做请加 --force。
 
-    长文案（10~15 分钟）**不在 --all 里**，必须显式 --kind longform：
+    长文案（5~15 分钟）**不在 --all 里**，必须显式 --kind longform：
     它一篇要 5~9 次调用，是其余四项加起来的两倍多。
+
+    三种 `*_audio` 是**本地 TTS 合成，一分钱不花，但很花时间**（实测 RTF≈2.5：
+    口播约 4 分钟，长文案约 37 分钟）。它们同样不在 --all 里，理由是时间不是钱。
     """
     from dna.produce import ProductionKind, produce_all, spec
     from dna.produce import produce as produce_one
@@ -444,7 +453,14 @@ def produce(
         if task.needs_variant and variant is None:
             variant = "feature"
             console.print("[dim]未指定 --variant，按专题（单角色）生成[/dim]")
-        console.print(f"[dim]预估 {task.approx_calls} 次 LLM 调用[/dim]")
+
+        if task.audio_of is not None:
+            console.print(
+                "[dim]本地 TTS 合成，不产生费用；长稿子要跑几十分钟，进度见日志[/dim]"
+            )
+        else:
+            console.print(f"[dim]预估 {task.approx_calls} 次 LLM 调用[/dim]")
+
         with console.status(f"生成中：{task.label}…"):
             results = [produce_one(record.id, kind, variant=variant, force=force)]
 
@@ -456,6 +472,69 @@ def produce(
 
     if any(r.ok and not r.skipped for r in results):
         console.print(f"\n[dim]产物目录：{get_settings().output_path / record.store_dir}[/dim]")
+
+
+@app.command()
+def tts(
+    say: str | None = typer.Option(None, "--say", help="合成一句话试听，写成 wav"),
+    out: str = typer.Option("tts-check.wav", "--out", "-o", help="试听文件写到哪"),
+    voice: str | None = typer.Option(None, "--voice", help="指定音色；默认按 .env"),
+) -> None:
+    """
+    检查语音合成后端 / Check the speech synthesis backend.
+
+    **不产生任何费用**——TTS 跑在本地。加 --say 会真的合成一句话并写成 wav，
+    用来确认这台机器上「模型能加载 + 设备对 + 声音正常」。
+
+    换部署环境后第一件事就该跑它：Intel 机器用 qwen3_ov，
+    NVIDIA 机器把 TTS_PROVIDER 改成 qwen3_torch 再跑一次。
+    """
+    import time as _time
+    from pathlib import Path
+
+    from dna.tts import RTF_ESTIMATE, SpeechSegment, VoiceSpec, get_tts, voice_for_role
+    from dna.tts.base import TTSError
+
+    settings = get_settings()
+    try:
+        provider = get_tts(settings)
+    except TTSError as exc:
+        console.print(f"[red]{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"\n[bold]TTS 后端[/bold]　{provider.info}")
+
+    try:
+        speakers = provider.available_speakers()
+    except TTSError as exc:
+        console.print(f"[red]加载失败：{exc}[/red]")
+        raise typer.Exit(code=1) from exc
+
+    console.print(f"[dim]可用音色（{len(speakers)}）：{'、'.join(speakers)}[/dim]")
+    console.print(
+        f"[dim]主持人：{voice_for_role('host', settings).speaker}　"
+        f"嘉宾：{voice_for_role('guest', settings).speaker}[/dim]"
+    )
+
+    if say is None:
+        console.print("\n[green]后端就绪。[/green][dim]加 --say \"一句话\" 可实际合成试听。[/dim]")
+        return
+
+    spec_ = VoiceSpec(
+        speaker=voice or voice_for_role("host", settings).speaker, language="chinese"
+    )
+    started = _time.perf_counter()
+    with console.status(f"合成中（约 {len(say) / 4.5 * RTF_ESTIMATE:.0f} 秒）…"):
+        clip = provider.synthesize([SpeechSegment(text=say, voice=spec_)])
+    elapsed = _time.perf_counter() - started
+
+    path = Path(out).resolve()
+    path.write_bytes(clip.wav)
+    console.print(
+        f"\n[green]已写入：[/green]{path}\n"
+        f"[dim]{len(say)} 字 → {clip.seconds:.1f} 秒音频，耗时 {elapsed:.1f} 秒"
+        f"（RTF {elapsed / clip.seconds:.2f}）[/dim]"
+    )
 
 
 @app.command()
@@ -546,9 +625,9 @@ def digest(
 
     相同的请求会命中本地缓存，反复调试同一批文章不会重复计费。
     """
-    from dna.core.naming import issue_dir_name
     from dna.llm.factory import get_llm
     from dna.pipeline import load_candidates, run_daily
+    from dna.store import save_issue
 
     settings = get_settings()
 
@@ -591,18 +670,20 @@ def digest(
         )
         return
 
-    # 落盘 _digest.json —— 三个发布应用的唯一输入
-    issue_dir = settings.output_path / issue_dir_name(result.date)
-    issue_dir.mkdir(parents=True, exist_ok=True)
-    digest_path = issue_dir / "_digest.json"
-    digest_path.write_text(
-        result.model_dump_json(indent=2, exclude_none=False), encoding="utf-8"
-    )
+    # 期次落盘 —— _digest.json（事实源）+ _references.md（来源汇总）
+    saved = save_issue(result, settings=settings)
 
     if result.trend_note_zh:
         console.print(f"\n[bold]今日主线[/bold]\n{result.trend_note_zh}")
 
-    console.print(f"\n[green]已生成：[/green]{digest_path}")
+    console.print(f"\n[green]已生成：[/green]{saved.paths.root}")
+    console.print(f"[dim]├ {saved.paths.digest.name}　三个发布应用的唯一输入[/dim]")
+    console.print(f"[dim]└ {saved.paths.references.name}　全期来源与图片出处[/dim]")
+    if saved.unresolved:
+        console.print(
+            f"[yellow]{len(saved.unresolved)} 条未能定位条目目录[/yellow]"
+            "（详见 _references.md 末尾；重抓后可用 dna issue --refresh 修复）"
+        )
     console.print(
         f"[dim]{len(result.entries)} 条"
         f"{f'，其中 {report.summaries_degraded} 条摘要降级' if report.summaries_degraded else ''}"
@@ -611,6 +692,115 @@ def digest(
     )
     if hasattr(llm, "stats"):
         console.print(f"[dim]{llm.stats()}[/dim]")
+
+
+@app.command()
+def issue(
+    date: str | None = typer.Option(None, "--date", "-d", help="期次日期 YYYYMMDD；默认最新一期"),
+    list_all: bool = typer.Option(False, "--list", "-l", help="列出已生成的全部期次"),
+    refresh: bool = typer.Option(
+        False, "--refresh", help="重建 _references.md（纯计算，不调用 LLM，不花钱）"
+    ),
+) -> None:
+    """
+    查看已生成的期次 / Inspect a built issue.
+
+    期次目录里只有整期产物；每条的正文、配图与文案都在 `outputs/articles/` 下，
+    这里按 id 引用过去。
+
+    `--refresh` 用于重抓改名之后修复 `_references.md` 里指错的链接——
+    它只重算引用，**不碰 `_digest.json`，一次 LLM 都不调**。
+    """
+    from datetime import datetime as _dt
+
+    from dna.store import (
+        issue_paths,
+        list_issues,
+        load_issue,
+        refresh_references,
+        resolve_links,
+    )
+
+    settings = get_settings()
+
+    if list_all:
+        days = list_issues(settings=settings)
+        if not days:
+            console.print("[yellow]还没有生成过任何一期。[/yellow]先跑 dna digest。")
+            return
+        table = Table(title=f"已生成 {len(days)} 期", header_style="bold")
+        table.add_column("期次", no_wrap=True)
+        table.add_column("条目", justify="right")
+        table.add_column("来源汇总", no_wrap=True)
+        for day in days:
+            digest_obj = load_issue(day, settings=settings)
+            paths = issue_paths(day, settings=settings)
+            table.add_row(
+                paths.root.name,
+                str(len(digest_obj.entries)) if digest_obj else "?",
+                "✅" if paths.references.exists() else "[yellow]缺失[/yellow]",
+            )
+        console.print(table)
+        return
+
+    if date:
+        try:
+            day = _dt.strptime(date, "%Y%m%d").date()
+        except ValueError:
+            console.print("[red]日期格式应为 YYYYMMDD，例如 20260902。[/red]")
+            raise typer.Exit(code=1) from None
+    else:
+        days = list_issues(settings=settings)
+        if not days:
+            console.print("[yellow]还没有生成过任何一期。[/yellow]先跑 dna digest。")
+            raise typer.Exit(code=1)
+        day = days[0]
+
+    digest_obj = load_issue(day, settings=settings)
+    if digest_obj is None:
+        console.print(f"[red]读不到这一期：[/red]{issue_paths(day, settings=settings).digest}")
+        raise typer.Exit(code=1)
+
+    paths = issue_paths(day, settings=settings)
+    console.print(f"\n[bold]{paths.root.name}[/bold]　{len(digest_obj.entries)} 条")
+    console.print(f"[dim]{paths.root}[/dim]\n")
+
+    if refresh:
+        saved = refresh_references(day, settings=settings)
+        console.print(f"[green]已重建 _references.md：[/green]{saved.summary()}\n")
+        links = saved.links
+    else:
+        from dna.store import resolve_links
+
+        links = resolve_links(digest_obj, settings=settings)
+
+    by_id = {link.entry_id: link for link in links}
+
+    table = Table(header_style="bold")
+    table.add_column("#", justify="right", no_wrap=True)
+    table.add_column("标题")
+    table.add_column("评分", justify="right", no_wrap=True)
+    table.add_column("图·视", justify="right", no_wrap=True)
+    table.add_column("条目目录", no_wrap=True)
+    for entry in digest_obj.entries:
+        link = by_id.get(entry.id)
+        table.add_row(
+            str(entry.rank),
+            (entry.title_zh[:42] + "…") if len(entry.title_zh) > 42 else entry.title_zh,
+            f"{entry.score:.3f}",
+            f"{len(entry.images)}·{len(entry.videos)}",
+            "✅" if link and link.store_dir else "[yellow]未定位[/yellow]",
+        )
+    console.print(table)
+
+    if digest_obj.trend_note_zh:
+        console.print(f"\n[bold]今日主线[/bold]\n{digest_obj.trend_note_zh}")
+
+    console.print("\n[bold]整期产物[/bold]")
+    console.print(f"  {'✅' if paths.digest.exists() else '⬜'} _digest.json")
+    console.print(f"  {'✅' if paths.references.exists() else '⬜'} _references.md")
+    console.print(f"  {'✅' if paths.graphic.is_dir() else '⬜'} graphic/　图文版（P5）")
+    console.print(f"  {'✅' if paths.podcast.is_dir() else '⬜'} podcast/　播客版（P7）")
 
 
 @app.command()

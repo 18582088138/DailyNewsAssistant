@@ -102,6 +102,8 @@ def _render_actions(row: RowView, kind: ProductionKind, *, on_change, on_redo) -
 
         ui.separator().props("vertical").classes("mx-1")
 
+        _render_audio_button(row, kind, done=done, on_change=on_change, on_redo=on_redo)
+
         # 重做与生成用词不同，且重做是琥珀色——**颜色本身就是「这会花钱」的提示**
         # The wording differs and redo is amber: the colour itself is the cost warning.
         label = f"重做（{task.approx_calls} 次调用）" if done else "生成"
@@ -113,6 +115,47 @@ def _render_actions(row: RowView, kind: ProductionKind, *, on_change, on_redo) -
             button.classes("wb-btn-cost").tooltip("重新调用 LLM，会产生费用")
         else:
             button.tooltip(f"调用 LLM 生成{task.label}，约 {task.approx_calls} 次调用")
+
+
+def _render_audio_button(
+    row: RowView, kind: ProductionKind, *, done: bool, on_change, on_redo
+) -> None:
+    """
+    合成音频 / Synthesise the audio.
+
+    **不花钱，但很花时间**，所以它不是琥珀色（那个颜色专门表示「这会计费」），
+    而是普通样式配一个把预估等待写进去的 tooltip。把两种代价用同一个颜色标出来，
+    等于让「花钱」这个信号贬值。
+    Free but slow, so it does not take the amber styling reserved for billed actions;
+    reusing that colour for a different kind of cost would devalue the money signal.
+
+    稿子还没生成时按钮禁用——先有稿子才有音频，这个顺序不该由一次失败来教会用户。
+    Disabled until the script exists: the order is inherent, and a failed run is a poor
+    way to teach it.
+    """
+    audio_kind = actions.audio_for(kind)
+    if audio_kind is None:
+        return
+
+    record = row.production(audio_kind)
+    has_audio = bool(record and record.ok)
+    wait = actions.audio_estimate_seconds(row.article, audio_kind) if done else 0.0
+
+    if not done:
+        ui.button("合成音频", icon="graphic_eq").props(
+            "flat dense no-caps disable"
+        ).tooltip(f"先生成{spec(kind).label}，才能合成音频")
+        return
+
+    hint = f"约需 {wait / 60:.0f} 分钟" if wait >= 60 else f"约需 {wait:.0f} 秒"
+    ui.button(
+        "重新合成" if has_audio else "合成音频",
+        icon="graphic_eq",
+        on_click=lambda: on_redo(row, audio_kind, force=has_audio, on_change=on_change),
+    ).props("flat dense no-caps").tooltip(
+        f"本地 TTS 合成，不产生费用，{hint}"
+        + ("（已有音频，会覆盖）" if has_audio else "")
+    )
 
 
 def _render_downloads(row: RowView, kind: ProductionKind, *, done: bool) -> None:
@@ -142,10 +185,15 @@ def _render_downloads(row: RowView, kind: ProductionKind, *, done: bool) -> None
             f"下载 {sidecar.name}——按发言人切好的轮次，供 TTS 分配音色"
         )
 
-    # 要念出来的产物将来会有音频与成片 / spoken kinds will grow audio and video
+    # 要念出来的产物有音频；成片还没有 / spoken kinds have audio, video is still pending
     if spec(kind).spoken:
-        ui.button(icon="graphic_eq").props("flat dense round disable").tooltip(
-            "下载音频：P6 接入 TTS 后可用（本地 Qwen3-TTS OpenVINO）"
+        audio_kind = actions.audio_for(kind)
+        audio = actions.production_file(row.article, audio_kind) if audio_kind else None
+        ui.button(
+            icon="graphic_eq",
+            on_click=lambda p=audio: ui.download.file(p, p.name),
+        ).props(f"flat dense round {'' if audio else 'disable'}").tooltip(
+            f"下载音频 {audio.name}" if audio else "还没有音频。用右侧「合成音频」生成"
         )
         ui.button(icon="movie").props("flat dense round disable").tooltip(
             "下载成片：P6 视频合成后可用"

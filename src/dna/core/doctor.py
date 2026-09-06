@@ -36,7 +36,7 @@ PHASE_PACKAGES: dict[str, tuple[str, ...]] = {
     "P2 sources": ("feedparser", "trafilatura", "bs4", "httpx"),
     "P3 pipeline": ("sklearn", "sentence_transformers", "numpy"),
     "P5 render": ("jinja2", "playwright", "PIL", "markdown"),
-    "P6 tts": ("openvino", "transformers"),
+    "P4.5 tts": ("openvino", "transformers", "soundfile"),
     "P8 gui": ("nicegui",),
     "P9 inbox": ("lark_oapi",),
 }
@@ -183,29 +183,97 @@ def check_playwright() -> CheckResult:
 
 
 def check_tts_model(settings: Settings) -> CheckResult:
-    """本地 Qwen3-TTS OpenVINO 模型是否就位 / Whether the local Qwen3-TTS IR model is present."""
-    raw = settings.qwen3_tts_model_dir.strip()
+    """
+    语音合成后端是否就位 / Whether the configured TTS backend can start.
+
+    按 `TTS_PROVIDER` 检查对应后端要的目录：OpenVINO 后端看 IR，PyTorch 后端看权重。
+    检查的是**当前这台机器配的那一个**，不是两个都要——Intel 机器上没有 CUDA 权重
+    是完全正常的，报成问题只会让人学会忽略 doctor 的输出。
+    Checks whichever backend this machine is configured for. Flagging the absence of the
+    other one would train the user to ignore doctor's output.
+
+    全部按 WARN 而非 FAIL：没有 TTS 不影响采集、日报与文案，只影响音频。
+    Warnings rather than failures: without TTS everything except audio still works.
+    """
+    provider = (settings.tts_provider or "qwen3_ov").strip().lower()
+    name = "Qwen3-TTS 模型"
+
+    if provider == "qwen3_torch":
+        raw, key, marker, what = (
+            settings.qwen3_tts_torch_model_dir,
+            "QWEN3_TTS_TORCH_MODEL_DIR",
+            "*.safetensors",
+            "PyTorch 权重",
+        )
+    else:
+        raw, key, marker, what = (
+            settings.qwen3_tts_model_dir,
+            "QWEN3_TTS_MODEL_DIR",
+            "*.xml",
+            "OpenVINO IR",
+        )
+
+    raw = (raw or "").strip()
     if not raw:
-        return CheckResult("Qwen3-TTS 模型", Status.WARN, "未配置 QWEN3_TTS_MODEL_DIR（P6 阶段再配）")
+        return CheckResult(name, Status.WARN, f"未配置 {key}（{provider} 后端要用）")
 
     model_dir = Path(raw)
     if not model_dir.exists():
         return CheckResult(
-            "Qwen3-TTS 模型",
-            Status.WARN,
-            f"目录不存在：{model_dir}",
-            hint="核对 .env 里的 QWEN3_TTS_MODEL_DIR",
+            name, Status.WARN, f"目录不存在：{model_dir}", hint=f"核对 .env 里的 {key}"
         )
 
-    xml_count = len(list(model_dir.glob("*.xml")))
-    if xml_count == 0:
+    found = len(list(model_dir.glob(marker)))
+    if found == 0:
         return CheckResult(
-            "Qwen3-TTS 模型",
+            name,
             Status.WARN,
-            f"目录存在但没有 OpenVINO IR (*.xml)：{model_dir}",
-            hint="确认已完成 OpenVINO 转换",
+            f"目录存在但没有{what}（{marker}）：{model_dir}",
+            hint="确认这个目录是该后端要的那一种",
         )
-    return CheckResult("Qwen3-TTS 模型", Status.OK, f"{xml_count} 个 IR 文件 @ {model_dir}")
+
+    detail = f"{provider}：{found} 个{what} @ {model_dir.name}"
+    return CheckResult(name, Status.OK, detail)
+
+
+def check_tts_repo(settings: Settings) -> CheckResult:
+    """
+    `qwen_tts` 包是否导得到 / Whether the `qwen_tts` package can be imported.
+
+    **两个后端都依赖它**，而它是 editable 安装的——2026-09-04 实测，
+    源码仓库从 `openvino_notebooks/` 搬到 `Models/` 之后安装记录就指向了不存在的
+    路径，`import qwen_tts` 直接 ModuleNotFoundError，而错误信息完全看不出是搬家导致的。
+    这条检查存在的意义就是把「搬过家」这件事说出来。
+    Both backends need it, and the editable install breaks silently when the repository
+    moves — with an error that says nothing about the move. This check names the cause.
+    """
+    import importlib.util
+    import sys
+
+    name = "qwen_tts 包"
+    repo = (settings.qwen3_tts_repo_dir or "").strip()
+
+    if importlib.util.find_spec("qwen_tts") is not None:
+        return CheckResult(name, Status.OK, "可直接导入")
+
+    if repo and (Path(repo) / "qwen_tts").is_dir():
+        return CheckResult(name, Status.OK, f"由 QWEN3_TTS_REPO_DIR 提供 @ {repo}")
+
+    if repo:
+        return CheckResult(
+            name,
+            Status.WARN,
+            f"QWEN3_TTS_REPO_DIR 下没有 qwen_tts/ 子目录：{repo}",
+            hint="指向 Qwen3-TTS 源码仓库的根目录",
+        )
+
+    _ = sys  # 保持导入可读，说明这条检查只看导入路径
+    return CheckResult(
+        name,
+        Status.WARN,
+        "导入不到，且未配置 QWEN3_TTS_REPO_DIR",
+        hint="editable 安装在仓库被移动后会失效；配一份路径兜底",
+    )
 
 
 def check_writable_dirs(settings: Settings) -> list[CheckResult]:
@@ -332,6 +400,7 @@ def run_all(
     results.append(check_llm_config(s))
     results.append(check_playwright())
     results.append(check_tts_model(s))
+    results.append(check_tts_repo(s))
     results.extend(check_writable_dirs(s))
     results.append(check_proxy(s))
     results.append(check_inbox(s))
@@ -364,6 +433,7 @@ __all__ = [
     "check_proxy",
     "check_python",
     "check_tts_model",
+    "check_tts_repo",
     "check_writable_dirs",
     "has_failure",
     "run_all",

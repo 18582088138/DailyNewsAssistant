@@ -24,6 +24,16 @@ data that both front-ends can import without pulling in the world.
     It is by far the most expensive: an outline call plus one per section, five to nine
     calls against three for all the others combined. Letting it ride along with `--all`
     would turn one mistaken keystroke into a bill an order of magnitude larger.
+
+为什么音频也不进批量 / Why the audio kinds stay out too:
+    它们**不花钱，但很花时间**——实测 RTF≈2.5，口播稿要等约 4 分钟，
+    长文案约 37 分钟。批量里混进一个半小时的任务，等同于把界面按死。
+    成本护栏防的是账单，时间护栏防的是「点一下之后这台机器就没法用了」，
+    两者都要拦，拦的理由不同。
+    They cost nothing but take a great deal of time: measured at RTF≈2.5, a narration
+    takes about four minutes and a long-form script about thirty-seven. A batch carrying
+    a half-hour task is a frozen machine. The money guard and the time guard are
+    different guards for different reasons; both are needed.
 """
 
 from __future__ import annotations
@@ -40,6 +50,10 @@ class ProductionKind(StrEnum):
     SHORTVIDEO = "shortvideo"
     NARRATION = "narration"
     LONGFORM = "longform"
+    # 音频：由对应的稿子合成，不调用 LLM / audio, synthesised from the script above
+    SHORTVIDEO_AUDIO = "shortvideo_audio"
+    NARRATION_AUDIO = "narration_audio"
+    LONGFORM_AUDIO = "longform_audio"
 
 
 @dataclass(frozen=True)
@@ -84,9 +98,21 @@ class TaskSpec:
 
     两个用处 / Two uses:
         1. 只有它才需要量时长、才会触发回炉重写（总结不需要）
-        2. **P6/P7 会为它合成音频**——界面据此决定哪几格该有音频下载入口
-    Only spoken kinds are measured against a duration window, and only they will grow
-    audio in P6/P7, which is how the workbench knows where to offer an audio download.
+        2. **它有一格对应的音频**（`audio_kind`）——界面据此决定哪几格该有合成按钮
+    Only spoken kinds are measured against a duration window, and only they have a
+    matching audio kind, which is how the workbench knows where to offer synthesis.
+    """
+
+    audio_of: ProductionKind | None = None
+    """
+    这一格是哪份稿子的音频 / which script this is the audio of.
+
+    非 None 就意味着 / A non-None value means:
+        · 生成它**不调用 LLM，不花钱**（花的是时间）
+        · 输出是二进制，按字节写盘
+        · 台账里记的 provider 是 TTS 后端，不是 LLM
+    It costs time rather than money, writes bytes rather than text, and records the TTS
+    backend where the other kinds record the LLM.
     """
 
 
@@ -126,6 +152,38 @@ TASKS: dict[ProductionKind, TaskSpec] = {
         min_body_chars=800,
         spoken=True,
     ),
+    ProductionKind.SHORTVIDEO_AUDIO: TaskSpec(
+        kind=ProductionKind.SHORTVIDEO_AUDIO,
+        label="短视频音频",
+        filename="shortvideo.zh.wav",
+        requires=ProductionKind.SHORTVIDEO,
+        in_batch=False,
+        approx_calls=0,
+        audio_of=ProductionKind.SHORTVIDEO,
+    ),
+    ProductionKind.NARRATION_AUDIO: TaskSpec(
+        kind=ProductionKind.NARRATION_AUDIO,
+        label="口播音频",
+        filename="narration.zh.wav",
+        requires=ProductionKind.NARRATION,
+        in_batch=False,
+        approx_calls=0,
+        audio_of=ProductionKind.NARRATION,
+    ),
+    ProductionKind.LONGFORM_AUDIO: TaskSpec(
+        kind=ProductionKind.LONGFORM_AUDIO,
+        label="长文案音频",
+        filename="longform.zh.wav",
+        requires=ProductionKind.LONGFORM,
+        in_batch=False,
+        approx_calls=0,
+        audio_of=ProductionKind.LONGFORM,
+    ),
+}
+
+# 稿子 → 它的音频 / script kind to its audio kind
+AUDIO_OF: dict[ProductionKind, ProductionKind] = {
+    task.audio_of: kind for kind, task in TASKS.items() if task.audio_of is not None
 }
 
 # 批量顺序：依赖在前 / batch order, prerequisites first
@@ -171,6 +229,16 @@ def estimate_calls(kinds: list[ProductionKind]) -> int:
     return sum(TASKS[k].approx_calls for k in kinds)
 
 
+def audio_kind(kind: ProductionKind | str) -> ProductionKind | None:
+    """
+    这份稿子对应的音频产物 / The audio production for one script kind.
+
+    不是口播类的返回 None —— 总结不会被念出来，界面上也就不该有合成按钮。
+    Returns None for kinds that are not spoken, so no synthesis button is offered.
+    """
+    return AUDIO_OF.get(ProductionKind(kind))
+
+
 def json_sidecar(spec_: TaskSpec) -> str | None:
     """
     该产物是否额外产出一份 JSON / Whether this kind writes a JSON sibling.
@@ -184,9 +252,11 @@ def json_sidecar(spec_: TaskSpec) -> str | None:
 
 
 __all__ = [
+    "AUDIO_OF",
     "BATCH_ORDER",
     "DISPLAY_ORDER",
     "TASKS",
+    "audio_kind",
     "ProductionKind",
     "TaskSpec",
     "batch_kinds",

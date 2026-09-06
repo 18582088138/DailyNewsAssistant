@@ -813,6 +813,179 @@ tasks.py: 删掉没用到的 Callable 导入，并修正模块文档
 
 ---
 
-## 阶段：P4 落盘与产出台账
+## 阶段：P4 期次落盘与装配（2026-09-04）
 
-> 待 P4 完成后补充。
+P4 原计划的「台账 DB + 条目级落盘」已在 P2+ 与 P3.5 提前交付，本轮补的是
+**期次级**那一半：期次目录规则、`_references.md`、装配层、`dna issue`。
+
+> ⚠️ **P4 与 P4.5 合成一个提交，命令在下一节。**
+>
+> 两个阶段是同一次开发里连着做的，改到了同一批文件
+> （`frontends/cli/main.py`、`tests/core/test_doctor.py`、四份文档）。
+> 拆成两个提交的话，`git add <文件>` staged 的是**文件当前的全部内容**，
+> P4.5 的改动会跟着进 P4 那个提交——而 `doctor.py` 留在第二个提交里，
+> 于是**第一个提交的测试跑不过**（`test_doctor` 里那条新测试找不到对应实现）。
+>
+> 这正是本文件开头那两条检查要防的东西：中间那个提交单独 checkout 出来是坏的，
+> 而工作区里一切正常，不跑干净检出根本发现不了。
+> 与其造一个已知会坏的历史，不如合成一个提交。
+
+本轮改了什么，见下一节提交信息的前半部分。
+
+## 阶段：P4.5 语音合成层（2026-09-04）
+
+应用户要求把 TTS 独立成阶段：「后面所有需要输出音频的部分都需要依赖这个功能」。
+同时适配 PyTorch CUDA 后端，以支持不同部署环境。
+
+```bash
+cd /c/Users/test/Downloads/xkd/DailyNewsAssistant
+
+# --- P4：期次落盘与装配 ---
+git add src/dna/store/issue_store.py
+git add src/dna/store/__init__.py
+git add src/dna/core/naming.py
+git add src/dna/core/__init__.py
+git add src/dna/extract/media.py
+git add tests/store/test_issue_store.py
+git add tests/core/test_naming.py
+git add tests/extract/test_extract.py
+git add docs/05_output_spec.md
+git add docs/12_digest_guide.md
+
+# --- P4.5：语音合成层 ---
+git add src/dna/tts/
+git add src/dna/produce/documents.py
+git add src/dna/produce/service.py
+git add src/dna/produce/tasks.py
+git add src/dna/core/config.py
+git add src/dna/core/doctor.py
+git add frontends/cli/main.py
+git add frontends/nicegui_app/actions.py
+git add frontends/nicegui_app/detail_panel.py
+git add frontends/nicegui_app/ledger_table.py
+git add tests/tts/
+git add tests/produce/test_service.py
+git add tests/core/test_doctor.py
+git add pyproject.toml
+git add .env.example
+git add docs/14_tts_guide.md
+git add docs/00_STAGE_SUMMARY.md
+git add docs/02_development_plan.md
+git add docs/03_unit_tests.md
+git add docs/13_workbench_guide.md
+git add docs/git_commands.md
+
+# ⚠️ docs/issues/ 是 gitignored，009 不要 add
+git status --short          # 预期：上面这些都在 staged，且没有 .env / outputs/
+
+git commit -m "feat: P4 期次落盘与装配 + P4.5 语音合成层
+
+（两个阶段连着做，改到同一批文件，拆开提交会让中间那个提交跑不过测试）
+
+═══ P4：期次落盘与装配 ═══
+
+新增 store/issue_store.py：期次目录只放整期产物，条目按 id 引用
+  期次目录里不出现任何条目资产。一篇文章可以进多期（跨日的后续报道），
+  复制会产生两份各自漂移的副本：重做了条目的口播稿，期次里那份还是旧的，
+  而且没有任何提示。按 id 引用只有一处真相，重做之后期次这边自动就是新的
+  条目 id、台账主键、DigestEntry.id 都是 url_hash(url)，三者互相查得到
+
+_references.md 是发布时的合规依据
+  每一张图、每一段视频的原始地址都要在这里查得到
+  与条目目录里的 references.md 各管一件事：那份记下载下来的文件名，
+  这份记本期用到了谁并指路过去。本地文件名会随重抓变化，原始地址才是署名要引的
+
+未能定位的条目不静默跳过
+  条目目录被手工删掉时链接会指空。少写一行链接是最坏的处理方式——
+  产物看起来完整，实际缺了出处。三处同时报：文件末尾列清单、
+  SavedIssue.unresolved 带结构化结果、dna issue 那一列显示「未定位」
+  台账记着目录但目录已不存在，同样算未定位：写一个点开是 404 的链接比不写更糟
+
+CLI: dna digest 改调 save_issue（前端不再自己拼路径），新增 dna issue
+  dna issue --refresh 只重建 _references.md，不碰 _digest.json、不调 LLM
+  重抓会改标题→改 slug→改目录名，期次里的链接因此指错；
+  修链接是零成本操作，而重跑流水线要花钱，两件事不能写在一个命令里
+
+naming: 删掉 topic_dir_name 与 history_dir_name
+  topics/ 与 _history/ 两套布局都已取消（§9.2 §9.3），
+  留着会让模块文档变成一份描述作废布局的「权威说明」，比没有更糟
+
+extract/media: 词边界正则末尾加 s?，拦住复数装饰目录
+  实测 20260902 那期 arXiv 条目的 5 张「配图」全是页脚装饰，其中 4 张走
+  /images/icons/social/...；词表里有 icon，但边界要求其后是非字母数字，
+  icons 因此整个漏过去。同时删掉 funders/sponsors/partners 三个手写复数
+  这个缺陷是 _references.md 暴露的：把每张图的地址平铺出来才看得见
+
+文档: 新增 05_output_spec.md 作为落盘路径的唯一权威
+
+═══ P4.5：语音合成层 ═══
+
+新增 src/dna/tts/：与 dna/llm/ 平级的能力层
+  qwen3_ov     OpenVINO IR，跑 Intel CPU/核显/NPU（本机已验证）
+  qwen3_torch  PyTorch，跑 NVIDIA CUDA / cpu / mps
+  两者调用签名完全一致，公共部分（分段·拼接·停顿·进度·逐段容错）在
+  qwen3_base.py 只有一份，各自只实现「怎么加载」——加一个部署环境只多一个 _load_model()
+  换环境改 .env 里的 TTS_PROVIDER 一行，produce/ 与两个前端一行不动
+
+让 TTS_DEVICE 真的生效
+  上游 qwen_3_tts_helper 把 talker 与 speech tokenizer 的设备写死成 GPU
+  （tmp_device = \"GPU\"），传进去的 device 只对 speaker encoder 生效——
+  照原样调用的话 .env 里那一行是死配置
+  这个项目已经栽过一次同样的跟头（profile.yaml 的时长区间改了没反应）
+  加载时把两个类临时换成固定设备的子类，用完在 finally 换回去；
+  声码器保持 CPU，与上游一致——本机验证过的就是这个配置
+  已验证：TTS_DEVICE=CPU 时 talker.device == 'cpu'
+
+三种音频进 productions 矩阵，复用已有的全部护栏
+  shortvideo_audio / narration_audio / longform_audio，各自 requires 对应的稿子
+  已存在不重跑 · 失败也记账 · 逐格重做 · GUI 矩阵，一条都不用重写
+  TaskSpec 加 audio_of 与二进制载荷；_generate 的元组返回改成 Generated 结构体
+  （加一种载荷时改一个字段，而不是改所有调用点的解包）
+
+前置一律不 force —— 修掉一个会偷偷计费的默认值
+  原先给前置传的是 force=force，也就是说点「重新合成音频」会连带把口播稿
+  重新调一遍 LLM。下游重做是免费的，上游重做是要花钱的，
+  让一个动作同时触发两者，等于把「免费」按钮偷偷接上账单
+
+produce/documents.py：把渲染与解析放在一起
+  产物抬头里有 `> 口播文案　·　来源：https://…`。整篇送进 TTS 的话，
+  模型会把网址一个字符一个字符念出来——不是音质变差，是整段废掉
+  而且这条失效不会报错：文件生成了、时长也有，只有听的人才发现
+  所以 script_block（写）与 spoken_text（读）放进同一个文件，由往返测试钉住
+
+一段失败不毁整篇
+  长文案有几十段，跑到第 40 段崩掉就把前面 39 段的半小时赔进去
+  缺段照样落盘但标记 complete=False 并报出缺了几段——
+  残缺的音频被当成成品发出去才是最坏的结果
+
+GUI：合成按钮不用琥珀色
+  琥珀色在这个界面里专表示「这会计费」。音频跑在本地不花钱，
+  用同一个颜色会让「花钱」这个信号贬值；tooltip 里写的是预估等待时间
+  预计超 5 分钟先弹确认框；合成期间提示条显示「12/47 段（已产出 83 秒）」——
+  半小时的等待只给一个转圈，人分不清是在跑还是卡死了
+
+doctor：TTS 检查只看当前配的那个后端 + 新增 qwen_tts 包检查
+  Intel 机器上没有 CUDA 权重是正常的，报成问题只会让人学会忽略 doctor
+  qwen_tts 是 editable 安装的，源码仓库从 openvino_notebooks 搬到 Models 之后
+  安装记录就指向了不存在的路径，而 ModuleNotFoundError 完全看不出是搬家导致的
+  新增 QWEN3_TTS_REPO_DIR 兜底，并由这条检查把原因说出来
+
+CLI：dna tts（检查后端 / --say 试听）+ dna produce --kind *_audio
+
+测试: 802 passed（P4 +15 期次装配 +1 复数目录 -3 naming；P4.5 +29 tts +6 音频 +1 doctor）
+真机验证: dna issue --refresh 对 20260902 期，5 条全部定位到
+          dna tts --say 46 字 → 8.4 秒音频，RTF 2.67
+          dna produce decef4a4 --kind narration_audio → 827 字 → 153 秒
+          零费用（全程本地）
+
+已知偏差: 口播稿估算 93.9 秒，实际合成 153.3 秒，差 63%
+          实测 Qwen3-TTS 中文语速 5.4 字/秒
+          本阶段不改：发布加速倍率未定，且改语速会连带推翻 issue 008
+          刚校准过的字数。见 docs/issues/009（gitignored，本地留档）
+
+qwen3_torch 后端: 本机 torch 2.8.0+cpu 且无 N 卡，交付代码与离线单测，
+                  真机联调在有卡的机器上做——与飞书机器人（P9）同一个处理方式"
+```
+
+提交后跑一遍文件开头那两条检查。**本轮新增了两个包目录**
+（`src/dna/tts/` 与 `tests/tts/`），第 2 条尤其要跑——`__init__.py` 是最容易漏的文件。

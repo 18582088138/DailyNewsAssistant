@@ -25,9 +25,12 @@ test_service.py —— 单篇产物生成单元测试 / Per-article production s
    12. 短视频稿与口播稿的产物文件里都写入主副标题
    13. **NEW 标识判定**：刚导入且无产物为新 · 任意产物（含失败）清掉标识 ·
        **存量文章不算新的** · 窗口设 0 关闭时间检查
+   14. 音频产物（P4.5）：**一次 LLM 都不调** · 按字节写盘且台账记真实时长 ·
+       **只念正文不念抬头里的网址** · 访谈两个角色两把嗓子 ·
+       **重做音频不会把稿子重新计费** · 音频不进 `--all`
 
 预期 / Expected:
-    21 passed；耗时 < 3s；**全部使用假 provider，零 LLM 调用、零费用**
+    27 passed；耗时 < 3s；**全部使用假 provider，零 LLM 调用、零费用；不加载 TTS 模型**
 """
 
 from __future__ import annotations
@@ -499,3 +502,202 @@ def test_calls_are_reported_for_cost_visibility(settings: Settings) -> None:
     assert result.calls == 1
     assert result.seconds is not None
     assert "次调用" in result.summary()
+
+
+# --- 音频产物 / audio productions ---------------------------------------------
+#
+# 音频走的是**同一条路**：同样的「已存在不重跑」、同样的失败入账、同样的逐格重做。
+# 这几条验证的是那条路对二进制载荷同样成立，以及它**不碰 LLM**。
+# Audio takes the same path; these pin that the path works for a binary payload and that
+# it never touches the LLM.
+
+
+class FakeTTS:
+    """
+    不加载模型的假 TTS / A TTS backend that loads nothing.
+
+    记下收到的分段，返回一段固定的 WAV。真机合成在 `dna tts --say` 里做——
+    加载一次 10 秒、合成一次几十秒，不该进单测。
+    Records the segments it receives and returns a fixed WAV. Real synthesis is a manual
+    check: loading takes ten seconds and synthesis tens more.
+    """
+
+    def __init__(self) -> None:
+        self.segments: list = []
+
+    @property
+    def info(self):  # noqa: ANN201
+        from dna.tts.base import TTSInfo
+
+        return TTSInfo(name="fake_tts", model="fake", device="CPU")
+
+    def available_speakers(self) -> list[str]:
+        return ["serena", "uncle_fu"]
+
+    def synthesize(self, segments, *, on_progress=None):  # noqa: ANN001, ANN201
+        import numpy as np
+
+        from dna.tts.base import AudioClip, encode_wav
+
+        self.segments = list(segments)
+        samples = np.zeros(24_000 * len(self.segments), dtype=np.float32)
+        return AudioClip(
+            wav=encode_wav(samples, 24_000),
+            sample_rate=24_000,
+            seconds=float(len(self.segments)),
+            segments=len(self.segments),
+        )
+
+
+def _write_script(settings: Settings, article_id: str, kind: ProductionKind, body: str) -> None:
+    """直接放一份稿子，跳过 LLM / Drop a script in place, bypassing the LLM."""
+    from dna.produce.documents import front_matter
+
+    ledger = Ledger(settings.db_file)
+    directory = settings.output_path / ledger.get(article_id).store_dir
+    directory.mkdir(parents=True, exist_ok=True)
+
+    article = Article(url="https://e.com/1", title="某公司发布新一代推理引擎")
+    (directory / spec(kind).filename).write_text(
+        front_matter(article, spec(kind).label) + f"**口播（约 30 秒 · 100 字）：**\n\n{body}",
+        encoding="utf-8",
+    )
+    ledger.record_production(article_id, str(kind), status="ok", chars=len(body))
+
+
+def test_audio_never_calls_the_llm(settings: Settings) -> None:
+    """
+    **合成音频一次 LLM 都不调。**
+
+    它一分钱不花，却会因为无条件的 `get_llm()` 而要求 API key ——
+    在没配 key 的机器上，本来能跑的合成会先在这一步失败。
+    Audio spends nothing, yet an unconditional `get_llm()` would demand an API key and
+    fail on a machine where synthesis would otherwise work.
+    """
+    article_id = seed(settings)
+    _write_script(settings, article_id, ProductionKind.NARRATION, "第一句。第二句。")
+    llm = ScriptedProvider("fake", [])
+    tts = FakeTTS()
+
+    result = produce(
+        article_id,
+        ProductionKind.NARRATION_AUDIO,
+        settings=settings,
+        llm=llm,
+        tts=tts,
+    )
+
+    assert result.ok
+    assert llm.call_count == 0
+    assert tts.segments
+
+
+def test_audio_is_written_as_bytes_and_recorded(settings: Settings) -> None:
+    """音频按字节写盘，台账记的是**真实时长** / Audio is written as bytes with a real duration."""
+    article_id = seed(settings)
+    _write_script(settings, article_id, ProductionKind.NARRATION, "第一句。第二句。")
+
+    result = produce(
+        article_id, ProductionKind.NARRATION_AUDIO, settings=settings, tts=FakeTTS()
+    )
+
+    assert result.path.name == "narration.zh.wav"
+    assert result.path.read_bytes().startswith(b"RIFF")
+    record = Ledger(settings.db_file).latest_production(
+        article_id, str(ProductionKind.NARRATION_AUDIO)
+    )
+    assert record.ok
+    assert record.est_seconds == result.seconds
+    assert record.llm_provider == "fake_tts"  # 记的是 TTS 后端，不是 LLM
+
+
+def test_audio_speaks_only_the_script_body(settings: Settings) -> None:
+    """
+    **抬头里的网址不能被念出来。**产物文件带 `> 口播文案　·　来源：https://…`，
+    整篇照念的话，模型会把网址一个字符一个字符读出来，整段音频报废。
+    The header carries a source URL; reading the whole file aloud would destroy the take.
+    """
+    article_id = seed(settings)
+    _write_script(settings, article_id, ProductionKind.NARRATION, "第一句。第二句。")
+    tts = FakeTTS()
+
+    produce(article_id, ProductionKind.NARRATION_AUDIO, settings=settings, tts=tts)
+
+    spoken = "".join(s.text for s in tts.segments)
+    assert "http" not in spoken
+    assert "第一句。" in spoken
+
+
+def test_interview_audio_uses_two_voices(settings: Settings) -> None:
+    """
+    访谈的两个角色落在两把不同的嗓子上 / An interview's two roles get two voices.
+
+    长文案的 `.json` 附件已经按发言人切好了轮次，音频这边照着分配音色即可——
+    有结构化数据就用结构化数据，不回头解析 Markdown。
+    The sidecar is already split into speaker turns, so the audio assigns voices from it.
+    """
+    article_id = seed(settings)
+    _write_script(settings, article_id, ProductionKind.LONGFORM, "占位正文。")
+
+    ledger = Ledger(settings.db_file)
+    directory = settings.output_path / ledger.get(article_id).store_dir
+    (directory / "longform.zh.json").write_text(
+        json.dumps(
+            {
+                "mode": "interview",
+                "turns": [
+                    {"speaker": "host", "text": "第一个问题是什么？"},
+                    {"speaker": "guest", "text": "第一个答案是这样。"},
+                ],
+            },
+            ensure_ascii=False,
+        ),
+        encoding="utf-8",
+    )
+    tts = FakeTTS()
+
+    produce(article_id, ProductionKind.LONGFORM_AUDIO, settings=settings, tts=tts)
+
+    voices = {s.role: s.voice.speaker for s in tts.segments}
+    assert set(voices) == {"host", "guest"}
+    assert voices["host"] != voices["guest"]
+
+
+def test_redoing_audio_does_not_rebill_the_script(settings: Settings) -> None:
+    """
+    **重做音频不该顺手把稿子也重新调一遍 LLM。**
+
+    下游重做是免费的，上游重做是要花钱的。让一个动作同时触发两者，
+    等于把「免费」按钮偷偷接上账单。
+    The downstream redo is free while the upstream one costs money; letting one click
+    trigger both wires a bill onto a button labelled free.
+    """
+    article_id = seed(settings)
+    _write_script(settings, article_id, ProductionKind.NARRATION, "第一句。第二句。")
+    llm = ScriptedProvider("fake", [])
+
+    produce(
+        article_id,
+        ProductionKind.NARRATION_AUDIO,
+        settings=settings,
+        llm=llm,
+        tts=FakeTTS(),
+        force=True,
+    )
+
+    assert llm.call_count == 0
+
+
+def test_audio_is_not_in_the_batch() -> None:
+    """
+    **音频不进 `--all`。**它不花钱，但口播要 4 分钟、长文案要 37 分钟；
+    批量里混进一个半小时的任务等同于把机器按死。
+    Free but slow: a batch carrying a half-hour task is a frozen machine.
+    """
+    for kind in (
+        ProductionKind.SHORTVIDEO_AUDIO,
+        ProductionKind.NARRATION_AUDIO,
+        ProductionKind.LONGFORM_AUDIO,
+    ):
+        assert kind not in batch_kinds()
+        assert spec(kind).approx_calls == 0

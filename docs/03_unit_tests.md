@@ -650,14 +650,95 @@ rm -rf /c/tmp/verify
 
 ---
 
+## P4 期次落盘与装配（766 passed）
+
+| 测试文件 | 覆盖 | 数量 |
+|---|---|---|
+| `tests/store/test_issue_store.py` | 期次目录只有两个文件 · **`graphic/`/`podcast/` 不预建**（空目录会被读成「已生成」）· `_digest.json` 往返无损 · 来源汇总列出图片与视频**原始地址** · 条目**按 id 引用不复制** · **查不到的条目不静默跳过**（文件里写 ⚠️，返回值里也有）· **目录被删同样算未定位** · 代表条目换过时按 refs 兜底 · 落盘幂等零费用 · `--refresh` 不碰 digest · 空目录不算一期 · 损坏文件返回 None | 15 |
+| `tests/core/test_naming.py` | 删去 `topic_dir_name` / `history_dir_name` 两组测试（两套布局已取消）；端到端路径改成条目级 | 34 |
+| `tests/extract/test_extract.py` | 新增：**复数装饰目录**（`/icons/`、`/logos/`、`/banners/`）必须被拦 | +1 |
+
+### 装配层的两条要害
+
+**1. 未能定位的条目必须可见。** 期次按 id 引用条目目录，目录被手工删掉时链接就
+指空。少写一行链接是最坏的处理方式——产物看起来完整，实际缺了出处，而发布时
+`_references.md` 正是合规依据。因此三处同时报：文件末尾列清单、`SavedIssue.unresolved`
+带结构化结果、`dna issue` 那一列显示「未定位」。
+
+**2. `--refresh` 不能碰 `_digest.json`。** 修链接是零成本操作，而重跑流水线要花钱。
+两件事写在一个命令里，早晚有一次误触把钱花掉。测试直接断言 digest 字节不变。
+
+### P4 真机验证（零 LLM 调用）
+
+```bash
+dna issue --list        # 已生成 1 期：20260902-DailyNews，来源汇总「缺失」
+dna issue --refresh     # 5 条全部 ✅ 定位到条目目录，写出 104 行 _references.md
+```
+
+顺带暴露一个真实缺陷：arXiv 那条的 5 张「配图」全是页脚装饰，其中 4 张走
+`/images/icons/social/...`。词表里有 `icon`，但边界规则要求其后是非字母数字，
+`icons` 因此整个漏过去。**把每张图的原始地址平铺出来才看得见**——
+这正是 `_references.md` 存在的意义。修法是在词边界正则末尾加 `s?`，
+同时删掉 `funders`/`sponsors`/`partners` 三个手写复数（已被 `s?` 覆盖）。
+
+---
+
+## P4.5 语音合成层（802 passed）
+
+| 测试文件 | 覆盖 | 数量 |
+|---|---|---|
+| `tests/tts/test_tts.py` | **URL 必须去掉**（不去掉模型会把网址逐字念出来）· HTML 注释里的提纲不能念 · 链接锚文本保留地址丢掉 · **只在句子边界切**且标点跟着前一句 · 空输入返回空列表而非 `[""]` · WAV 往返 · **越界样点归一化不硬裁剪** · **一段失败不毁整篇，全失败才抛** · 换发言人的停顿更长 · **实例按（后端·模型·设备·精度）缓存** · **两个角色音色相同时自动岔开** · torch 后端**加载前**就校验 CUDA/精度/设备 · **写与读不漂移** | 29 |
+| `tests/produce/test_service.py` | 新增音频：**一次 LLM 都不调** · 按字节写盘且台账记真实时长 · **只念正文不念抬头里的网址** · 访谈两个角色两把嗓子（读 JSON turns）· **重做音频不会把稿子重新计费** · 音频不进 `--all` | +6 |
+| `tests/core/test_doctor.py` | TTS 检查**只看当前配的那个后端**——Intel 机器上没有 CUDA 权重是正常的，报成问题只会让人学会忽略 doctor | +1 |
+
+### 这一层的三条要害
+
+**1. 送进模型之前必须把字清干净。** 产物抬头里有 `> 口播文案　·　来源：https://…`。
+整篇照念的话，模型会把网址一个字符一个字符读出来——**不是音质变差，是整段废掉**。
+而且这条失效**不会报错**：文件生成了、时长也有，只有听的人才发现。
+所以渲染（`script_block`）与解析（`spoken_text`）放进同一个文件 `produce/documents.py`，
+并由一条往返测试钉住它们。
+
+**2. 一段失败不能毁整篇。** 长文案有几十段，逐段合成跑到第 40 段崩掉，
+就把前面 39 段的半小时一起赔进去。缺段的音频照样落盘，
+但 `complete` 为 False 且明确报出缺了几段——**残缺的音频被当成成品发出去才是最坏的结果**。
+
+**3. 重做音频不能把稿子重新计费。** 下游重做是免费的，上游重做是要花钱的。
+`produce` 原先给前置传的是 `force=force`，也就是说点一次「重新合成」会连带把
+口播稿重新调一遍 LLM。改成前置一律 `force=False`：**缺了才补，不会替人做花钱的决定**。
+
+### P4.5 真机验证（本地合成，零费用）
+
+```bash
+dna tts                                   # 9 个音色，后端就绪
+dna tts --say "…46 字…"                   # 8.4 秒音频，耗时 22.3 秒，RTF 2.67
+dna produce decef4a4 --kind narration_audio
+#   ● 口播音频：827 字，约 153 秒　→ narration.zh.wav 7.02 MB
+```
+
+同时验证 `TTS_DEVICE` 真的生效（上游把它写死成 GPU）：
+
+```bash
+$PY -c "from dna.core.config import Settings; from dna.tts import get_tts
+s = Settings(_env_file='.env', tts_device='CPU'); m = get_tts(s, fresh=True)._model_ready()
+print(m.talker.device, m.speech_tokenizer.device)"
+# cpu CPU        ← 配 CPU 就真的在 CPU 上
+```
+
+顺带量出一个偏差：口播稿估算 93.9 秒，实际合成 153.3 秒，**差 63%**。
+本阶段不改，理由见 [issues/009](issues/009-tts-speaking-rate.md)。
+
+---
+
 ## 待补（随阶段推进填写）
 
 | 阶段 | 测试文件 | 状态 |
 |---|---|---|
 | P3 | 见上 | ✅ |
-| P4 | `tests/store/test_output_layout.py` `test_ledger.py` `test_history.py` | ⬜ |
+| P4 | `tests/store/test_issue_store.py`（台账测试在 P2+/P3.5 已交付；`test_history.py` 随 `_history/` 取消） | ✅ |
 | P5 | `tests/apps/test_graphic_daily.py` | ⬜ |
-| P6 | `tests/narration/test_duration.py` `tests/apps/test_video_brief.py` `tests/tts/test_tts.py`(slow) | ⬜ |
+| P4.5 | `tests/tts/test_tts.py` + `tests/produce/test_service.py` 的音频部分 | ✅ |
+| P6 | `tests/apps/test_video_brief.py`（narration 与 tts 已在 P3.5/P4.5 交付） | ⬜ |
 | P7 | `tests/apps/test_podcast_script.py` | ⬜ |
 | P8 | `tests/frontends/test_redo.py` | ⬜ |
 | P9 | `tests/inbox/test_inbox_parse.py` `test_inbox_whitelist.py` `test_inbox_commands.py` | ⬜ |

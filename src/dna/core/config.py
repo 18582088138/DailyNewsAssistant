@@ -85,9 +85,32 @@ class Settings(BaseSettings):
     llm_cache_enabled: bool = True
 
     # ---- TTS ----
+    # 两个后端，同一个协议 / Two backends behind one protocol:
+    #   qwen3_ov    —— OpenVINO IR，跑 Intel CPU / 核显 / NPU
+    #   qwen3_torch —— PyTorch，跑 NVIDIA CUDA（也支持 cpu / mps）
+    # 换部署环境只改这一行 / Moving between environments changes only this line.
     tts_provider: str = "qwen3_ov"
+
+    # OpenVINO 后端：已转换的 IR 模型目录 / the converted IR directory
     qwen3_tts_model_dir: str = ""
+    # OpenVINO 后端：参考实现 qwen_3_tts_helper.py 所在目录（openvino_notebooks/notebooks/qwen3-tts）
+    qwen3_tts_helper_dir: str = ""
+    # PyTorch 后端：原始 HF 权重目录 / the original HuggingFace checkpoint
+    qwen3_tts_torch_model_dir: str = ""
+    # 两个后端都要：Qwen3-TTS 源码仓库（提供 qwen_tts 包）。
+    # 它是 editable 安装的，仓库一被移动安装记录就失效，所以显式配一份路径兜底。
+    # Both backends need it; the editable install breaks when the repository moves.
+    qwen3_tts_repo_dir: str = ""
+
+    # 设备。取值随后端而异 / device, interpreted per backend:
+    #   qwen3_ov     CPU | GPU | NPU
+    #   qwen3_torch  cuda | cuda:N | cpu | mps
+    # 这个值**是真的会生效的**——见 tts/qwen3_openvino.py：上游把设备写死成 GPU，
+    # 本项目在加载时把它掰回来了。
     tts_device: str = "GPU"
+    # 仅 PyTorch 后端 / PyTorch backend only: bfloat16 | float16 | float32
+    tts_dtype: str = "bfloat16"
+
     tts_voice_host: str = ""
     tts_voice_guest: str = ""
 

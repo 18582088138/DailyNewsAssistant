@@ -144,6 +144,11 @@ DailyDigest  # date, entries[], trend_note_zh/en, stats  ← 三个应用唯一�
 
 ## 4. 产物落盘规则（v3 修订）
 
+> ⚠️ **本节已被 [`05_output_spec.md`](05_output_spec.md) 取代，保留仅供追溯。**
+> 下面的 `topics/` 与 `_history/` 两套布局均已取消（见 §9.2 §9.3），
+> 条目资产的唯一位置是 `outputs/articles/<日期>/<slug>__<id8>/`。
+
+
 **期次目录命名：`YYYYMMDD-DailyNews`**（如 `20260901-DailyNews`）。
 去掉中间的 `daily/` 层——期次级产物按形态直接平铺，单条新闻资产收在 `topics/`。
 
@@ -350,7 +355,8 @@ class LLMProvider(ABC):
 | **P4 的一半提前到了 P2+** | 应用户要求先做了「文章总表 + 条目级落盘」：`db`/`ledger`/`stats` 与 `outputs/articles/<日期>/<slug>__<id8>/` 都已交付 |
 | **新增 P3.5 台账工作台** | 原计划把台账控制台放在 P8，但它是用户最频繁使用的入口，且工作量独立，因此单独成阶段 |
 | **新增 P3.5 bis 文案质量返工** | 按人工撰写的参考稿重写三种文案的提示词，见 [issue 008](issues/008-copy-information-density.md) |
-| **P6 的 narration 层提前到 P3.5** | 三种文案（短视频/口播/长文案）与时长校验已完成，P6 只剩 TTS 与素材归集 |
+| **P6 的 narration 层提前到 P3.5** | 三种文案（短视频/口播/长文案）与时长校验已完成 |
+| **新增 P4.5 语音合成层** | 应用户要求把 TTS 独立成阶段：「后面所有需要输出音频的部分都需要依赖这个功能」。P6 视频版与 P7 播客版都建立在它上面，因此不能作为 P6 的一部分顺带做。同时按用户要求适配 PyTorch CUDA 后端以支持不同部署环境。P6 只剩素材归集与视频合成 |
 
 ### 9.2 落盘路径的唯一权威（2026-09-03 用户决定）
 
@@ -441,9 +447,9 @@ test_dedup.py — 去重与聚类单元测试 / Dedup & clustering unit tests
 | `docs/02_development_plan.md` | 本文档 | 方案变更时 |
 | `docs/03_unit_tests.md` | 每个单元测试的用途/命令/预期 | 每模块 |
 | `docs/04_architecture.md` | 架构图（Mermaid）+ 业务流 | P3 后 |
-| `docs/05_output_spec.md` | 产物目录与文件格式规范 | P4 |
+| `docs/05_output_spec.md` | **产物落盘规范**：两棵树、命名规则、两级只引用不复制、两个 references 各管什么、已作废布局 | ✅ **已完成**（P4） |
 | `docs/06_prompt_spec.md` | 各节点提示词与调优记录 | P3 起持续 |
-| `docs/07_db_schema.md` | 台账表结构与统计口径 | P4 |
+| `docs/07_db_schema.md` | 台账表结构与统计口径 | ✅ **已完成**（P3.5） |
 | `docs/08_feishu_bot_deployment.md` | 飞书机器人 + 长连接**部署指南**：后台配置、权限、发布、open_id 获取、私人电脑部署、Windows 常驻、验证清单、排错表 | ✅ **已完成** |
 | `docs/09_packaging.md` | 部署/打包 | P10 |
 | `docs/10_sources_guide.md` | **添加信息源指南**：`dna probe` 用法、验证步骤、找不到 feed 的出路、当前源清单状态 | ✅ **已完成** |

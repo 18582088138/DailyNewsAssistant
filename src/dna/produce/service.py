@@ -9,6 +9,12 @@ once and the two front-ends cannot drift apart or break differently.
 一次生成做的事 / What one run does:
     查前置 → 取文章 → 调生成器 → 写文件 → 记 productions 表
 
+文本产物调 LLM（花钱），音频产物调 TTS（花时间）/ Two kinds of cost:
+    两者走**同一条路**——同样的「已存在不重跑」、同样的失败入账、同样的逐格重做。
+    差别只在生成器和护栏的理由：一个防账单，一个防「点一下机器就没法用了」。
+    Both take the same path with the same guards; only the generator and the reason for
+    the guard differ — one protects the bill, the other protects the machine.
+
 三条保护 / Three guards:
     1. **已有产物且未指定 force 时直接返回**，不调 LLM。
        GUI 里按钮就在手边，误触一次就是一次计费；默认不重复花钱。
@@ -37,10 +43,20 @@ from dna.core.models import Article, Cluster, NewsItem
 from dna.llm.base import LLMProvider
 from dna.llm.factory import get_llm
 from dna.narration.longform import LongformMode, build_longform, can_build_longform
-from dna.narration.script_builder import ScriptResult, build_narration, build_short_video
+from dna.narration.script_builder import build_narration, build_short_video
 from dna.pipeline.source import load_candidates
+from dna.produce.documents import (
+    front_matter,
+    longform_turns,
+    script_block,
+    spoken_text,
+    strip_front_matter,
+)
 from dna.produce.tasks import ProductionKind, TaskSpec, batch_kinds, json_sidecar, spec
 from dna.store.ledger import ArticleRecord, Ledger, ProductionRecord
+from dna.tts.base import ProgressFn, SpeechSegment, TTSProvider
+from dna.tts.factory import get_tts, voice_for_role
+from dna.tts.segment import split_for_speech
 
 logger = get_logger("produce.service")
 
@@ -86,8 +102,34 @@ class ProduceResult:
             parts.append(f"约 {self.seconds:.0f} 秒")
             if not self.within_target:
                 parts.append("⚠️ 超出目标区间")
-        parts.append(f"{self.calls} 次调用")
+        # 音频不调 LLM，报「0 次调用」只会让人以为出了问题
+        # Audio makes no LLM calls; reporting zero of them would read as a fault.
+        if self.calls:
+            parts.append(f"{self.calls} 次调用")
         return f"{label}：{'，'.join(parts)}"
+
+
+@dataclass
+class Generated:
+    """
+    生成器的产出 / What a generator hands back.
+
+    文本产物填 `text`，音频产物填 `audio`，**两者互斥**。
+    用一个结构而不是一串元组：加一种载荷（将来的图片、字幕）时，
+    改一个字段而不是改所有调用点的解包。
+    Text kinds fill `text`, audio kinds fill `audio`. A record rather than a tuple, so a
+    future payload kind adds a field instead of breaking every unpacking site.
+    """
+
+    text: str = ""
+    audio: bytes | None = None
+    chars: int = 0
+    """记进台账的字数：文本产物是文件长度，音频产物是**被朗读的字数**。"""
+    seconds: float | None = None
+    """文本产物是估算时长，音频产物是**真实时长**——音频存在之后没必要再估。"""
+    calls: int = 0
+    within_target: bool = True
+    sidecar: dict | None = None
 
 
 def produce(
@@ -99,15 +141,20 @@ def produce(
     settings: Settings | None = None,
     profile: Profile | None = None,
     llm: LLMProvider | None = None,
+    tts: TTSProvider | None = None,
+    on_progress: ProgressFn | None = None,
 ) -> ProduceResult:
     """
     为一篇文章生成一种产物 / Produce one kind for one article.
 
     参数 / Args:
-        variant: 长文案的形式，`feature`（专题）或 `interview`（访谈）
-        force:   已有产物时是否重做。**默认不重做，也就不花钱**
-        profile: 时长区间与结尾引导语来自这里；不给则读 profile.yaml
-        llm:     注入 provider；不给则按 .env 构造（测试一律注入假的）
+        variant:     长文案的形式，`feature`（专题）或 `interview`（访谈）
+        force:       已有产物时是否重做。**默认不重做，也就不花钱**
+        profile:     时长区间与结尾引导语来自这里；不给则读 profile.yaml
+        llm:         注入 provider；不给则按 .env 构造（测试一律注入假的）
+        tts:         音频产物的后端；不给则按 .env 构造
+        on_progress: 音频合成的进度回调 `(已完成段, 总段, 已产出秒数)`。
+                     长文案音频要跑半小时，没有进度就只能看着界面发呆
     """
     s = settings or get_settings()
     prof = profile or safe_profile()
@@ -145,15 +192,30 @@ def produce(
             error=f"正文只有 {len(article.text)} 字，不足 {task.min_body_chars} 字，本篇不适合生成{task.label}",
         )
 
-    provider = llm or get_llm()
+    # 音频产物不碰 LLM / audio never touches the LLM
+    #
+    # 无条件 `get_llm()` 的话，只想合成一段音频也会先要求 API key ——
+    # 而这一步一分钱都不该花，也不该依赖网络。
+    # Constructing the LLM unconditionally would demand an API key to synthesise audio,
+    # which spends nothing and needs no network.
+    is_audio = task.audio_of is not None
+    provider = None if is_audio else (llm or get_llm())
+    speaker = (tts or get_tts(s)) if is_audio else None
+    generator = speaker.info if is_audio else provider.info
 
     # 前置缺失时先补上——报错让人手动跑一遍是没必要的摩擦
+    #
+    # **前置一律不 force**：重做音频不该顺手把稿子也重新调一遍 LLM。
+    # 下游重做是免费的，上游重做是要花钱的，让一个动作同时触发两者是危险的默认值。
+    # Prerequisites are never forced: redoing the audio must not re-bill the script.
+    # The downstream redo is free while the upstream one costs money, and letting one
+    # click trigger both is a dangerous default.
     if task.requires is not None:
         prerequisite = ledger.latest_production(article_id, str(task.requires))
         if prerequisite is None or not prerequisite.ok:
             logger.info("先补前置产物：%s", spec(task.requires).label)
             upstream = produce(
-                article_id, task.requires, settings=s, profile=prof, llm=provider, force=force
+                article_id, task.requires, settings=s, profile=prof, llm=llm, force=False
             )
             if not upstream.ok:
                 return ProduceResult(
@@ -164,16 +226,21 @@ def produce(
 
     started = time.perf_counter()
     try:
-        text, seconds, calls, within, sidecar = _generate(
-            task,
-            article,
-            provider,
-            directory,
-            article_id,
-            variant=variant,
-            settings=s,
-            profile=prof,
-        )
+        if is_audio:
+            result = _generate_audio(
+                task, speaker, directory, settings=s, on_progress=on_progress
+            )
+        else:
+            result = _generate(
+                task,
+                article,
+                provider,
+                directory,
+                article_id,
+                variant=variant,
+                settings=s,
+                profile=prof,
+            )
     except Exception as exc:  # noqa: BLE001 - 失败要记进台账，不能只是抛出去
         error = " ".join(str(exc).split())[:300]
         logger.warning("生成失败 %s / %s：%s", article_id[:8], task.kind, error)
@@ -183,19 +250,23 @@ def produce(
             status="failed",
             variant=variant,
             error=error,
-            llm_provider=provider.info.name,
-            llm_model=provider.info.model,
+            llm_provider=generator.name,
+            llm_model=generator.model,
             duration_ms=int((time.perf_counter() - started) * 1000),
         )
         return ProduceResult(kind=task.kind, ok=False, error=error)
 
     directory.mkdir(parents=True, exist_ok=True)
-    output.write_text(text, encoding="utf-8")
-    if sidecar is not None:
+    if result.audio is not None:
+        output.write_bytes(result.audio)
+    else:
+        output.write_text(result.text, encoding="utf-8")
+
+    if result.sidecar is not None:
         sidecar_name = json_sidecar(task)
         if sidecar_name:
             (directory / sidecar_name).write_text(
-                json.dumps(sidecar, ensure_ascii=False, indent=2), encoding="utf-8"
+                json.dumps(result.sidecar, ensure_ascii=False, indent=2), encoding="utf-8"
             )
 
     ledger.record_production(
@@ -204,11 +275,11 @@ def produce(
         status="ok",
         variant=variant,
         output_path=output.relative_to(s.output_path).as_posix(),
-        chars=len(text),
-        est_seconds=seconds,
-        llm_provider=provider.info.name,
-        llm_model=provider.info.model,
-        calls=calls,
+        chars=result.chars,
+        est_seconds=result.seconds,
+        llm_provider=generator.name,
+        llm_model=generator.model,
+        calls=result.calls,
         duration_ms=int((time.perf_counter() - started) * 1000),
     )
 
@@ -216,10 +287,10 @@ def produce(
         kind=task.kind,
         ok=True,
         path=output,
-        chars=len(text),
-        seconds=seconds,
-        calls=calls,
-        within_target=within,
+        chars=result.chars,
+        seconds=result.seconds,
+        calls=result.calls,
+        within_target=result.within_target,
     )
 
 
@@ -325,11 +396,9 @@ def _generate(
     variant: str | None,
     settings: Settings,
     profile: Profile,
-) -> tuple[str, float | None, int, bool, dict | None]:
+) -> Generated:
     """
-    分派到具体的生成器 / Dispatch to the concrete generator.
-
-    返回 `(正文, 估算秒数, 调用次数, 是否达标, JSON 附件)`。
+    分派到具体的文本生成器 / Dispatch to the concrete text generator.
 
     时长区间与结尾引导语都从 profile 取 / Windows and sign-off come from the profile:
         写死在构建器默认值里的话，`profile.yaml` 里那三行时长配置就是死配置——
@@ -345,32 +414,44 @@ def _generate(
         result = summarize_cluster(cluster, llm)
         if result.degraded:
             raise RuntimeError("摘要调用失败，已退回标题；请重试")
-        body = _front_matter(article, "总结") + result.summary + "\n"
-        return body, None, 1, True, None
+        body = front_matter(article, "总结") + result.summary + "\n"
+        return Generated(text=body, chars=len(body), calls=1)
 
     if task.kind is ProductionKind.SUMMARY_EN:
         from dna.pipeline.translate import translate_batch
 
         chinese = read_production(article_id, ProductionKind.SUMMARY_ZH, settings=settings)
-        summary_zh = _strip_front_matter(chinese)
+        summary_zh = strip_front_matter(chinese)
         translated = translate_batch([(article_id, article.title, summary_zh)], llm)
         if article_id not in translated:
             raise RuntimeError("翻译未返回该条目")
         title_en, summary_en = translated[article_id]
         body = f"# {title_en}\n\n> Source: {article.url}\n\n{summary_en}\n"
-        return body, None, 1, True, None
+        return Generated(text=body, chars=len(body), calls=1)
 
     if task.kind is ProductionKind.SHORTVIDEO:
         low, high = profile.video_duration_seconds
         script = build_short_video(article, llm, low=low, high=high, cta=profile.cta_line)
-        body = _front_matter(article, "短视频文案") + _script_block(script)
-        return body, script.seconds, script.calls, script.within_target, None
+        body = front_matter(article, "短视频文案") + script_block(script)
+        return Generated(
+            text=body,
+            chars=len(body),
+            seconds=script.seconds,
+            calls=script.calls,
+            within_target=script.within_target,
+        )
 
     if task.kind is ProductionKind.NARRATION:
         low, high = profile.narration_duration_seconds
         script = build_narration(article, llm, low=low, high=high, cta=profile.cta_line)
-        body = _front_matter(article, "口播文案") + _script_block(script)
-        return body, script.seconds, script.calls, script.within_target, None
+        body = front_matter(article, "口播文案") + script_block(script)
+        return Generated(
+            text=body,
+            chars=len(body),
+            seconds=script.seconds,
+            calls=script.calls,
+            within_target=script.within_target,
+        )
 
     if task.kind is ProductionKind.LONGFORM:
         ok, reason = can_build_longform(article)
@@ -383,12 +464,18 @@ def _generate(
         label = "专题" if mode is LongformMode.FEATURE else "访谈"
         outline = "\n".join(f"{i}. {s_.title}" for i, s_ in enumerate(result.sections, 1))
         body = (
-            _front_matter(article, f"长文案 · {label}（约 {result.seconds / 60:.0f} 分钟）")
+            front_matter(article, f"长文案 · {label}（约 {result.seconds / 60:.0f} 分钟）")
             + f"<!-- 提纲\n{outline}\n-->\n\n"
             + result.text
             + "\n"
         )
-        return body, result.seconds, result.calls, True, result.to_json_dict()
+        return Generated(
+            text=body,
+            chars=len(body),
+            seconds=result.seconds,
+            calls=result.calls,
+            sidecar=result.to_json_dict(),
+        )
 
     raise ValueError(f"未知的产物类型：{task.kind}")
 
@@ -441,46 +528,82 @@ def _load_article(article_id: str, settings: Settings) -> Article | None:
     )
 
 
-def _front_matter(article: Article, label: str) -> str:
+def _generate_audio(
+    task: TaskSpec,
+    tts: TTSProvider,
+    directory: Path,
+    *,
+    settings: Settings,
+    on_progress: ProgressFn | None,
+) -> Generated:
     """
-    产物文件的抬头 / The header every production file carries.
+    把已有的稿子合成为音频 / Synthesise the existing script into audio.
 
-    带上原文标题与链接：这些文件会被单独拷去发布，脱离目录之后仍要能追溯来源——
-    和图片旁边放 .json 是同一个道理。
-    Carries the source title and link because these files get copied out for publishing
-    and must remain traceable on their own — the same reasoning as the per-image sidecar.
+    **输入是稿子文件，不是原文。**稿子已经是为朗读写的了，再回头找原文只会
+    念出一篇没人打算念的东西。
+    The input is the script file, not the article: the script is already written to be
+    read aloud, whereas the article is not.
+
+    两条取文路径 / Two routes into the text:
+        长文案走 `.json` 附件——它已经按发言人切好 turns，访谈的两个角色就是
+        两个音色；其余走 Markdown，解析出「口播」那一段。
+        Long-form reads the JSON sidecar, already split into speaker turns; the others
+        parse the spoken section out of the Markdown.
     """
-    return f"# {article.title}\n\n> {label}　·　来源：{article.url}\n\n"
+    script_spec = spec(task.audio_of)
+    script_path = directory / script_spec.filename
+    try:
+        markdown = script_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"读不到{script_spec.label}：{script_path.name}") from exc
 
+    sidecar_name = json_sidecar(script_spec)
+    sidecar = directory / sidecar_name if sidecar_name else None
+    turns = longform_turns(sidecar) if sidecar and sidecar.exists() else []
 
+    if turns:
+        pairs = [(role, text) for role, text in turns]
+    else:
+        pairs = [("narrator", spoken_text(markdown))]
 
+    segments: list[SpeechSegment] = []
+    spoken_chars = 0
+    for role, text in pairs:
+        voice = voice_for_role(role, settings)
+        for piece in split_for_speech(text):
+            segments.append(SpeechSegment(text=piece, voice=voice, role=role))
+            spoken_chars += len(piece)
 
-def _script_block(script: ScriptResult) -> str:
-    """
-    短视频稿与口播稿的正文排版 / The body layout shared by both video scripts.
+    if not segments:
+        raise RuntimeError(f"{script_spec.label}里没有可朗读的内容")
 
-    两种稿子都带主副标题——发布时标题栏要填，写在产物里就不用再想一遍。
-    Both carry a title pair, because the publishing form needs one and having it in the
-    artefact saves composing it again.
-    """
-    parts = []
-    if script.title:
-        parts.append(f"**主标题：** {script.title}\n")
-    if script.subtitle:
-        parts.append(f"**副标题：** {script.subtitle}\n")
-    parts.append(f"**口播（约 {script.seconds:.0f} 秒 · {script.chars} 字）：**\n")
-    parts.append(f"{script.text}\n")
-    return "\n".join(parts)
+    logger.info("开始合成 %s：%d 段 · %d 字", task.label, len(segments), spoken_chars)
+    clip = tts.synthesize(segments, on_progress=on_progress)
 
+    if not clip.complete:
+        # 缺了几段的音频照样存下来——重跑要几十分钟，把能用的先留住，
+        # 但**必须说出来缺了几段**，否则人会把残缺的音频当成成品发出去。
+        # Incomplete audio is still saved because re-running costs half an hour, but the
+        # gap is reported: otherwise a defective file gets published as finished.
+        logger.warning(
+            "%s 有 %d/%d 段合成失败，音频不完整",
+            task.label,
+            len(clip.failed_segments),
+            clip.segments,
+        )
 
-def _strip_front_matter(text: str) -> str:
-    """去掉抬头，取正文 / Drop the header and return the body."""
-    lines = [ln for ln in text.splitlines() if not ln.startswith(("# ", "> "))]
-    return "\n".join(lines).strip()
+    return Generated(
+        audio=clip.wav,
+        chars=spoken_chars,
+        seconds=clip.seconds,
+        calls=0,
+        within_target=clip.complete,
+    )
 
 
 __all__ = [
     "DEFAULT_NEW_WINDOW_HOURS",
+    "Generated",
     "ProduceResult",
     "is_new_article",
     "produce",

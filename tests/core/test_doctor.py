@@ -192,12 +192,35 @@ def test_tts_model_dir_without_ir_warns(tmp_path: Path) -> None:
 
 
 def test_tts_model_dir_with_ir_ok(tmp_path: Path) -> None:
-    """存在 *.xml 即认为模型就位 / Presence of IR files means the model is ready."""
+    """存在 *.xml 即认为 OpenVINO 后端就位 / IR files mean the OpenVINO backend is ready."""
     (tmp_path / "openvino_talker_language_model.xml").write_text("<net/>", encoding="utf-8")
     s = Settings(_env_file=None, qwen3_tts_model_dir=str(tmp_path))
     r = check_tts_model(s)
     assert r.status is Status.OK
-    assert "1 个 IR 文件" in r.detail
+    assert "1 个OpenVINO IR" in r.detail
+
+
+def test_tts_check_follows_the_configured_backend(tmp_path: Path) -> None:
+    """
+    检查的是**当前配的那个后端**，不是两个都要。
+
+    Intel 机器上没有 CUDA 权重是完全正常的，把它报成问题只会让人学会忽略
+    doctor 的输出——而 doctor 唯一的价值就是它说话时值得当真。
+    Flagging the absence of the backend this machine does not use would train the user to
+    ignore doctor, whose only value is being worth taking seriously.
+    """
+    (tmp_path / "openvino_talker_language_model.xml").write_text("<net/>", encoding="utf-8")
+
+    s = Settings(
+        _env_file=None,
+        tts_provider="qwen3_torch",
+        qwen3_tts_model_dir=str(tmp_path),  # OV 的目录在，但当前用的是 torch 后端
+        qwen3_tts_torch_model_dir="",
+    )
+    r = check_tts_model(s)
+
+    assert r.status is Status.WARN
+    assert "QWEN3_TTS_TORCH_MODEL_DIR" in r.detail
 
 
 # --- 目录可写 / writable directories -----------------------------------------
