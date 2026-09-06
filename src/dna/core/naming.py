@@ -1,18 +1,24 @@
 """
 命名与路径规则 / Naming and path rules.
 
-产物目录规范（方案 v3 定稿）/ Output layout (finalised in plan v3):
+产物目录规范 / Output layout（权威说明见 `docs/05_output_spec.md`）:
 
-    outputs/20260901-DailyNews/
-    ├── _digest.json
-    ├── _references.md
-    ├── graphic/                 场景1 整期图文
-    ├── podcast/                 场景3 整期播客
-    ├── topics/01_<标题slug>/    单条新闻的全部资产
-    └── _history/<时间戳>/       重做时旧产物移入，不覆盖
+    outputs/
+    ├── 20260901-DailyNews/                     期次级：只放整期产物
+    │   ├── _digest.json                        结构化事实源
+    │   ├── _references.md                      全期来源汇总
+    │   ├── graphic/                            场景1 整期图文
+    │   └── podcast/                            场景3 整期播客
+    └── articles/20260901/<slug>__<id8>/        条目级：单篇的全部资产
 
-本模块只负责「叫什么名字」，不做任何 I/O；真正的建目录与写文件在 store/output.py。
-This module only decides names; all actual I/O lives in store/output.py.
+两级目录**按 id 相互引用，不复制文件**：一篇文章可以进多期，复制就会出现两份
+会各自漂移的副本。期次目录的装配在 `store/issue_store.py`，条目目录在
+`store/article_store.py`。
+The two levels reference each other by id rather than copying: an article can appear in
+several issues, and copies would drift apart.
+
+本模块只负责「叫什么名字」，不做任何 I/O。
+This module only decides names; it performs no I/O.
 """
 
 from __future__ import annotations
@@ -81,30 +87,6 @@ def issue_dir_name(day: Date | datetime) -> str:
     return f"{day:%Y%m%d}-{ISSUE_SUFFIX}"
 
 
-def topic_dir_name(rank: int, title: str, max_len: int = DEFAULT_SLUG_MAX_LEN) -> str:
-    """
-    单条新闻的目录名：两位序号 + slug，保证目录按日报顺序排列。
-    Directory name for one news item: a zero-padded rank plus the slug, so the
-    folder listing follows the digest order.
-
-    >>> topic_dir_name(1, "OpenAI 发布新模型")
-    '01_OpenAI-发布新模型'
-    """
-    if rank < 1:
-        raise ValueError("rank starts at 1 / 序号从 1 开始")
-    return f"{rank:02d}_{slugify(title, max_len)}"
-
-
-def history_dir_name(moment: datetime) -> str:
-    """
-    重做时归档旧产物的目录名 / Directory name used to archive superseded outputs.
-
-    >>> history_dir_name(datetime.datetime(2026, 9, 1, 14, 30, 5))
-    '20260901-143005'
-    """
-    return f"{moment:%Y%m%d-%H%M%S}"
-
-
 def lang_suffix_name(stem: str, lang: str, ext: str) -> str:
     """
     带语言后缀的文件名 / A filename carrying its language suffix.
@@ -118,9 +100,7 @@ def lang_suffix_name(stem: str, lang: str, ext: str) -> str:
 __all__ = [
     "DEFAULT_SLUG_MAX_LEN",
     "ISSUE_SUFFIX",
-    "history_dir_name",
     "issue_dir_name",
     "lang_suffix_name",
     "slugify",
-    "topic_dir_name",
 ]

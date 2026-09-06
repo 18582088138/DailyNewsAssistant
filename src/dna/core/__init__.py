@@ -31,7 +31,7 @@ from dna.core.models import (
     RawItem,
     SourceKind,
 )
-from dna.core.naming import issue_dir_name, slugify, topic_dir_name
+from dna.core.naming import issue_dir_name, slugify
 
 __all__ = [
     "AppKind",
@@ -64,5 +64,4 @@ __all__ = [
     "load_sources",
     "setup_logging",
     "slugify",
-    "topic_dir_name",
 ]

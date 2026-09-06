@@ -27,7 +27,7 @@ test_extract.py —— 正文与媒体抽取单元测试 / Article and media ext
      14. 数量上限与去重
 
 预期 / Expected:
-    26 passed；耗时 < 3s；全程离线，只读本地样例文件
+    47 passed；耗时 < 3s；全程离线，只读本地样例文件
 """
 
 from __future__ import annotations
@@ -477,6 +477,28 @@ def test_arxiv_funder_logo_is_filtered() -> None:
     <html><body><article>
       <img src="https://arxiv.org/static/base/1.0.1/images/funders/simons-foundation.png" />
       <img src="https://arxiv.org/static/sponsors/acme-corp.png" />
+    </article></body></html>
+    """
+    assert extract_media(html, "https://arxiv.org/abs/2509.00001") == []
+
+
+def test_plural_chrome_directories_are_filtered() -> None:
+    """
+    装饰性资源多半挂在**复数目录**下，词边界规则必须认复数形式。
+
+    实测 20260902 那一期的 arXiv 条目，5 张「配图」全是页脚装饰，其中 4 张走的是
+    `/images/icons/social/...`——`icon` 在词表里，但边界规则要求其后是非字母数字，
+    于是 `icons` 整个漏过去了。这一条由 P4 的 `_references.md` 暴露出来：
+    把每张图的原始地址平铺出来之后，垃圾资源一眼可见。
+    Chrome assets usually sit under plural directory names, so the word-boundary rule
+    must accept them. Surfaced by P4's reference roll-up, which lists every image URL.
+    """
+    html = """
+    <html><body><article>
+      <img src="https://arxiv.org/static/browse/0.3.4/images/icons/social/reddit.png" />
+      <img src="https://arxiv.org/static/browse/0.3.4/images/icons/social/bluesky.png" />
+      <img src="https://cdn.example.com/assets/logos/brand.png" />
+      <img src="https://cdn.example.com/img/banners/top.jpg" />
     </article></body></html>
     """
     assert extract_media(html, "https://arxiv.org/abs/2509.00001") == []

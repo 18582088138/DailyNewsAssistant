@@ -55,7 +55,28 @@ dna digest --since-days 3        # 回看 3 天（默认 2 天）
 dna digest --source qbitai       # 只用某个来源的文章
 ```
 
-产物是 **`outputs/YYYYMMDD-DailyNews/_digest.json`**。
+产物落在 **`outputs/YYYYMMDD-DailyNews/`**，两个文件：
+
+| 文件 | 是什么 |
+|---|---|
+| `_digest.json` | 结构化事实源，可重放。图文/视频/播客三个应用只读它 |
+| `_references.md` | 全期来源汇总：每条的原文、多源出处、图片与视频原始地址、条目目录在哪 |
+
+**期次目录里没有条目资产。**正文、配图、五种文案都在 `outputs/articles/` 下，
+这里按 id 引用过去——一篇文章可以进多期，复制会产生两份各自漂移的副本。
+完整规范见 [05_output_spec.md](05_output_spec.md)。
+
+### 看已经生成的期次
+
+```bash
+dna issue --list             # 列出全部期次
+dna issue                    # 最新一期：条目、评分、图视数、条目目录是否定位到
+dna issue --date 20260902    # 指定一期
+dna issue --refresh          # 只重建 _references.md（零费用）
+```
+
+`--refresh` 用在重抓之后：重抓会改标题 → 改 slug → 改目录名，期次里的链接因此
+指错。它**只重算引用，不碰 `_digest.json`，一次 LLM 都不调**。
 
 ### 人工挑几篇做一期
 
@@ -173,4 +194,6 @@ dna digest --bilingual
 - 提示词与调优记录：[06_prompt_spec.md](06_prompt_spec.md)
 - 添加与过滤信息源：[10_sources_guide.md](10_sources_guide.md)
 - 文章总表与落盘：[11_article_store_guide.md](11_article_store_guide.md)
+- 产物落盘规范（唯一权威）：[05_output_spec.md](05_output_spec.md)
 - 实现：`src/dna/pipeline/`（`clean` · `dedup` · `score` · `summarize` · `translate` · `trend` · `flow`）
+- 期次落盘与装配：`src/dna/store/issue_store.py`

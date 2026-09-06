@@ -11,12 +11,15 @@ test_naming.py —— 命名与路径规则单元测试 / Naming and path rule u
     4. slugify()：Windows 保留设备名（CON/PRN/COM1…）必须回退为 untitled
     5. slugify()：结尾的点与空格必须去掉（Windows 不允许）
     6. slugify()：空标题 / 纯标点标题回退为 untitled
-    7. topic_dir_name()：两位补零序号 + slug，序号 < 1 报错
-    8. history_dir_name() 与 lang_suffix_name() 格式
-    9. 端到端：用真实的中文新闻标题生成完整相对路径，可安全用于 Windows
+    7. lang_suffix_name() 格式
+    8. 端到端：用真实的中文新闻标题生成完整条目路径，可安全用于 Windows
 
 预期 / Expected:
-    26 passed；耗时 < 1s；纯字符串运算，不做任何 I/O
+    34 passed；耗时 < 1s；纯字符串运算，不做任何 I/O
+
+注 / Note:
+    `topic_dir_name` 与 `history_dir_name` 已随 `topics/`、`_history/` 两套布局一并取消
+    （见 `docs/02_development_plan.md` §9.2 §9.3），因此不再有对应测试。
 """
 
 from __future__ import annotations
@@ -25,13 +28,7 @@ from datetime import date, datetime
 
 import pytest
 
-from dna.core.naming import (
-    history_dir_name,
-    issue_dir_name,
-    lang_suffix_name,
-    slugify,
-    topic_dir_name,
-)
+from dna.core.naming import issue_dir_name, lang_suffix_name, slugify
 
 # Windows 不允许出现在文件名中的字符 / characters Windows forbids in filenames
 WINDOWS_ILLEGAL = '<>:"/\\|?*'
@@ -124,27 +121,7 @@ def test_slugify_falls_back_to_untitled(raw: str) -> None:
     assert slugify(raw) == "untitled"
 
 
-# --- 条目目录 / topic directory ----------------------------------------------
-
-
-def test_topic_dir_name_pads_rank() -> None:
-    """序号两位补零，保证目录按日报顺序排列 / Rank is zero-padded so folders sort correctly."""
-    assert topic_dir_name(1, "OpenAI 发布新模型") == "01_OpenAI-发布新模型"
-    assert topic_dir_name(12, "第十二条") == "12_第十二条"
-
-
-def test_topic_dir_name_rejects_bad_rank() -> None:
-    """序号从 1 开始 / Ranks are 1-based."""
-    with pytest.raises(ValueError, match="rank starts at 1"):
-        topic_dir_name(0, "标题")
-
-
 # --- 其它命名 / other names --------------------------------------------------
-
-
-def test_history_dir_name() -> None:
-    """重做归档目录名 / Archive directory name used when redoing an output."""
-    assert history_dir_name(datetime(2026, 9, 1, 14, 30, 5)) == "20260901-143005"
 
 
 def test_lang_suffix_name() -> None:
@@ -163,9 +140,10 @@ def test_full_relative_path_is_windows_safe() -> None:
     segment is usable on Windows.
     """
     title = '某公司发布 "新一代" 多模态大模型：推理成本降低 40%？'
-    path = f"{issue_dir_name(date(2026, 9, 1))}/topics/{topic_dir_name(3, title)}/brief/brief.zh.md"
+    path = f"articles/20260901/{slugify(title)}__decef4a4/{lang_suffix_name('narration', 'zh', 'md')}"
 
-    assert path.startswith("20260901-DailyNews/topics/03_")
+    assert path.startswith("articles/20260901/")
+    assert path.endswith("__decef4a4/narration.zh.md")
     # 逐段检查非法字符（跳过路径分隔符本身）
     for segment in path.split("/"):
         assert not (set(segment) & set('<>:"\\|?*'))

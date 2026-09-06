@@ -57,10 +57,10 @@ _NON_CONTENT_MARKERS = (
     # Sponsor and partner marks: arXiv's footer carries funders/simons-foundation.png,
     # and since an arXiv abstract page has no images of its own that logo ended up
     # standing in as the entry's illustration.
-    "funder", "funders", "sponsor", "sponsors", "partner", "partners", "affiliate",
+    "funder", "sponsor", "partner", "affiliate",
 )
 
-# 按「词」而非子串匹配 / match markers as words, not bare substrings
+# 按「词」而非子串匹配，并允许复数 / match markers as words, plural forms included
 #
 # 子串匹配会误伤真实配图：`overhead-view.jpg`、`headline-photo.png` 都含 "head"，
 # 但它们是内容图。以非字母数字为边界，既能命中 `qbitai-logo-1.png` 与 `head.jpg`，
@@ -69,8 +69,17 @@ _NON_CONTENT_MARKERS = (
 # `headline-photo.png` both contain "head" yet are content. Anchoring on
 # non-alphanumeric boundaries catches `qbitai-logo-1.png` and `head.jpg` while
 # leaving those alone.
+#
+# 尾部的 `s?` 不是可有可无的 / The trailing `s?` is not cosmetic:
+#     这些词在 URL 里多半是**目录名**，而目录名习惯用复数——
+#     `/images/icons/social/reddit.png` 里是 `icons` 不是 `icon`，边界规则会让它整个漏过去。
+#     实测 arXiv 的 5 张「配图」全是页脚装饰，其中 4 张走的就是 `/icons/` 这条路。
+#     These words usually appear as directory names in a URL, and directories are
+#     conventionally plural: `/images/icons/social/reddit.png` carries `icons`, not
+#     `icon`, so the word-boundary rule would let the whole path through. Measured on
+#     arXiv, all five "images" were footer chrome and four of them came in via `/icons/`.
 _MARKER_RE = re.compile(
-    r"(?:^|[^a-z0-9])(?:" + "|".join(_NON_CONTENT_MARKERS) + r")(?:[^a-z0-9]|$)",
+    r"(?:^|[^a-z0-9])(?:" + "|".join(_NON_CONTENT_MARKERS) + r")s?(?:[^a-z0-9]|$)",
     re.IGNORECASE,
 )
 
