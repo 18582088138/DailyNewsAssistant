@@ -27,6 +27,16 @@ once and the two front-ends cannot drift apart or break differently.
        人会以为没跑过，于是再点一次、再失败一次。
        Failures are recorded too. Without a row the table shows "not generated", the
        user assumes it never ran, clicks again and fails again.
+
+重做必须绕开 LLM 缓存 / A redo must bypass the response cache:
+    响应缓存**故意不设过期**，键是「provider + 模型 + 完整提示词」——同样的输入
+    永远给同样的输出，这正是它的价值。但「重做」的字面意思就是**要一个不一样的**，
+    照常走缓存的话，模型确实被调了、文件确实被重写了，内容却一字未变——
+    看起来就像「生成了但没保存」。所以 `force=True` 时 provider 不带缓存。
+    The cache deliberately never expires and keys on the prompt, which is exactly what
+    makes it valuable. But "redo" means "give me a different one": served from cache, the
+    call happens, the file is rewritten, and not one character changes — which reads as
+    "it generated but did not save". `force=True` therefore builds an uncached provider.
 """
 
 from __future__ import annotations
@@ -34,7 +44,7 @@ from __future__ import annotations
 import json
 import time
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 
 from dna.core.config import Profile, Settings, get_settings, safe_profile
@@ -52,7 +62,16 @@ from dna.produce.documents import (
     spoken_text,
     strip_front_matter,
 )
-from dna.produce.tasks import ProductionKind, TaskSpec, batch_kinds, json_sidecar, spec
+from dna.produce.tasks import (
+    DEFAULT_LANGUAGE,
+    ProductionKind,
+    TaskSpec,
+    batch_kinds,
+    json_sidecar,
+    normalize_lang,
+    prerequisite,
+    spec,
+)
 from dna.store.ledger import ArticleRecord, Ledger, ProductionRecord
 from dna.tts.base import ProgressFn, SpeechSegment, TTSProvider
 from dna.tts.factory import get_tts, voice_for_role
@@ -60,12 +79,12 @@ from dna.tts.segment import split_for_speech
 
 logger = get_logger("produce.service")
 
-# 「新导入」标识默认的时间窗（小时）/ default window for the "new import" flag
-# 24 小时：日报是按天做的，早上粘的链接当天就该处理完。实际取值来自
-# `Profile.new_badge_hours`，这里只是不传参时的兜底。
-# One day, matching the daily cadence: links pasted in the morning are meant to be worked
-# through the same day. The real value comes from the profile.
-DEFAULT_NEW_WINDOW_HOURS = 24
+# 算「人工投递」的来源 / the sources that count as manually submitted
+#
+# 界面上粘的链接与飞书投进来的，都是**人特意挑出来要处理的**；RSS 抓来的是候选池。
+# NEW 标识区分的正是这两者，见 `is_new_article`。
+# A pasted or messaged link was deliberately chosen; the RSS feed is a candidate pool.
+MANUAL_SOURCES = frozenset({"gui", "inbox"})
 
 
 @dataclass
@@ -124,7 +143,15 @@ class Generated:
     text: str = ""
     audio: bytes | None = None
     chars: int = 0
-    """记进台账的字数：文本产物是文件长度，音频产物是**被朗读的字数**。"""
+    """
+    记进台账的字数：**正文本身**，不含抬头与主副标题；音频产物是被朗读的字数。
+
+    不能填 `len(text)`：抬头带着标题和整条 URL，一篇 250 字的短视频稿会显示成
+    454 字，与 `seconds`（只量正文）和文件里那行「约 N 秒 · M 字」互相矛盾——
+    三个数字说的不是同一件事，人只会以为是哪里算错了。
+    Never the whole document: the header carries the title and a full URL, so a 250-word
+    script reports as 454 and contradicts both `seconds` and the file's own count.
+    """
     seconds: float | None = None
     """文本产物是估算时长，音频产物是**真实时长**——音频存在之后没必要再估。"""
     calls: int = 0
@@ -136,8 +163,10 @@ def produce(
     article_id: str,
     kind: ProductionKind | str,
     *,
+    lang: str = DEFAULT_LANGUAGE,
     variant: str | None = None,
     force: bool = False,
+    instructions: str = "",
     settings: Settings | None = None,
     profile: Profile | None = None,
     llm: LLMProvider | None = None,
@@ -148,8 +177,11 @@ def produce(
     为一篇文章生成一种产物 / Produce one kind for one article.
 
     参数 / Args:
+        lang:        输出语言，`zh` 或 `en`。语言是产物的一个维度，不是另一种产物
         variant:     长文案的形式，`feature`（专题）或 `interview`（访谈）
         force:       已有产物时是否重做。**默认不重做，也就不花钱**
+        instructions: 这一次的额外要求（「加长到 40 秒」「用词再专业一点」）。
+                     它会接在提示词末尾并记进台账，下次重做能看到上次改了什么
         profile:     时长区间与结尾引导语来自这里；不给则读 profile.yaml
         llm:         注入 provider；不给则按 .env 构造（测试一律注入假的）
         tts:         音频产物的后端；不给则按 .env 构造
@@ -159,6 +191,7 @@ def produce(
     s = settings or get_settings()
     prof = profile or safe_profile()
     task = spec(kind)
+    lang = normalize_lang(lang)
     ledger = Ledger(s.db_file)
 
     record = ledger.get(article_id)
@@ -168,9 +201,9 @@ def produce(
         return ProduceResult(kind=task.kind, ok=False, error="这篇文章还没有落盘目录")
 
     directory = s.output_path / record.store_dir
-    output = directory / task.filename
+    output = directory / task.filename_for(lang)
 
-    existing = ledger.latest_production(article_id, str(task.kind))
+    existing = ledger.latest_production(article_id, str(task.kind), lang)
     if not force and existing is not None and existing.ok and output.exists():
         return ProduceResult(
             kind=task.kind,
@@ -199,7 +232,7 @@ def produce(
     # Constructing the LLM unconditionally would demand an API key to synthesise audio,
     # which spends nothing and needs no network.
     is_audio = task.audio_of is not None
-    provider = None if is_audio else (llm or get_llm())
+    provider = None if is_audio else (llm or get_llm(cache=not force))
     speaker = (tts or get_tts(s)) if is_audio else None
     generator = speaker.info if is_audio else provider.info
 
@@ -210,25 +243,33 @@ def produce(
     # Prerequisites are never forced: redoing the audio must not re-bill the script.
     # The downstream redo is free while the upstream one costs money, and letting one
     # click trigger both is a dangerous default.
-    if task.requires is not None:
-        prerequisite = ledger.latest_production(article_id, str(task.requires))
-        if prerequisite is None or not prerequisite.ok:
-            logger.info("先补前置产物：%s", spec(task.requires).label)
+    need = prerequisite(task.kind, lang)
+    if need is not None:
+        need_kind, need_lang = need
+        upstream_record = ledger.latest_production(article_id, str(need_kind), need_lang)
+        if upstream_record is None or not upstream_record.ok:
+            logger.info("先补前置产物：%s / %s", spec(need_kind).label, need_lang)
             upstream = produce(
-                article_id, task.requires, settings=s, profile=prof, llm=llm, force=False
+                article_id,
+                need_kind,
+                lang=need_lang,
+                settings=s,
+                profile=prof,
+                llm=llm,
+                force=False,
             )
             if not upstream.ok:
                 return ProduceResult(
                     kind=task.kind,
                     ok=False,
-                    error=f"前置产物「{spec(task.requires).label}」未能生成：{upstream.error}",
+                    error=f"前置产物「{spec(need_kind).label}」未能生成：{upstream.error}",
                 )
 
     started = time.perf_counter()
     try:
         if is_audio:
             result = _generate_audio(
-                task, speaker, directory, settings=s, on_progress=on_progress
+                task, speaker, directory, lang=lang, settings=s, on_progress=on_progress
             )
         else:
             result = _generate(
@@ -237,7 +278,9 @@ def produce(
                 provider,
                 directory,
                 article_id,
+                lang=lang,
                 variant=variant,
+                instructions=instructions,
                 settings=s,
                 profile=prof,
             )
@@ -248,7 +291,9 @@ def produce(
             article_id,
             str(task.kind),
             status="failed",
+            lang=lang,
             variant=variant,
+            instructions=instructions,
             error=error,
             llm_provider=generator.name,
             llm_model=generator.model,
@@ -263,7 +308,7 @@ def produce(
         output.write_text(result.text, encoding="utf-8")
 
     if result.sidecar is not None:
-        sidecar_name = json_sidecar(task)
+        sidecar_name = json_sidecar(task, lang)
         if sidecar_name:
             (directory / sidecar_name).write_text(
                 json.dumps(result.sidecar, ensure_ascii=False, indent=2), encoding="utf-8"
@@ -273,7 +318,9 @@ def produce(
         article_id,
         str(task.kind),
         status="ok",
+        lang=lang,
         variant=variant,
+        instructions=instructions,
         output_path=output.relative_to(s.output_path).as_posix(),
         chars=result.chars,
         est_seconds=result.seconds,
@@ -297,6 +344,7 @@ def produce(
 def produce_all(
     article_id: str,
     *,
+    lang: str = DEFAULT_LANGUAGE,
     force: bool = False,
     settings: Settings | None = None,
     profile: Profile | None = None,
@@ -316,26 +364,34 @@ def produce_all(
     provider = llm or get_llm()
     prof = profile or safe_profile()
     return [
-        produce(article_id, kind, force=force, settings=settings, profile=prof, llm=provider)
+        produce(
+            article_id,
+            kind,
+            lang=lang,
+            force=force,
+            settings=settings,
+            profile=prof,
+            llm=provider,
+        )
         for kind in batch_kinds()
     ]
 
 
 def is_new_article(
     record: ArticleRecord,
-    productions: dict[str, ProductionRecord],
-    *,
-    now: datetime | None = None,
-    within_hours: int = DEFAULT_NEW_WINDOW_HOURS,
+    productions: dict,
 ) -> bool:
     """
-    这篇是「刚导入、还没动过」的吗 / Is this a fresh, untouched import?
+    这篇是「手动导入、还没动过」的吗 / Is this a manually imported, untouched article?
 
     两个条件同时成立 / Both conditions must hold:
-        1. **一条产物记录都没有**——包括失败的那种
-        2. 首次入库在最近 `within_hours` 小时内
+        1. **是人工投递进来的**（界面粘的链接或飞书投的），不是 RSS 抓来的
+        2. **一条产物记录都没有**——包括失败的那种
 
-    为什么第 1 条算上失败的 / Why a failed attempt also clears the flag:
+    标识**一直挂着，直到对它调过一次 LLM 为止**。
+    The badge stays until an LLM has been called for the article.
+
+    为什么第 2 条算上失败的 / Why a failed attempt also clears the flag:
         失败的记录说明**已经调过 LLM 了**（钱已经花了），这篇不再是「没动过」。
         而且失败的格子本身就显示 ▲，和 NEW 摆在一起是自相矛盾的信号：
         一个说「还没开始」，一个说「试过而且出错了」。
@@ -343,30 +399,34 @@ def is_new_article(
         the article is no longer untouched. The cell also already shows a failure glyph,
         and pairing it with NEW would send contradicting signals.
 
-    为什么必须有时间窗 / Why the time window is not optional:
-        实测台账里 37 篇有 32 篇没有任何产物——RSS 抓进来的存量文章大多如此。
-        只看「有没有产物」的话，NEW 会挂在 32 行上，标识就完全失去意义了。
-        标识存在的目的是**从几十行里找出刚粘进去的那几条**。
-        Measured against the real ledger, 32 of 37 articles have no productions at all —
-        most of the RSS backlog never gets any. Without the window the badge would sit on
-        32 rows and mean nothing, when its entire purpose is to pick the few just pasted
-        out of dozens.
-
-    参数 / Args:
-        within_hours: 时间窗；**≤ 0 表示不设时间窗**（只看有没有产物）
+    为什么改成看来源，而不是看时间 / Why the source replaced the time window:
+        原先加了 24 小时的时间窗，因为实测 37 篇里有 32 篇没有任何产物——
+        RSS 抓来的存量文章大多如此，只看「有没有产物」的话 NEW 会挂在 32 行上。
+        但时间窗解决错了问题：它让**昨天粘进来、今天还没处理**的链接第二天就
+        失去标识——而那恰恰是最需要标识的一条。实测 `fe3b7d3c` 导入 47 小时、
+        零产物，正是这样丢掉的。
+        真正要区分的是**来源**：人工粘进来的链接是「我特意要处理的」，
+        RSS 抓来的是「候选池」。按来源过滤后实测只有 5 行挂 NEW，
+        既解决了泛滥，又不会因为过了一夜就把待办清空。
+        The window solved the wrong problem: it stripped the badge from a link pasted
+        yesterday and still untouched today — precisely the row that most needs it. What
+        actually distinguishes them is provenance: a pasted link was deliberately chosen,
+        while the RSS backlog is a candidate pool. Filtering by source leaves five badged
+        rows in the real ledger, without emptying the to-do list overnight.
     """
     if productions:
         return False
-    if within_hours <= 0:
-        return True
-    reference = now or datetime.now()
-    return (reference - record.first_seen_at) <= timedelta(hours=within_hours)
+    return record.via in MANUAL_SOURCES
 
 
 
 
 def read_production(
-    article_id: str, kind: ProductionKind | str, *, settings: Settings | None = None
+    article_id: str,
+    kind: ProductionKind | str,
+    *,
+    lang: str = DEFAULT_LANGUAGE,
+    settings: Settings | None = None,
 ) -> str:
     """读回已生成的产物内容 / Read back a production's text; empty when absent."""
     s = settings or get_settings()
@@ -374,7 +434,7 @@ def read_production(
     if record is None or not record.store_dir:
         return ""
 
-    path = s.output_path / record.store_dir / spec(kind).filename
+    path = s.output_path / record.store_dir / spec(kind).filename_for(lang)
     try:
         return path.read_text(encoding="utf-8")
     except OSError:
@@ -393,7 +453,9 @@ def _generate(
     directory: Path,
     article_id: str,
     *,
+    lang: str,
     variant: str | None,
+    instructions: str,
     settings: Settings,
     profile: Profile,
 ) -> Generated:
@@ -407,35 +469,49 @@ def _generate(
         `profile.yaml` inert: editing them would silently do nothing, which is worse than
         not offering the setting at all.
     """
-    if task.kind is ProductionKind.SUMMARY_ZH:
-        from dna.pipeline.summarize import summarize_cluster
+    if task.kind is ProductionKind.SUMMARY:
+        if lang == "zh":
+            from dna.pipeline.summarize import summarize_cluster
 
-        cluster = _as_cluster(article, article_id)
-        result = summarize_cluster(cluster, llm)
-        if result.degraded:
-            raise RuntimeError("摘要调用失败，已退回标题；请重试")
-        body = front_matter(article, "总结") + result.summary + "\n"
-        return Generated(text=body, chars=len(body), calls=1)
+            cluster = _as_cluster(article, article_id)
+            result = summarize_cluster(cluster, llm, instructions=instructions)
+            if result.degraded:
+                raise RuntimeError("摘要调用失败，已退回标题；请重试")
+            body = front_matter(article, "总结") + result.summary + "\n"
+            return Generated(text=body, chars=len(result.summary), calls=1)
 
-    if task.kind is ProductionKind.SUMMARY_EN:
+        # 英文总结**翻译已写好的中文**，不重写一遍：便宜，而且中英两版保证说的是
+        # 同一件事。见 `tasks.TaskSpec.translated_from`。
         from dna.pipeline.translate import translate_batch
 
-        chinese = read_production(article_id, ProductionKind.SUMMARY_ZH, settings=settings)
+        chinese = read_production(
+            article_id, ProductionKind.SUMMARY, lang="zh", settings=settings
+        )
         summary_zh = strip_front_matter(chinese)
-        translated = translate_batch([(article_id, article.title, summary_zh)], llm)
+        translated = translate_batch(
+            [(article_id, article.title, summary_zh)], llm, instructions=instructions
+        )
         if article_id not in translated:
             raise RuntimeError("翻译未返回该条目")
         title_en, summary_en = translated[article_id]
         body = f"# {title_en}\n\n> Source: {article.url}\n\n{summary_en}\n"
-        return Generated(text=body, chars=len(body), calls=1)
+        return Generated(text=body, chars=len(summary_en), calls=1)
 
     if task.kind is ProductionKind.SHORTVIDEO:
         low, high = profile.video_duration_seconds
-        script = build_short_video(article, llm, low=low, high=high, cta=profile.cta_line)
-        body = front_matter(article, "短视频文案") + script_block(script)
+        script = build_short_video(
+            article,
+            llm,
+            low=low,
+            high=high,
+            cta=profile.cta_line,
+            lang=lang,
+            instructions=instructions,
+        )
+        body = front_matter(article, f"短视频文案（{lang}）") + script_block(script)
         return Generated(
             text=body,
-            chars=len(body),
+            chars=script.chars,
             seconds=script.seconds,
             calls=script.calls,
             within_target=script.within_target,
@@ -443,11 +519,19 @@ def _generate(
 
     if task.kind is ProductionKind.NARRATION:
         low, high = profile.narration_duration_seconds
-        script = build_narration(article, llm, low=low, high=high, cta=profile.cta_line)
-        body = front_matter(article, "口播文案") + script_block(script)
+        script = build_narration(
+            article,
+            llm,
+            low=low,
+            high=high,
+            cta=profile.cta_line,
+            lang=lang,
+            instructions=instructions,
+        )
+        body = front_matter(article, f"口播文案（{lang}）") + script_block(script)
         return Generated(
             text=body,
-            chars=len(body),
+            chars=script.chars,
             seconds=script.seconds,
             calls=script.calls,
             within_target=script.within_target,
@@ -460,18 +544,22 @@ def _generate(
 
         mode = LongformMode(variant or LongformMode.FEATURE)
         low, high = profile.longform_duration_seconds
-        result = build_longform(article, llm, mode=mode, low=low, high=high)
+        result = build_longform(
+            article, llm, mode=mode, low=low, high=high, lang=lang, instructions=instructions
+        )
         label = "专题" if mode is LongformMode.FEATURE else "访谈"
         outline = "\n".join(f"{i}. {s_.title}" for i, s_ in enumerate(result.sections, 1))
         body = (
-            front_matter(article, f"长文案 · {label}（约 {result.seconds / 60:.0f} 分钟）")
+            front_matter(
+                article, f"长文案 · {label} · {lang}（约 {result.seconds / 60:.0f} 分钟）"
+            )
             + f"<!-- 提纲\n{outline}\n-->\n\n"
             + result.text
             + "\n"
         )
         return Generated(
             text=body,
-            chars=len(body),
+            chars=len(result.text),
             seconds=result.seconds,
             calls=result.calls,
             sidecar=result.to_json_dict(),
@@ -533,6 +621,7 @@ def _generate_audio(
     tts: TTSProvider,
     directory: Path,
     *,
+    lang: str,
     settings: Settings,
     on_progress: ProgressFn | None,
 ) -> Generated:
@@ -551,13 +640,13 @@ def _generate_audio(
         parse the spoken section out of the Markdown.
     """
     script_spec = spec(task.audio_of)
-    script_path = directory / script_spec.filename
+    script_path = directory / script_spec.filename_for(lang)
     try:
         markdown = script_path.read_text(encoding="utf-8")
     except OSError as exc:
         raise RuntimeError(f"读不到{script_spec.label}：{script_path.name}") from exc
 
-    sidecar_name = json_sidecar(script_spec)
+    sidecar_name = json_sidecar(script_spec, lang)
     sidecar = directory / sidecar_name if sidecar_name else None
     turns = longform_turns(sidecar) if sidecar and sidecar.exists() else []
 
@@ -569,7 +658,9 @@ def _generate_audio(
     segments: list[SpeechSegment] = []
     spoken_chars = 0
     for role, text in pairs:
-        voice = voice_for_role(role, settings)
+        # 音色跟着语言走：英文稿用英文音色，否则模型会用中文的发音习惯念英文
+        # The voice follows the language; otherwise English is read with Chinese phonetics.
+        voice = voice_for_role(role, settings, lang=lang)
         for piece in split_for_speech(text):
             segments.append(SpeechSegment(text=piece, voice=voice, role=role))
             spoken_chars += len(piece)
@@ -602,7 +693,7 @@ def _generate_audio(
 
 
 __all__ = [
-    "DEFAULT_NEW_WINDOW_HOURS",
+    "MANUAL_SOURCES",
     "Generated",
     "ProduceResult",
     "is_new_article",

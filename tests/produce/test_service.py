@@ -57,13 +57,18 @@ def settings(tmp_path: Path) -> Settings:
     )
 
 
-def seed(settings: Settings, *, body: str = "这是原文的技术内容。" * 200) -> str:
+def seed(
+    settings: Settings,
+    *,
+    body: str = "这是原文的技术内容。" * 200,
+    via: SourceKind = SourceKind.RSS,
+) -> str:
     """往台账里放一篇可用的文章 / Seed one usable article."""
     ledger = Ledger(settings.db_file)
     article_id, _ = ledger.register(
         RawItem(
             source_id="qbitai",
-            via=SourceKind.RSS,
+            via=via,
             url="https://e.com/1",
             title="某公司发布新一代推理引擎",
         )
@@ -122,8 +127,8 @@ def test_existing_production_is_reused_without_calling_the_llm(settings: Setting
     article_id = seed(settings)
     llm = ScriptedProvider("fake", [summary_reply()])
 
-    first = produce(article_id, ProductionKind.SUMMARY_ZH, settings=settings, llm=llm)
-    second = produce(article_id, ProductionKind.SUMMARY_ZH, settings=settings, llm=llm)
+    first = produce(article_id, ProductionKind.SUMMARY, settings=settings, llm=llm)
+    second = produce(article_id, ProductionKind.SUMMARY, settings=settings, llm=llm)
 
     assert llm.call_count == 1, "第二次不该调用 LLM"
     assert first.ok and not first.skipped
@@ -141,11 +146,11 @@ def test_force_regenerates_and_records_a_new_version(settings: Settings) -> None
     llm = ScriptedProvider("fake", [summary_reply("第一版摘要内容，说明核心事实。"),
                                     summary_reply("第二版摘要内容，说明核心事实。")])
 
-    produce(article_id, ProductionKind.SUMMARY_ZH, settings=settings, llm=llm)
-    produce(article_id, ProductionKind.SUMMARY_ZH, settings=settings, llm=llm, force=True)
+    produce(article_id, ProductionKind.SUMMARY, settings=settings, llm=llm)
+    produce(article_id, ProductionKind.SUMMARY, settings=settings, llm=llm, force=True)
 
     assert llm.call_count == 2
-    history = Ledger(settings.db_file).production_history(article_id, "summary_zh")
+    history = Ledger(settings.db_file).production_history(article_id, "summary")
     assert len(history) == 2
     assert history[0].redo_of_id == history[1].id
 
@@ -163,12 +168,14 @@ def test_missing_prerequisite_is_produced_automatically(settings: Settings) -> N
     article_id = seed(settings)
     llm = ScriptedProvider("fake", [summary_reply(), translation_reply(article_id)])
 
-    result = produce(article_id, ProductionKind.SUMMARY_EN, settings=settings, llm=llm)
+    result = produce(
+        article_id, ProductionKind.SUMMARY, lang="en", settings=settings, llm=llm
+    )
 
     assert result.ok
     assert llm.call_count == 2, "应先补中文总结再翻译"
     ledger = Ledger(settings.db_file)
-    assert ledger.latest_production(article_id, "summary_zh") is not None
+    assert ledger.latest_production(article_id, "summary") is not None
 
 
 def test_prerequisite_failure_is_reported_clearly(settings: Settings) -> None:
@@ -176,7 +183,9 @@ def test_prerequisite_failure_is_reported_clearly(settings: Settings) -> None:
     article_id = seed(settings)
     llm = ScriptedProvider("fake", ["不是 JSON"] * 6)
 
-    result = produce(article_id, ProductionKind.SUMMARY_EN, settings=settings, llm=llm)
+    result = produce(
+        article_id, ProductionKind.SUMMARY, lang="en", settings=settings, llm=llm
+    )
 
     assert not result.ok
     assert "前置产物" in result.error and "总结" in result.error
@@ -190,10 +199,10 @@ def test_output_lands_in_the_article_directory(settings: Settings) -> None:
     article_id = seed(settings)
     llm = ScriptedProvider("fake", [summary_reply()])
 
-    result = produce(article_id, ProductionKind.SUMMARY_ZH, settings=settings, llm=llm)
+    result = produce(article_id, ProductionKind.SUMMARY, settings=settings, llm=llm)
 
     assert result.path is not None
-    assert result.path.name == spec(ProductionKind.SUMMARY_ZH).filename
+    assert result.path.name == spec(ProductionKind.SUMMARY).filename_for("zh")
     assert result.path.exists()
     assert "articles" in result.path.parts
 
@@ -208,7 +217,7 @@ def test_output_carries_a_traceable_header(settings: Settings) -> None:
     article_id = seed(settings)
     llm = ScriptedProvider("fake", [summary_reply()])
 
-    result = produce(article_id, ProductionKind.SUMMARY_ZH, settings=settings, llm=llm)
+    result = produce(article_id, ProductionKind.SUMMARY, settings=settings, llm=llm)
     text = result.path.read_text(encoding="utf-8")
 
     assert "某公司发布新一代推理引擎" in text
@@ -256,10 +265,10 @@ def test_failure_is_recorded_in_the_ledger(settings: Settings) -> None:
     article_id = seed(settings)
     llm = ScriptedProvider("fake", ["不是 JSON"] * 4)
 
-    result = produce(article_id, ProductionKind.SUMMARY_ZH, settings=settings, llm=llm)
+    result = produce(article_id, ProductionKind.SUMMARY, settings=settings, llm=llm)
 
     assert not result.ok
-    record = Ledger(settings.db_file).latest_production(article_id, "summary_zh")
+    record = Ledger(settings.db_file).latest_production(article_id, "summary")
     assert record is not None
     assert record.status == "failed"
     assert record.error
@@ -284,7 +293,7 @@ def test_short_article_rejects_longform_without_calling_the_llm(settings: Settin
 def test_unknown_article_returns_a_clear_error(settings: Settings) -> None:
     """台账里没有这篇时给明确错误，不崩。"""
     llm = ScriptedProvider("fake", [])
-    result = produce("不存在的id", ProductionKind.SUMMARY_ZH, settings=settings, llm=llm)
+    result = produce("不存在的id", ProductionKind.SUMMARY, settings=settings, llm=llm)
 
     assert not result.ok
     assert "没有这篇文章" in result.error
@@ -299,7 +308,7 @@ def test_article_without_store_dir_returns_a_clear_error(settings: Settings) -> 
     )
     llm = ScriptedProvider("fake", [])
 
-    result = produce(article_id, ProductionKind.SUMMARY_ZH, settings=settings, llm=llm)
+    result = produce(article_id, ProductionKind.SUMMARY, settings=settings, llm=llm)
 
     assert not result.ok
     assert "落盘" in result.error
@@ -336,13 +345,12 @@ def test_batch_continues_after_one_failure(settings: Settings) -> None:
     """
     一项失败不阻断其余项。
 
-    四项彼此独立，因为一项翻车就放弃整批是不合理的。
+    三项彼此独立，因为一项翻车就放弃整批是不合理的。
     """
     article_id = seed(settings)
     llm = ScriptedProvider(
         "fake",
-        ["坏 JSON", "坏 JSON", "坏 JSON",           # 中文总结失败（3 次重试）
-         "坏 JSON", "坏 JSON", "坏 JSON",           # 英文总结的前置也失败
+        ["坏 JSON", "坏 JSON", "坏 JSON",           # 总结失败（3 次重试）
          short_reply(),                              # 短视频成功
          narration_reply()],                        # 口播成功
     )
@@ -350,7 +358,7 @@ def test_batch_continues_after_one_failure(settings: Settings) -> None:
     results = produce_all(article_id, settings=settings, llm=llm)
     by_kind = {str(r.kind): r for r in results}
 
-    assert not by_kind["summary_zh"].ok
+    assert not by_kind["summary"].ok
     assert by_kind["shortvideo"].ok
     assert by_kind["narration"].ok
 
@@ -400,14 +408,34 @@ def test_video_scripts_write_the_title_pair_into_the_file(settings: Settings) ->
     assert "**副标题：** 吞吐提升 2.3 倍" in text
 
 
+def test_recorded_chars_count_the_script_not_the_whole_file(settings: Settings) -> None:
+    """
+    台账里的字数是**正文的字数**，不含抬头与主副标题。
+
+    抬头带着文章标题和整条 URL：按整个文件长度记，一篇 400 字的口播稿会显示成
+    六百多字，和同一格里的预估秒数、以及文件里那行「约 N 秒 · M 字」三个数字
+    互相打架——实测报上来的就是这个。
+    """
+    article_id = seed(settings)
+    llm = ScriptedProvider("fake", [narration_reply()])
+
+    result = produce(article_id, ProductionKind.NARRATION, settings=settings, llm=llm)
+    text = result.path.read_text(encoding="utf-8")
+
+    assert result.chars == 400
+    assert result.chars < len(text)
+    # 文件自己写的字数与台账记的必须是同一个数
+    assert f"· {result.chars} 字）" in text
+
+
 # --- 「新导入」标识 / the "new import" flag ------------------------------------
 
 
 def test_fresh_import_with_nothing_produced_is_new(settings: Settings) -> None:
-    """刚导入、一条产物都没有 → 是新的。"""
+    """人工粘进来、一条产物都没有 → 是新的 / Pasted and untouched is new."""
     from dna.produce import is_new_article
 
-    article_id = seed(settings)
+    article_id = seed(settings, via=SourceKind.GUI)
     record = Ledger(settings.db_file).get(article_id)
 
     assert is_new_article(record, {})
@@ -421,7 +449,7 @@ def test_any_production_clears_the_flag(settings: Settings) -> None:
 
     article_id = seed(settings)
     llm = ScriptedProvider("fake", [summary_reply()])
-    produce(article_id, ProductionKind.SUMMARY_ZH, settings=settings, llm=llm)
+    produce(article_id, ProductionKind.SUMMARY, settings=settings, llm=llm)
 
     ledger = Ledger(settings.db_file)
     record = ledger.get(article_id)
@@ -442,7 +470,7 @@ def test_a_failed_attempt_also_clears_the_flag(settings: Settings) -> None:
 
     article_id = seed(settings)
     llm = ScriptedProvider("fake", ["不是 JSON"] * 3)
-    result = produce(article_id, ProductionKind.SUMMARY_ZH, settings=settings, llm=llm)
+    result = produce(article_id, ProductionKind.SUMMARY, settings=settings, llm=llm)
     assert not result.ok
 
     ledger = Ledger(settings.db_file)
@@ -453,39 +481,46 @@ def test_a_failed_attempt_also_clears_the_flag(settings: Settings) -> None:
     assert not is_new_article(record, matrix[article_id])
 
 
-def test_old_untouched_articles_are_not_new(settings: Settings) -> None:
+def test_rss_backlog_is_never_marked_new(settings: Settings) -> None:
     """
-    **存量文章不算新的**，哪怕它一条产物都没有。
+    **RSS 抓来的存量文章不算新的**，哪怕它一条产物都没有。
 
     实测台账 37 篇里有 32 篇从来没生成过任何产物（RSS 存量大多如此）。
     只看「有没有产物」的话，NEW 会挂在 32 行上——而这个标识的全部意义
-    就是从几十行里找出刚粘进去的那几条。
+    就是从几十行里找出**人特意粘进来**的那几条。
+    Marking every production-less row would put the badge on 32 of 37 articles, when its
+    whole purpose is to pick out the handful that were deliberately pasted in.
     """
-    from datetime import datetime, timedelta
-
     from dna.produce import is_new_article
 
-    article_id = seed(settings)
+    article_id = seed(settings, via=SourceKind.RSS)
     record = Ledger(settings.db_file).get(article_id)
-    much_later = datetime.now() + timedelta(hours=30)
 
-    assert not is_new_article(record, {}, now=much_later, within_hours=24)
-    assert is_new_article(record, {}, now=much_later, within_hours=48)
+    assert not is_new_article(record, {})
 
 
-def test_zero_window_disables_the_time_check(settings: Settings) -> None:
+def test_badge_survives_any_amount_of_time(settings: Settings) -> None:
     """
-    窗口设 0 表示不限时间，只看有没有产物——给想要「所有没动过的都标出来」的人。
-    """
-    from datetime import datetime, timedelta
+    **标识不因为过了一夜就消失。**
 
+    先前的实现加了 24 小时的时间窗，于是「昨天粘进来、今天还没处理」的链接
+    第二天就失去标识——而那恰恰是最需要标识的一条。实测 `fe3b7d3c` 导入 47 小时、
+    零产物，正是这样丢掉的。判定改成看来源之后，时间不再参与。
+    A 24-hour window used to strip the badge from exactly the row that still needed it.
+    Time no longer takes part in the predicate.
+    """
     from dna.produce import is_new_article
 
-    article_id = seed(settings)
-    record = Ledger(settings.db_file).get(article_id)
-    much_later = datetime.now() + timedelta(days=365)
+    import dataclasses
 
-    assert is_new_article(record, {}, now=much_later, within_hours=0)
+    article_id = seed(settings, via=SourceKind.GUI)
+    record = Ledger(settings.db_file).get(article_id)
+    # 把入库时间推到一年前：判定里不该再有任何时间成分
+    ancient = dataclasses.replace(
+        record, first_seen_at=record.first_seen_at.replace(year=record.first_seen_at.year - 1)
+    )
+
+    assert is_new_article(ancient, {})
 
 
 def test_calls_are_reported_for_cost_visibility(settings: Settings) -> None:
@@ -558,7 +593,7 @@ def _write_script(settings: Settings, article_id: str, kind: ProductionKind, bod
     directory.mkdir(parents=True, exist_ok=True)
 
     article = Article(url="https://e.com/1", title="某公司发布新一代推理引擎")
-    (directory / spec(kind).filename).write_text(
+    (directory / spec(kind).filename_for("zh")).write_text(
         front_matter(article, spec(kind).label) + f"**口播（约 30 秒 · 100 字）：**\n\n{body}",
         encoding="utf-8",
     )
@@ -701,3 +736,176 @@ def test_audio_is_not_in_the_batch() -> None:
     ):
         assert kind not in batch_kinds()
         assert spec(kind).approx_calls == 0
+
+
+# --- 重做必须绕开缓存 / a redo must bypass the response cache ------------------
+
+
+def test_redo_builds_an_uncached_provider(settings, monkeypatch) -> None:
+    """
+    **`force=True` 时 provider 不能带缓存。**
+
+    LLM 响应缓存故意不设过期，键是「provider + 模型 + 完整提示词」——同样的输入
+    永远给同样的输出，这正是它平时的价值。但「重做」的字面意思就是要一个不一样的：
+    照常走缓存的话，模型确实被调了、文件确实被重写了，内容却一字未变，
+    看起来就像**「生成了但没保存」**。这是 2026-09-06 实测报上来的现象。
+    Served from cache, a redo calls the model, rewrites the file, and changes nothing —
+    which reads as "it generated but did not save".
+
+    断言的是**传给 `get_llm` 的参数**，不是调用结果：缓存行为本身在 `tests/llm`
+    里已经验证过，这里要钉住的是「重做这条路径有没有把缓存关掉」。
+    The assertion targets the argument rather than the outcome: cache behaviour is
+    covered elsewhere, and what needs pinning here is whether this path disables it.
+    """
+    seen: list[bool | None] = []
+    real_llm = ScriptedProvider("fake", [summary_reply(), summary_reply()])
+
+    def fake_get_llm(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+        seen.append(kwargs.get("cache"))
+        return real_llm
+
+    monkeypatch.setattr("dna.produce.service.get_llm", fake_get_llm)
+    article_id = seed(settings)
+
+    produce(article_id, ProductionKind.SUMMARY, settings=settings)
+    produce(article_id, ProductionKind.SUMMARY, settings=settings, force=True)
+
+    assert seen == [True, False], "首次生成走缓存，重做必须绕开"
+
+
+# --- 修改指令 / the extra instructions ----------------------------------------
+
+
+def test_instructions_reach_the_prompt(settings) -> None:
+    """
+    额外要求要真的进到提示词里 / The extra requirements really reach the prompt.
+
+    不进提示词的话，这个输入框就是个安慰剂——人写了「加长到 40 秒」，
+    界面收下了，模型没看见，出来的稿子一如既往。
+    Otherwise the box is a placebo: the request is accepted, never delivered, and the
+    output is unchanged.
+    """
+    article_id = seed(settings)
+    llm = ScriptedProvider("fake", [summary_reply()])
+
+    produce(
+        article_id,
+        ProductionKind.SUMMARY,
+        settings=settings,
+        llm=llm,
+        instructions="多引用原文的具体数字",
+    )
+
+    system_prompt = llm.messages[0][0].content
+    assert "多引用原文的具体数字" in system_prompt
+    assert "额外要求" in system_prompt
+
+
+def test_instructions_are_recorded(settings) -> None:
+    """
+    指令记进台账 / The instructions are recorded.
+
+    调稿子是渐进的：下次重做要在上次的基础上再加一条，而不是从零回忆。
+    界面用它预填输入框。
+    Tuning is incremental, and the workbench pre-fills the box from this.
+    """
+    article_id = seed(settings)
+    llm = ScriptedProvider("fake", [summary_reply()])
+
+    produce(
+        article_id,
+        ProductionKind.SUMMARY,
+        settings=settings,
+        llm=llm,
+        instructions="用词再专业一点",
+    )
+
+    record = Ledger(settings.db_file).latest_production(article_id, "summary")
+    assert record.instructions == "用词再专业一点"
+
+
+def test_no_instructions_leaves_the_prompt_byte_identical(settings) -> None:
+    """
+    没写指令时提示词**逐字不变** / An empty instruction changes nothing.
+
+    否则每篇都会因为多一个空标题而错开 LLM 缓存，白花一轮钱——
+    一个「本次没有额外要求」的空段落，代价是整批重新计费。
+    Otherwise every call would miss the response cache over an empty heading, re-billing
+    a whole batch for nothing.
+    """
+    from dna.narration.script_builder import instruction_block
+
+    assert instruction_block("") == ""
+    assert instruction_block("   ") == ""
+
+
+# --- 语言维度 / the language dimension ----------------------------------------
+
+
+def test_two_languages_are_two_files_and_two_records(settings) -> None:
+    """
+    **中英两版是两个文件、两条记录，互不覆盖。**
+
+    语言要是漏出查询条件，生成过英文版之后再查中文版会拿到英文那一行——
+    「已存在就跳过」于是拿英文版冒充中文版，一次都不会报错。
+    If language fell out of the key, the skip-if-exists guard would pass off one edition
+    as the other in silence.
+    """
+    article_id = seed(settings)
+    llm = ScriptedProvider(
+        "fake", [summary_reply(), translation_reply(article_id)]
+    )
+
+    zh = produce(article_id, ProductionKind.SUMMARY, settings=settings, llm=llm)
+    en = produce(
+        article_id, ProductionKind.SUMMARY, lang="en", settings=settings, llm=llm
+    )
+
+    assert zh.path.name == "summary.zh.md"
+    assert en.path.name == "summary.en.md"
+    assert zh.path.exists() and en.path.exists()
+
+    ledger = Ledger(settings.db_file)
+    assert ledger.latest_production(article_id, "summary", "zh") is not None
+    assert ledger.latest_production(article_id, "summary", "en") is not None
+
+
+def test_english_summary_translates_the_chinese_one(settings) -> None:
+    """
+    英文总结**翻译已写好的中文**，前置缺了会自动补。
+
+    比用英文重写一遍便宜，而且中英两版保证说的是同一件事。
+    Cheaper than rewriting, and both editions are guaranteed to say the same thing.
+    """
+    article_id = seed(settings)
+    llm = ScriptedProvider("fake", [summary_reply(), translation_reply(article_id)])
+
+    result = produce(
+        article_id, ProductionKind.SUMMARY, lang="en", settings=settings, llm=llm
+    )
+
+    assert result.ok
+    assert llm.call_count == 2, "一次中文总结 + 一次翻译"
+    assert Ledger(settings.db_file).latest_production(article_id, "summary", "zh").ok
+
+
+def test_english_scripts_are_written_natively(settings) -> None:
+    """
+    **英文文稿原生写，不翻译。**
+
+    中文 30 秒的稿子翻成英文不是 30 秒的稿子，而时长正是这三种文案的验收标准。
+    走翻译会把刚校准过的时长（issue 008）交给译文长度去决定。
+    A thirty-second Chinese script is not a thirty-second English one, and duration is
+    exactly what these kinds are accepted on.
+    """
+    article_id = seed(settings)
+    llm = ScriptedProvider("fake", [short_reply()])
+
+    produce(
+        article_id, ProductionKind.SHORTVIDEO, lang="en", settings=settings, llm=llm
+    )
+
+    assert llm.call_count == 1, "原生生成只要一次调用，没有翻译那一步"
+    system_prompt = llm.messages[0][0].content
+    assert "Writing rules" in system_prompt, "英文稿要用英文的写作要求"
+    assert "words" in system_prompt, "英文按词数给预算，不是字数"

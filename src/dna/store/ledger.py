@@ -120,7 +120,17 @@ class ProductionRecord:
     id: int
     article_id: str
     kind: str
+    lang: str
+    """输出语言 / the output language；见 `produce/tasks.py` 的「语言是维度，不是类型」。"""
     variant: str | None
+    instructions: str | None
+    """
+    生成这一版时附带的额外要求 / the extra requirements this version was made with.
+
+    重做时人会写「再专业一点」「加长到 40 秒」。记下来，下次重做就能从上次改过的
+    地方接着调，而不是从零想一遍。
+    Recorded so the next redo starts from what was asked last time.
+    """
     status: str
     output_path: str | None
     chars: int
@@ -151,7 +161,9 @@ class ProductionRecord:
             id=row["id"],
             article_id=row["article_id"],
             kind=row["kind"],
+            lang=row["lang"],
             variant=row["variant"],
+            instructions=row["instructions"],
             status=row["status"],
             output_path=row["output_path"],
             chars=row["chars"],
@@ -469,7 +481,9 @@ class Ledger:
         kind: str,
         *,
         status: str = "ok",
+        lang: str = "zh",
         variant: str | None = None,
+        instructions: str | None = None,
         output_path: str | None = None,
         chars: int = 0,
         est_seconds: float | None = None,
@@ -495,21 +509,23 @@ class Ledger:
         返回 / Returns:
             新插入行的 id
         """
-        previous = self.latest_production(article_id, kind)
+        previous = self.latest_production(article_id, kind, lang)
 
         with open_db(self.db_path) as conn:
             cursor = conn.execute(
                 """
                 INSERT INTO productions (
-                    article_id, kind, variant, status, output_path, chars, est_seconds,
-                    llm_provider, llm_model, tokens, calls, duration_ms, error,
-                    created_at, redo_of_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    article_id, kind, lang, variant, instructions, status, output_path,
+                    chars, est_seconds, llm_provider, llm_model, tokens, calls,
+                    duration_ms, error, created_at, redo_of_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     article_id,
                     kind,
+                    lang,
                     variant,
+                    (instructions or "").strip() or None,
                     status,
                     output_path,
                     chars,
@@ -526,31 +542,41 @@ class Ledger:
             )
             return int(cursor.lastrowid or 0)
 
-    def latest_production(self, article_id: str, kind: str) -> ProductionRecord | None:
+    def latest_production(
+        self, article_id: str, kind: str, lang: str = "zh"
+    ) -> ProductionRecord | None:
         """
-        取某篇某种产物的最新一版 / The newest production of one kind for one article.
+        取某篇某种产物、某个语言的最新一版 / The newest production of one kind and language.
 
         按 id 倒序而不是 created_at：同一秒内重做两次时时间戳会相同，
         而自增 id 永远能分出先后。
         Ordered by id rather than created_at: two redos within the same second share a
         timestamp, whereas the autoincrement id always disambiguates.
+
+        **语言是查询条件的一部分。**漏掉它的话，生成过英文版之后再查中文版会拿到
+        英文那一行——「已存在就跳过」于是拿英文版冒充中文版，一次都不会报错。
+        Language is part of the key: omitting it would return the English row when the
+        Chinese one is asked for, and the skip-if-exists guard would silently pass off one
+        edition as the other.
         """
         with open_db(self.db_path) as conn:
             row = conn.execute(
-                "SELECT * FROM productions WHERE article_id = ? AND kind = ? "
+                "SELECT * FROM productions WHERE article_id = ? AND kind = ? AND lang = ? "
                 "ORDER BY id DESC LIMIT 1",
-                (article_id, kind),
+                (article_id, kind, lang),
             ).fetchone()
         return ProductionRecord.from_row(row) if row else None
 
-    def production_matrix(self, article_ids: Sequence[str]) -> dict[str, dict[str, ProductionRecord]]:
+    def production_matrix(
+        self, article_ids: Sequence[str]
+    ) -> dict[str, dict[tuple[str, str], ProductionRecord]]:
         """
         一次查出多篇文章的全部最新产物 / Latest productions for many articles at once.
 
-        返回 `{article_id: {kind: record}}`。GUI 的表格一页几十行、每行五种产物，
-        逐格查库会变成几百次查询，界面肉眼可见地卡。
-        Returns `{article_id: {kind: record}}`. The workbench table shows dozens of rows
-        with five production kinds each; querying per cell would mean hundreds of round
+        返回 `{article_id: {(kind, lang): record}}`。GUI 的表格一页几十行、
+        每行四种产物两种语言，逐格查库会变成几百次查询，界面肉眼可见地卡。
+        Returns a mapping keyed by kind and language. The table shows dozens of rows with
+        four kinds in two languages each; querying per cell would mean hundreds of round
         trips and visible lag.
         """
         if not article_ids:
@@ -564,24 +590,27 @@ class Ledger:
                 WHERE id IN (
                     SELECT MAX(id) FROM productions
                     WHERE article_id IN ({placeholders})
-                    GROUP BY article_id, kind
+                    GROUP BY article_id, kind, lang
                 )
                 """,
                 tuple(article_ids),
             ).fetchall()
 
-        matrix: dict[str, dict[str, ProductionRecord]] = {}
+        matrix: dict[str, dict[tuple[str, str], ProductionRecord]] = {}
         for row in rows:
             record = ProductionRecord.from_row(row)
-            matrix.setdefault(record.article_id, {})[record.kind] = record
+            matrix.setdefault(record.article_id, {})[(record.kind, record.lang)] = record
         return matrix
 
-    def production_history(self, article_id: str, kind: str) -> list[ProductionRecord]:
-        """某篇某种产物的全部历史版本，最新在前 / Every version, newest first."""
+    def production_history(
+        self, article_id: str, kind: str, lang: str = "zh"
+    ) -> list[ProductionRecord]:
+        """某篇某种产物某个语言的全部历史版本，最新在前 / Every version, newest first."""
         with open_db(self.db_path) as conn:
             rows = conn.execute(
-                "SELECT * FROM productions WHERE article_id = ? AND kind = ? ORDER BY id DESC",
-                (article_id, kind),
+                "SELECT * FROM productions WHERE article_id = ? AND kind = ? AND lang = ? "
+                "ORDER BY id DESC",
+                (article_id, kind, lang),
             ).fetchall()
         return [ProductionRecord.from_row(r) for r in rows]
 
@@ -591,7 +620,7 @@ class Ledger:
             rows = conn.execute(
                 """
                 SELECT kind, COUNT(*) AS n FROM productions
-                WHERE id IN (SELECT MAX(id) FROM productions GROUP BY article_id, kind)
+                WHERE id IN (SELECT MAX(id) FROM productions GROUP BY article_id, kind, lang)
                   AND status = 'ok'
                 GROUP BY kind
                 """

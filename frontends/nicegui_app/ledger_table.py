@@ -36,6 +36,7 @@ from __future__ import annotations
 from nicegui import ui
 
 from dna.produce import DISPLAY_ORDER, ProductionKind, spec
+from dna.produce.tasks import DEFAULT_LANGUAGE
 from dna.store.ledger import ProductionRecord
 from frontends.nicegui_app import actions, detail_panel, theme
 from frontends.nicegui_app.actions import RowView
@@ -51,12 +52,20 @@ _STATUS_COLOUR = {
 # 表头缩写：108px 放不下「短视频文案」四个字还带内边距
 # Header abbreviations: 108 px cannot hold the full four-character labels with padding.
 _HEAD_SHORT = {
-    ProductionKind.SUMMARY_ZH: "总结",
-    ProductionKind.SUMMARY_EN: "英文总结",
+    ProductionKind.SUMMARY: "总结",
     ProductionKind.SHORTVIDEO: "短视频",
     ProductionKind.NARRATION: "口播",
     ProductionKind.LONGFORM: "长文案",
 }
+
+# 展开状态跨刷新保留 / the open panel survives a refresh
+#
+# 刷新会把整张表重建一遍，展开的面板本来会跟着关掉。生成完一份产物之后正是
+# **最想看新内容的时刻**，而面板一关，看到的就是「点了一下，什么都没发生」——
+# 内容其实已经更新，只是被收起来了。这里记住 (文章 id, 产物类型)，重建后自动展开。
+# A refresh rebuilds the table and would close the panel exactly when the new content is
+# what the user wants to see, making a successful run look like nothing happened.
+_OPEN: dict[str, tuple[str, str] | None] = {"cell": None}
 
 
 def render_table(container: ui.element, rows: list[RowView], *, on_change) -> None:
@@ -134,16 +143,20 @@ def _render_row(row: RowView, *, on_change) -> None:
         state: dict[str, ProductionKind | None] = {"open": None}
         cells: dict[ProductionKind, ui.element] = {}
 
-        def toggle(kind: ProductionKind) -> None:
+        def toggle(kind: ProductionKind, *, remember: bool = True) -> None:
             """点同一格收起，点别的格切过去 / Same cell closes, another switches."""
             if state["open"] == kind:
                 state["open"] = None
                 panel.visible = False
                 wrapper.classes(remove="is-open")
+                if remember:
+                    _OPEN["cell"] = None
             else:
                 state["open"] = kind
                 panel.visible = True
                 wrapper.classes(add="is-open")
+                if remember:
+                    _OPEN["cell"] = (article.id, str(kind))
                 detail_panel.render(
                     panel, row, kind, on_change=on_change, on_redo=_launch
                 )
@@ -158,6 +171,11 @@ def _render_row(row: RowView, *, on_change) -> None:
                 ui.label(row.media_label)
             for kind in DISPLAY_ORDER:
                 cells[kind] = _render_kind_cell(row, kind, on_open=toggle)
+
+        # 刷新前展开的是这一行的话，重新展开它 / re-open what was open before the refresh
+        remembered = _OPEN["cell"]
+        if remembered is not None and remembered[0] == article.id:
+            toggle(ProductionKind(remembered[1]))
 
         _ = article  # 供调试时定位这一行 / kept for debugging identification
 
@@ -201,7 +219,9 @@ def _render_title_cell(row: RowView, *, on_open) -> None:
     cell.on("click", lambda: on_open())
 
 
-def _render_kind_cell(row: RowView, kind: ProductionKind, *, on_open) -> ui.element:
+def _render_kind_cell(
+    row: RowView, kind: ProductionKind, *, on_open, lang: str = DEFAULT_LANGUAGE
+) -> ui.element:
     """
     一个产物格 / One production cell.
 
@@ -228,7 +248,17 @@ def _render_kind_cell(row: RowView, kind: ProductionKind, *, on_open) -> ui.elem
     with cell:
         ui.label(glyph).classes("glyph")
         ui.label(value).classes("val")
-    cell.tooltip(_cell_tooltip(record, task.label))
+        # 有英文版时在格子上挂一个小标记 / a small mark when an English edition exists
+        #
+        # 收起状态下语言开关是看不见的（它在展开面板里），没有这个标记就无从知道
+        # 哪几篇已经出过英文版——而那正是「还要不要再花一次钱」的判断依据。
+        # The language switch lives in the panel and is invisible while collapsed, so
+        # without this mark there is no way to tell which articles already have an
+        # English edition — which is what decides whether to spend again.
+        if row.has_language(kind, "en"):
+            ui.label("EN").classes("wb-lang-chip")
+
+    cell.tooltip(_cell_tooltip(record, task.label, has_en=row.has_language(kind, "en")))
     cell.on("click", lambda k=kind: on_open(k))
     return cell
 
@@ -259,12 +289,15 @@ def _cell_state(record: ProductionRecord | None) -> tuple[str, str, str]:
     return "●", value, "wb-ok"
 
 
-def _cell_tooltip(record: ProductionRecord | None, label: str) -> str:
-    """悬停时的详情 / Details on hover."""
+def _cell_tooltip(
+    record: ProductionRecord | None, label: str, *, has_en: bool = False
+) -> str:
+    """悬停时的详情 / Details on hover。`record` 是**中文版**那一条。"""
+    extra = "　·　已有英文版" if has_en else ""
     if record is None:
-        return f"{label}：尚未生成　·　点击展开后再决定是否生成"
+        return f"{label}：尚未生成　·　点击展开后再决定是否生成{extra}"
     if not record.ok:
-        return f"{label} 生成失败：{record.error or '未知原因'}　·　点击查看"
+        return f"{label} 生成失败：{record.error or '未知原因'}　·　点击查看{extra}"
 
     parts = [f"{record.chars} 字"]
     if record.est_seconds:
@@ -276,7 +309,7 @@ def _cell_tooltip(record: ProductionRecord | None, label: str) -> str:
         parts.append(record.created_at.strftime("%m-%d %H:%M"))
     if record.calls > 1:
         parts.append(f"{record.calls} 次调用")
-    return f"{label}：{'　·　'.join(parts)}　·　点击展开查看全文"
+    return f"{label}：{'　·　'.join(parts)}{extra}　·　点击展开查看全文"
 
 
 # ---------------------------------------------------------------------------
@@ -284,7 +317,15 @@ def _cell_tooltip(record: ProductionRecord | None, label: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _launch(row: RowView, kind: ProductionKind, *, force: bool, on_change) -> None:
+def _launch(
+    row: RowView,
+    kind: ProductionKind,
+    *,
+    force: bool,
+    on_change,
+    lang: str = DEFAULT_LANGUAGE,
+    instructions: str = "",
+) -> None:
     """
     发起一次生成 / Kick off one production.
 
@@ -299,12 +340,18 @@ def _launch(row: RowView, kind: ProductionKind, *, force: bool, on_change) -> No
     """
     task = spec(kind)
     if task.needs_variant:
-        _ask_longform(row, kind, force=force, on_change=on_change)
+        _ask_longform(
+            row, kind, force=force, on_change=on_change, lang=lang,
+            instructions=instructions,
+        )
         return
     if task.audio_of is not None:
-        _ask_audio(row, kind, force=force, on_change=on_change)
+        _ask_audio(row, kind, force=force, on_change=on_change, lang=lang)
         return
-    _run(row, kind, variant=None, force=force, on_change=on_change)
+    _run(
+        row, kind, variant=None, force=force, on_change=on_change, lang=lang,
+        instructions=instructions,
+    )
 
 
 # 超过这么久就先问一句 / anything longer than this asks first
@@ -316,11 +363,18 @@ def _launch(row: RowView, kind: ProductionKind, *, force: bool, on_change) -> No
 AUDIO_CONFIRM_SECONDS = 300
 
 
-def _ask_audio(row: RowView, kind: ProductionKind, *, force: bool, on_change) -> None:
+def _ask_audio(
+    row: RowView,
+    kind: ProductionKind,
+    *,
+    force: bool,
+    on_change,
+    lang: str = DEFAULT_LANGUAGE,
+) -> None:
     """长音频的耗时确认 / Confirm a long synthesis run."""
-    wait = actions.audio_estimate_seconds(row.article, kind)
+    wait = actions.audio_estimate_seconds(row.article, kind, lang)
     if wait < AUDIO_CONFIRM_SECONDS:
-        _run(row, kind, variant=None, force=force, on_change=on_change)
+        _run(row, kind, variant=None, force=force, on_change=on_change, lang=lang)
         return
 
     task = spec(kind)
@@ -346,14 +400,25 @@ def _ask_audio(row: RowView, kind: ProductionKind, *, force: bool, on_change) ->
                 "开始合成",
                 on_click=lambda: (
                     dialog.close(),
-                    _run(row, kind, variant=None, force=force, on_change=on_change),
+                    _run(
+                        row, kind, variant=None, force=force, on_change=on_change,
+                        lang=lang,
+                    ),
                 ),
             ).props("no-caps")
 
     dialog.open()
 
 
-def _ask_longform(row: RowView, kind: ProductionKind, *, force: bool, on_change) -> None:
+def _ask_longform(
+    row: RowView,
+    kind: ProductionKind,
+    *,
+    force: bool,
+    on_change,
+    lang: str = DEFAULT_LANGUAGE,
+    instructions: str = "",
+) -> None:
     """长文案的形式选择与费用确认 / Mode choice and cost confirmation."""
     task = spec(kind)
 
@@ -386,17 +451,29 @@ def _ask_longform(row: RowView, kind: ProductionKind, *, force: bool, on_change)
                 "确认生成",
                 on_click=lambda: (
                     dialog.close(),
-                    _run(row, kind, variant=mode.value, force=force, on_change=on_change),
+                    _run(
+                        row, kind, variant=mode.value, force=force, on_change=on_change,
+                        lang=lang, instructions=instructions,
+                    ),
                 ),
             ).props("no-caps").classes("wb-btn-cost")
 
     dialog.open()
 
 
-def _run(row: RowView, kind: ProductionKind, *, variant, force: bool, on_change) -> None:
+def _run(
+    row: RowView,
+    kind: ProductionKind,
+    *,
+    variant,
+    force: bool,
+    on_change,
+    lang: str = DEFAULT_LANGUAGE,
+    instructions: str = "",
+) -> None:
     """执行生成并把结果告诉用户 / Run the production and report back."""
     task = spec(kind)
-    label = task.label
+    label = task.label if lang == DEFAULT_LANGUAGE else f"{task.label}（EN）"
     is_audio = task.audio_of is not None
 
     notification = ui.notification(
@@ -424,7 +501,13 @@ def _run(row: RowView, kind: ProductionKind, *, variant, force: bool, on_change)
     async def _go() -> None:
         try:
             result = await actions.run_production(
-                row.article.id, kind, variant=variant, force=force, progress=progress
+                row.article.id,
+                kind,
+                lang=lang,
+                variant=variant,
+                force=force,
+                instructions=instructions,
+                progress=progress,
             )
         finally:
             if ticker is not None:
@@ -441,9 +524,21 @@ def _run(row: RowView, kind: ProductionKind, *, variant, force: bool, on_change)
                 type="positive" if result.within_target else "warning",
             )
         elif result.ok:
-            warning = "，⚠️ 超出目标时长区间" if not result.within_target else ""
+            # 报秒数，不只报「超出区间」：超时的稿子仍然可用，人要看着具体数字
+            # 决定是手删两句还是重做；而写了修改指令时，多半就是那句话在拉长它。
+            # The measured duration is stated, not just the fact of the overrun: an
+            # overlong script is still usable and the number decides trim-or-redo.
+            parts = [f"{result.chars} 字"]
+            if result.seconds:
+                parts.append(f"约 {result.seconds:.0f} 秒")
+            parts.append(f"{result.calls} 次调用")
+            warning = ""
+            if not result.within_target:
+                warning = "，⚠️ 超出目标时长区间"
+                if instructions:
+                    warning += "（本次带了修改指令）"
             ui.notify(
-                f"{label} 完成：{result.chars} 字，{result.calls} 次调用{warning}",
+                f"{label} 完成：{'　·　'.join(parts)}{warning}",
                 type="warning" if not result.within_target else "positive",
             )
         else:

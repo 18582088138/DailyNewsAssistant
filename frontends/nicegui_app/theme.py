@@ -106,15 +106,20 @@ body::before {
 }
 
 /* ---- 表头冻结 / frozen header ---- */
+/* 表头要**一眼看得见**：它是「哪一列是哪个功能」的唯一答案，
+   文章多的时候人是靠它对齐的。11px 的灰色小字在 4K 屏上几乎读不到，
+   而读不到的表头等于没有表头。
+   The header is the only answer to "which column is which", and 11 px grey is barely
+   legible on a high-density display — an unreadable header is no header. */
 .wb-head {
   position: sticky; top: 0; z-index: 20;
   background: var(--wb-panel-2);
-  border-bottom: 1px solid var(--wb-line-strong);
+  border-bottom: 2px solid var(--wb-line-strong);
   font-family: var(--wb-mono);
-  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
-  color: var(--wb-dim);
+  font-size: 13px; font-weight: 700; letter-spacing: .10em; text-transform: uppercase;
+  color: var(--wb-text);
 }
-.wb-head > div { padding: 9px 8px; display: flex; align-items: center; }
+.wb-head > div { padding: 12px 8px; display: flex; align-items: center; }
 .wb-head > div + div { justify-content: center; }
 
 /* 列分隔线：文章多的时候，没有竖线根本对不上哪一列是哪个功能
@@ -123,6 +128,28 @@ body::before {
 /* 抓取信息与产物之间加一道重线，把两组分开
    A heavier rule separates the fetch columns from the production columns. */
 .wb-grid > div:nth-child(4) { border-left: 1px solid var(--wb-line-strong); }
+
+/* 语言标记：格子上那个小小的 EN
+   收起状态下语言开关看不见（它在展开面板里），没有这个标记就无从知道哪几篇
+   已经出过英文版——而那正是「还要不要再花一次钱」的判断依据。
+   The language switch lives in the panel, so this chip is the only collapsed-state
+   signal that an English edition already exists. */
+.wb-lang-chip {
+  font-family: var(--wb-mono);
+  font-size: 9px; font-weight: 700; letter-spacing: .06em;
+  line-height: 1;
+  padding: 2px 3px; margin-left: 4px;
+  border: 1px solid var(--wb-accent); border-radius: 3px;
+  color: var(--wb-accent);
+  opacity: .85;
+}
+
+/* 语言开关里选中的那个 / the selected side of the language switch */
+.wb-lang-active {
+  background: rgba(61, 220, 151, .12) !important;
+  color: var(--wb-accent) !important;
+  border: 1px solid var(--wb-accent) !important;
+}
 
 /* ---- 行 / rows ---- */
 .wb-rowwrap { border-bottom: 1px solid var(--wb-line); }

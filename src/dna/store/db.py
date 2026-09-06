@@ -26,7 +26,7 @@ from dna.core.logging import get_logger
 
 logger = get_logger("store.db")
 
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 _SCHEMA_V1 = """
 CREATE TABLE IF NOT EXISTS articles (
@@ -77,7 +77,7 @@ _MIGRATE_V3 = """
 CREATE TABLE IF NOT EXISTS productions (
     id            INTEGER PRIMARY KEY,
     article_id    TEXT NOT NULL,
-    kind          TEXT NOT NULL,              -- summary_zh|summary_en|shortvideo|narration|longform
+    kind          TEXT NOT NULL,              -- summary|shortvideo|narration|longform|*_audio
     variant       TEXT,                       -- longform 专用：feature|interview
     status        TEXT NOT NULL,              -- ok|failed
     output_path   TEXT,                       -- 相对 outputs/
@@ -95,6 +95,32 @@ CREATE TABLE IF NOT EXISTS productions (
 
 CREATE INDEX IF NOT EXISTS idx_productions_article ON productions(article_id);
 CREATE INDEX IF NOT EXISTS idx_productions_kind    ON productions(article_id, kind);
+"""
+
+# v4：语言从「产物类型」里拆出来，变成产物的一个维度
+# v4: language becomes a dimension of a production rather than part of its kind
+#
+# 之前 `summary_zh` 与 `summary_en` 是两种不同的产物类型，于是表格里占两列，
+# 而它们其实是同一份东西的两个语言版本。文稿类要加英文版时这个建模就撑不住了——
+# 照原样得再造 `shortvideo_en`、`narration_en`、`longform_en` 以及它们各自的音频，
+# 枚举翻倍而语义没变清楚。
+# Previously `summary_zh` and `summary_en` were distinct kinds occupying two columns,
+# though they are two language versions of one thing. Extending that to the scripts would
+# have doubled the enum without clarifying anything.
+#
+# `instructions` 记下这一版是带着什么额外要求生成的——重做时人会写「再专业一点」
+# 「加长到 40 秒」，不记的话下次重做就想不起上次改了什么。
+# `instructions` records the extra requirements a version was generated with, so the next
+# redo starts from what was asked last time rather than from nothing.
+_MIGRATE_V4 = """
+ALTER TABLE productions ADD COLUMN lang TEXT NOT NULL DEFAULT 'zh';
+ALTER TABLE productions ADD COLUMN instructions TEXT;
+
+UPDATE productions SET kind = 'summary', lang = 'zh' WHERE kind = 'summary_zh';
+UPDATE productions SET kind = 'summary', lang = 'en' WHERE kind = 'summary_en';
+
+DROP INDEX IF EXISTS idx_productions_kind;
+CREATE INDEX IF NOT EXISTS idx_productions_kind ON productions(article_id, kind, lang);
 """
 
 
@@ -171,6 +197,11 @@ def _migrate(conn: sqlite3.Connection) -> None:
     if current == 2:
         conn.executescript(_MIGRATE_V3)
         current = 3
+
+    if current == 3:
+        # summary_zh / summary_en 两种类型合并成 summary + lang
+        conn.executescript(_MIGRATE_V4)
+        current = 4
 
     conn.execute(f"PRAGMA user_version = {current}")
     conn.commit()

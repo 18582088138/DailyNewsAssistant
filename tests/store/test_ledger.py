@@ -432,25 +432,44 @@ def test_production_matrix_fetches_everything_in_one_query(ledger: Ledger) -> No
     """
     一次查出整页的产物状态。
 
-    GUI 一页 50 行 × 5 种产物，逐格查库是 250 次往返，界面会肉眼可见地卡。
+    GUI 一页 50 行 × 4 种产物 × 2 种语言，逐格查库是几百次往返，界面会肉眼可见地卡。
     """
-    ledger.record_production("a1", "summary_zh", chars=100)
+    ledger.record_production("a1", "summary", chars=100)
     ledger.record_production("a1", "narration", chars=400)
-    ledger.record_production("a2", "summary_zh", chars=120)
+    ledger.record_production("a2", "summary", chars=120)
 
     matrix = ledger.production_matrix(["a1", "a2", "a3"])
 
-    assert sorted(matrix["a1"]) == ["narration", "summary_zh"]
-    assert sorted(matrix["a2"]) == ["summary_zh"]
+    assert sorted(matrix["a1"]) == [("narration", "zh"), ("summary", "zh")]
+    assert sorted(matrix["a2"]) == [("summary", "zh")]
     assert "a3" not in matrix
+
+
+def test_matrix_keeps_the_two_languages_apart(ledger: Ledger) -> None:
+    """
+    **同一种产物的两个语言版本是矩阵里的两格。**
+
+    漏掉语言这一维的话，生成过英文版之后再查中文版会拿到英文那一行——
+    「已存在就跳过」于是拿英文版冒充中文版，一次都不会报错。
+    Without the language dimension the English row would answer a query for the Chinese
+    one, and the skip-if-exists guard would pass off one edition as the other in silence.
+    """
+    ledger.record_production("a1", "summary", lang="zh", chars=100)
+    ledger.record_production("a1", "summary", lang="en", chars=60)
+
+    matrix = ledger.production_matrix(["a1"])["a1"]
+
+    assert matrix[("summary", "zh")].chars == 100
+    assert matrix[("summary", "en")].chars == 60
+    assert ledger.latest_production("a1", "summary", "en").chars == 60
 
 
 def test_production_matrix_returns_only_the_latest_version(ledger: Ledger) -> None:
     """矩阵里每种产物只出现最新一版，否则表格会显示过期内容。"""
-    ledger.record_production("a1", "summary_zh", chars=100)
-    ledger.record_production("a1", "summary_zh", chars=999)
+    ledger.record_production("a1", "summary", chars=100)
+    ledger.record_production("a1", "summary", chars=999)
 
-    assert ledger.production_matrix(["a1"])["a1"]["summary_zh"].chars == 999
+    assert ledger.production_matrix(["a1"])["a1"][("summary", "zh")].chars == 999
 
 
 def test_failed_productions_are_recorded_too(ledger: Ledger) -> None:

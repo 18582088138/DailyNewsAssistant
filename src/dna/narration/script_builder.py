@@ -41,7 +41,12 @@ from pydantic import BaseModel, Field
 from dna.core.logging import get_logger
 from dna.core.models import Article
 from dna.llm.base import ChatMessage, LLMProvider, assistant, system, user
-from dna.narration.duration import estimate_seconds, length_feedback, prompt_char_budget
+from dna.narration.duration import (
+    count_units,
+    estimate_seconds,
+    length_feedback,
+    prompt_char_budget,
+)
 
 logger = get_logger("narration.script_builder")
 
@@ -109,6 +114,70 @@ PROFESSIONALISM = """
 6. 面向的是懂技术的听众，不需要解释什么是大模型、什么是开源。
 """.strip()
 
+# 英文稿的同一套要求 / the same rules, for English scripts
+#
+# 为什么是重写而不是翻译这段规则 / Why this is rewritten rather than translated:
+#     它是**给模型看的指令**，不是产物。指令用目标语言写，模型遵守得明显更好；
+#     而且「白话」「套话」这些词在中文语境里的具体所指，直译过去会变成空泛的
+#     "avoid vague language"，等于把最要紧的那条规则说没了。
+#     These are instructions rather than output. Models follow them markedly better in the
+#     target language, and a literal translation of the Chinese terms for padding and
+#     filler degrades into a vague "avoid vague language" — losing the rule that matters
+#     most.
+PROFESSIONALISM_EN = """
+Writing rules (all scripts):
+1. **Information density comes first.** The clip is played back sped up, so every
+   second must carry fact. **Every sentence must land at least one concrete item** —
+   a number, a proper noun, a capability, or a definite conclusion.
+   Delete any sentence that carries none; do not leave it occupying airtime.
+2. **Use precise technical terms.** Never substitute "hugely improved" or
+   "a major leap" for the actual figure — say "from 61.8 to 82.7 on Terminal Bench 2.1".
+3. **Model names, version numbers, benchmark names and figures must match the source
+   exactly.** Do not paraphrase, round, or approximate them.
+4. If a technical detail is uncertain, **leave it out** rather than hedging with
+   "reportedly" or "to some extent".
+5. **Never include:**
+   - filler openers such as "let's take a look" or "without further ado"
+   - a whole sentence spent on a transition ("what does this mean?", "notably,")
+   - first-person opinion ("I think", "what I find most interesting") — attribute
+     recommendations to the source: "the authors recommend", "the official guidance is"
+   - a closing line built from adjectives rather than facts
+6. The audience is technical. Do not explain what an LLM or open source is.
+""".strip()
+
+
+def rules_for(lang: str) -> str:
+    """该语言的写作要求 / The writing rules for one language."""
+    return PROFESSIONALISM if lang == "zh" else PROFESSIONALISM_EN
+
+
+def instruction_block(instructions: str, lang: str = "zh") -> str:
+    """
+    把人写的额外要求接到提示词末尾 / Append the operator's extra requirements.
+
+    **放在最后**：提示词里后出现的指令权重更高，而这段正是用来覆盖前面默认要求的
+    ——人点「重做」并写下「加长到 40 秒」「用词再专业一点」，要的就是推翻默认。
+    Placed last because later instructions carry more weight, and overriding the defaults
+    is exactly what this block is for: the operator writes it precisely to change them.
+
+    没有额外要求时返回空串，提示词与不带这个功能时**逐字相同**——
+    否则每篇都会因为多一个空标题而错开 LLM 缓存，白花一轮钱。
+    An empty string when there is nothing to add, so the prompt is byte-identical to one
+    built without the feature; otherwise every call would miss the response cache over an
+    empty heading.
+    """
+    text = (instructions or "").strip()
+    if not text:
+        return ""
+    if lang == "zh":
+        heading = "**本次的额外要求（优先级高于以上默认要求）**："
+    else:
+        heading = (
+            "**Additional requirements for this run "
+            "(these take precedence over the defaults above)**:"
+        )
+    return f"\n\n{heading}\n{text}"
+
 
 @dataclass
 class ScriptResult:
@@ -156,6 +225,8 @@ def build_short_video(
     low: float = 25.0,
     high: float = 35.0,
     cta: str = DEFAULT_CTA,
+    lang: str = "zh",
+    instructions: str = "",
 ) -> ScriptResult:
     """
     生成短视频文案 / Build a short-video script.
@@ -175,6 +246,11 @@ def build_short_video(
     correct yet failed to convey the story: the viewer learned that UD-Q8_K_XL's
     perplexity held, without learning which model it was or that it had shipped.
     """
+    if lang != "zh":
+        return _build_english_short_video(
+            article, llm, low=low, high=high, instructions=instructions
+        )
+
     lo_chars, hi_chars = prompt_char_budget(low), prompt_char_budget(high)
     prompt = f"""{PROFESSIONALISM}
 
@@ -196,7 +272,7 @@ def build_short_video(
   但**每个短句后面必须紧跟具体数据**，不能只有情绪
 - 最后一句固定收尾：「{cta}」
 
-正文是要被念出来的，写口语，但**不要白话**。"""
+正文是要被念出来的，写口语，但**不要白话**。""" + instruction_block(instructions)
 
     return _generate(
         llm,
@@ -210,6 +286,63 @@ def build_short_video(
     )
 
 
+def _build_english_short_video(
+    article: Article,
+    llm: LLMProvider,
+    *,
+    low: float,
+    high: float,
+    instructions: str,
+) -> ScriptResult:
+    """
+    英文版短视频稿 / The English short-video script.
+
+    **原生写，不翻译中文稿。**中文 30 秒的稿子翻成英文不是 30 秒的稿子——
+    时长正是这三种文案的验收标准，走翻译等于把时长交给译文长度去决定。
+    Written natively rather than translated: a thirty-second Chinese script is not a
+    thirty-second English one, and duration is what these kinds are accepted on.
+    """
+    lo_words = prompt_char_budget(low, lang="en")
+    hi_words = prompt_char_budget(high, lang="en")
+    prompt = f"""{PROFESSIONALISM_EN}
+
+Task: write a {low:.0f}-{high:.0f} second short-video voice-over for the article below.
+
+Structure:
+- **title**: the event itself — who did what, at most 8 words
+  (e.g. "DeepSeek V4 Flash goes open source")
+- **subtitle**: the highlights and why they matter, at most 12 words
+- **script**: **{lo_words}-{hi_words} words**
+
+How to write the script:
+- **The first sentence states the event**: who released or open-sourced what, by its
+  full name and version. No teasers, no rhetorical questions — the viewer needs to know
+  what this is about before anything else
+- Then work down: hardest metric, key parameters, standout capability.
+  **A new fact in every sentence** — never spend a second sentence on the same point.
+  **Cover the trunk of the story rather than drilling into one detail**
+- Prefer these facts: benchmark scores and rankings, parameter counts (total and
+  activated), context length, speed and cost, head-to-head capability results.
+  Fit in as many as the source provides
+- Short punchy sentences are fine for pace, but **every one must be followed
+  immediately by a concrete figure** — never rhythm alone
+
+This is spoken, not read. Write natural spoken English, but never vague English."""
+    prompt += instruction_block(instructions, "en")
+
+    return _generate(
+        llm,
+        system_prompt=prompt,
+        article=article,
+        schema=ShortVideoOut,
+        extract=lambda out: (out.script, out.title, out.subtitle),
+        low=low,
+        high=high,
+        label="short video",
+        lang="en",
+    )
+
+
 def build_narration(
     article: Article,
     llm: LLMProvider,
@@ -217,6 +350,8 @@ def build_narration(
     low: float = 60.0,
     high: float = 120.0,
     cta: str = DEFAULT_CTA,
+    lang: str = "zh",
+    instructions: str = "",
 ) -> ScriptResult:
     """
     生成口播文案 / Build a voice-over script.
@@ -232,6 +367,11 @@ def build_narration(
         The density requirement is identical; the extra time buys method and trade-offs,
         not transitions and reflections. It carries a title pair too, needed at publish.
     """
+    if lang != "zh":
+        return _build_english_narration(
+            article, llm, low=low, high=high, instructions=instructions
+        )
+
     lo_chars, hi_chars = prompt_char_budget(low), prompt_char_budget(high)
     prompt = f"""{PROFESSIONALISM}
 
@@ -255,6 +395,7 @@ def build_narration(
 - 最后一句固定收尾：「{cta}」
 
 连贯成段，不要分小标题、不要写「第一点第二点」——这是念出来的不是看的。"""
+    prompt += instruction_block(instructions)
 
     return _generate(
         llm,
@@ -265,6 +406,54 @@ def build_narration(
         low=low,
         high=high,
         label="口播",
+    )
+
+
+def _build_english_narration(
+    article: Article,
+    llm: LLMProvider,
+    *,
+    low: float,
+    high: float,
+    instructions: str,
+) -> ScriptResult:
+    """英文版口播稿 / The English voice-over script（原生写，理由同短视频）。"""
+    lo_words = prompt_char_budget(low, lang="en")
+    hi_words = prompt_char_budget(high, lang="en")
+    prompt = f"""{PROFESSIONALISM_EN}
+
+Task: write a {low / 60:.0f}-{high / 60:.0f} minute voice-over for the article below.
+
+Structure:
+- **title** at most 8 words (the event), **subtitle** at most 12 words (why it matters)
+- **script**: **{lo_words}-{hi_words} words**
+
+How to write the script:
+- The first two sentences settle the event and the hardest number: who shipped what,
+  and the headline figure
+- The middle is the entire reason this format exists — **it must carry technical
+  depth**: the method used, the key figures, and why those figures hold. Restating the
+  conclusion is not acceptable; that is the short-video script's job
+- **Cover the trunk of the source.** Mention every distinct thing it reports rather than
+  expanding one of them at the cost of the rest
+- If the source names limitations, costs, prerequisites or thresholds, **say so** —
+  a script that lists only upsides has no credibility
+- End on a concrete recommendation or figure, never on adjectives.
+  Write "under 128 GB, use the API instead", not "makes deployment easier than ever"
+
+One continuous piece. No headings, no "firstly, secondly" — this is spoken, not read."""
+    prompt += instruction_block(instructions, "en")
+
+    return _generate(
+        llm,
+        system_prompt=prompt,
+        article=article,
+        schema=NarrationOut,
+        extract=lambda out: (out.script, out.title, out.subtitle),
+        low=low,
+        high=high,
+        label="voice-over",
+        lang="en",
     )
 
 
@@ -283,6 +472,7 @@ def _generate(
     low: float,
     high: float,
     label: str,
+    lang: str = "zh",
 ) -> ScriptResult:
     """
     生成 + 量时长 + 回炉 / Generate, measure, and rewrite if the duration misses.
@@ -318,7 +508,12 @@ def _generate(
         # The character count is passed so the delta is converted at this draft's measured
         # density rather than a preset 4.5/s: technical copy reaches 8, and the preset
         # under-asks by half, leaving the rewrite still over the limit.
-        feedback = length_feedback(seconds, low, high, chars=len(text))
+        # 单位随语言走：中文数字符、英文数词。混用会得出「上一稿 900 字符，
+        # 请删掉 300 words」这种自相矛盾的指令。
+        # The unit follows the language; mixing them yields a self-contradicting delta.
+        feedback = length_feedback(
+            seconds, low, high, lang=lang, chars=count_units(text, lang=lang)
+        )
         if feedback is None:
             logger.info("%s文案完成：%.0f 秒，%d 字，%d 次调用", label, seconds, len(text), calls)
             return result

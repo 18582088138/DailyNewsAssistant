@@ -48,6 +48,7 @@ import pytest
 from dna.narration.duration import (
     CHARS_PER_SECOND_ZH,
     MIXED_COPY_CHAR_FACTOR,
+    count_units,
     estimate_seconds,
     length_feedback,
     observed_chars_per_second,
@@ -257,3 +258,47 @@ def test_feedback_tells_the_model_what_to_cut_first() -> None:
     assert feedback is not None
     assert "背景铺垫" in feedback
     assert "保留具体数字" in feedback
+
+
+def test_english_budget_is_not_scaled_up() -> None:
+    """
+    **英文预算不乘混排系数。**
+
+    1.5 这个系数量的是「中文字数 vs 中英混排稿的实际字符数」——英文稿的单位
+    本来就是词，不存在这个折算。照样乘 1.5 会让英文稿超长 50%，
+    而这正是实测反馈「英文输出的文本量太大」的来源。
+    The factor measures Chinese characters against mixed copy; English is counted in
+    words to begin with, so scaling it simply makes every English script half again too
+    long — which is what the measured complaint was about.
+    """
+    assert prompt_char_budget(30, lang="en") == target_chars(30, lang="en")
+    assert prompt_char_budget(30, lang="zh") > target_chars(30, lang="zh")
+
+
+def test_units_follow_the_language() -> None:
+    """
+    中文数字符、英文数词 / Characters for Chinese, words for English.
+
+    回炉反馈的差值必须和提示词里用的单位一致，否则会出现
+    「上一稿 900 字符 → 请删掉 300 words」这种自相矛盾的指令。
+    """
+    text = "This draft has exactly seven words here."
+
+    assert count_units(text, lang="en") == 7
+    assert count_units(text, lang="zh") == len(text)
+
+
+def test_english_feedback_is_written_in_english() -> None:
+    """
+    **给英文稿的回炉指令用英文写。**
+
+    给英文稿发中文指令，模型有相当概率改回中文输出——这一层的输入输出语言
+    应当一致，否则回炉反而把稿子毁了。
+    A Chinese instruction attached to an English draft stands a real chance of flipping
+    the output back to Chinese, damaging the draft rather than fixing it.
+    """
+    feedback = length_feedback(50, 25, 35, lang="en", chars=130)
+
+    assert feedback is not None
+    assert "words" in feedback
+    assert "字" not in feedback

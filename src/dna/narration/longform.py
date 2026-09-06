@@ -44,7 +44,7 @@ from dna.core.logging import get_logger
 from dna.core.models import Article
 from dna.llm.base import LLMProvider, system, user
 from dna.narration.duration import estimate_seconds, prompt_char_budget
-from dna.narration.script_builder import PROFESSIONALISM, article_block
+from dna.narration.script_builder import article_block, instruction_block, rules_for
 
 logger = get_logger("narration.longform")
 
@@ -163,6 +163,33 @@ class LongformResult:
         }
 
 
+def unit_word(lang: str) -> str:
+    """提示词里说「多少字」还是「多少 words」/ The unit the prompt asks for."""
+    return "字" if lang == "zh" else "words"
+
+
+def language_directive(lang: str) -> str:
+    """
+    输出语言的硬性声明 / The hard statement of output language.
+
+    长文案是**分十几次调用**拼起来的，每一节都是独立的一次请求。
+    只在第一节说一次「用英文写」，后面几节的模型看不到那句话，会跟着中文原文
+    一起滑回中文——拼出来就是中英夹杂的半成品，而这时钱已经花完了。
+    所以每一节的提示词都重复一遍，这不是冗余。
+    A long-form script is assembled from a dozen independent calls. Stating the output
+    language once would leave every later section unaware of it, and each would drift back
+    to the source article's language — yielding a half-Chinese script after the money is
+    already spent. Repeating it per section is not redundancy.
+    """
+    if lang == "zh":
+        return ""
+    return (
+        "\n\n**Write everything in English** — section titles, every line of "
+        "narration, every speaker turn. The source article may be in Chinese: "
+        "translate the facts into English rather than copying Chinese text through."
+    )
+
+
 def can_build_longform(article: Article) -> tuple[bool, str]:
     """
     判断这篇能不能做长文案 / Whether this article can carry a long-form script.
@@ -214,6 +241,7 @@ def plan_target_chars(
     *,
     low: float = MIN_TARGET_SECONDS,
     high: float = MAX_TARGET_SECONDS,
+    lang: str = "zh",
 ) -> int:
     """
     目标字数 / The character target handed to the prompt.
@@ -233,7 +261,9 @@ def plan_target_chars(
         far more than they cost time. Scaling to mixed density makes a fifteen-minute
         target correspond to a script that actually fills fifteen minutes.
     """
-    return prompt_char_budget(plan_target_seconds(article, low=low, high=high))
+    return prompt_char_budget(
+        plan_target_seconds(article, low=low, high=high), lang=lang
+    )
 
 
 def build_longform(
@@ -243,6 +273,8 @@ def build_longform(
     mode: LongformMode = LongformMode.FEATURE,
     low: float = MIN_TARGET_SECONDS,
     high: float = MAX_TARGET_SECONDS,
+    lang: str = "zh",
+    instructions: str = "",
 ) -> LongformResult:
     """
     生成长文案 / Build a long-form script.
@@ -260,22 +292,27 @@ def build_longform(
     if not ok:
         raise ValueError(reason)
 
-    total_target = plan_target_chars(article, low=low, high=high)
+    total_target = plan_target_chars(article, low=low, high=high, lang=lang)
     logger.info(
-        "长文案开始：%s 模式，目标 %d 字（约 %.0f 分钟）",
+        "长文案开始：%s 模式 / %s，目标 %d 字（约 %.0f 分钟）",
+        lang,
         mode,
         total_target,
         plan_target_seconds(article, low=low, high=high) / 60,
     )
 
-    outline = _build_outline(article, llm, mode=mode, total_target=total_target)
+    outline = _build_outline(
+        article, llm, mode=mode, total_target=total_target, lang=lang,
+        instructions=instructions,
+    )
     result = LongformResult(mode=mode, sections=outline.sections, calls=1)
 
     previous_tail = ""
     for index in range(1, len(outline.sections) + 1):
         turns = _expand_section(
             article, llm, mode=mode, sections=outline.sections,
-            index=index, previous_tail=previous_tail,
+            index=index, previous_tail=previous_tail, lang=lang,
+            instructions=instructions,
         )
         result.turns.extend(turns)
         result.calls += 1
@@ -298,7 +335,13 @@ def build_longform(
 
 
 def _build_outline(
-    article: Article, llm: LLMProvider, *, mode: LongformMode, total_target: int
+    article: Article,
+    llm: LLMProvider,
+    *,
+    mode: LongformMode,
+    total_target: int,
+    lang: str = "zh",
+    instructions: str = "",
 ) -> OutlinePlan:
     """
     第一步：出提纲 / Step one: the outline.
@@ -314,9 +357,9 @@ def _build_outline(
         else "这是一期双人访谈：主持人负责提问、追问和转场，嘉宾负责给出技术内容。"
     )
 
-    prompt = f"""{PROFESSIONALISM}
+    prompt = f"""{rules_for(lang)}{language_directive(lang)}
 
-任务：为下面这篇资讯规划一篇 **{total_target} 字**的长文案提纲。{shape}
+任务：为下面这篇资讯规划一篇 **{total_target} {unit_word(lang)}**的长文案提纲。{shape}
 
 要求：
 - 分 {MIN_SECTIONS}~{MAX_SECTIONS} 节，各节 target_chars 之和接近 {total_target}
@@ -336,6 +379,7 @@ def _build_outline(
   共同的短板或尚未解决的问题——但只能基于原文里的事实，不要凭空推测
 - 不要规划「总结回顾」这种把前面重说一遍的节——那是注水
 - 不要规划「背景介绍」占满一节。背景最多一两句带过，长稿的价值在细节不在铺垫"""
+    prompt += instruction_block(instructions, lang)
 
     return llm.chat_json(
         [system(prompt), user(article_block(article))], OutlinePlan, temperature=0.5
@@ -350,6 +394,8 @@ def _expand_section(
     sections: list[SectionPlan],
     index: int,
     previous_tail: str,
+    lang: str = "zh",
+    instructions: str = "",
 ) -> list[Turn]:
     """
     第二步：展开一节 / Step two: expand one section.
@@ -389,9 +435,9 @@ def _expand_section(
 
     context = f"\n上一节的结尾是：「…{previous_tail}」\n请自然衔接，不要重复上面已经说过的内容。" if previous_tail else ""
 
-    prompt = f"""{PROFESSIONALISM}
+    prompt = f"""{rules_for(lang)}{language_directive(lang)}
 
-任务：写长文案的第 {index}/{total} 节，约 **{section.target_chars} 字**。
+任务：写长文案的第 {index}/{total} 节，约 **{section.target_chars} {unit_word(lang)}**。
 
 全文提纲（**只写标着「← 现在写这节」的那一节**）：
 {_outline_map(sections, index)}
@@ -411,6 +457,7 @@ def _expand_section(
   不要用背景铺垫和形容词凑长度
 - 只写本节内容，不要写小标题，不要写「接下来我们看」这种过渡到别节的话
 - 这是要被念出来的，写口语，但**不要白话**"""
+    prompt += instruction_block(instructions, lang)
 
     out = llm.chat_json(
         [system(prompt), user(article_block(article))], SectionScript, temperature=0.6

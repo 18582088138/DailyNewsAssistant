@@ -137,8 +137,31 @@ def prompt_char_budget(seconds: float, *, lang: str = "zh") -> int:
         Thirty seconds converts to 135 characters at 4.5/s, but a technical script of that
         length measures nearer 200. Prompting with the former yields a draft that just
         clears the lower bound: compliant on duration, a third short on substance.
+
+    **英文不放大** / English is not scaled up:
+        1.5 这个系数量的是「中文字数 vs 中英混排稿的实际字符数」——英文稿的单位
+        本来就是词，不存在这个折算。照样乘 1.5 会让英文稿超长 50%，
+        而这正是「英文输出文本量太大」的来源。
+        The factor measures Chinese characters against the character count of mixed
+        technical copy. English is counted in words to begin with, so scaling it would
+        simply make every English script half again too long.
     """
+    if lang != "zh":
+        return target_chars(seconds, lang=lang)
     return int(target_chars(seconds, lang=lang) * MIXED_COPY_CHAR_FACTOR)
+
+
+def count_units(text: str, *, lang: str = "zh") -> int:
+    """
+    按语言数出「一稿有多少个单位」/ Count the units a draft is measured in.
+
+    中文数字符，英文数词 —— 回炉反馈里的差值必须和提示词里用的单位一致，
+    否则会出现「上一稿 900 字符 → 请删掉 300 words」这种自相矛盾的指令。
+    Characters for Chinese, words for English: the rewrite delta has to be expressed in
+    the same unit the prompt used, or the instruction contradicts itself.
+    """
+    clean = spoken_text(text)
+    return len(_LATIN_WORD_RE.findall(clean)) if lang != "zh" else len(clean)
 
 
 def observed_chars_per_second(chars: int, seconds: float) -> float:
@@ -194,23 +217,40 @@ def length_feedback(
     if within(seconds, low, high):
         return None
 
-    unit = "字" if lang == "zh" else " words"
     fallback = CHARS_PER_SECOND_ZH if lang == "zh" else WORDS_PER_SECOND_EN
     rate = observed_chars_per_second(chars, seconds) if chars else fallback
 
+    # 反馈用稿子本身的语言写 / The feedback is written in the draft's own language.
+    #
+    # 给英文稿发中文指令，模型有相当概率**改回中文输出**——这一层的输入输出语言
+    # 应当一致，否则回炉反而把稿子毁了。
+    # A Chinese instruction attached to an English draft stands a real chance of flipping
+    # the output back to Chinese, so the rewrite would damage the draft rather than fix it.
     if seconds > high:
         delta = max(1, int((seconds - high) * rate))
+        if lang == "zh":
+            return (
+                f"上一稿约 {seconds:.0f} 秒，超出上限 {high:.0f} 秒。"
+                f"请**删掉约 {delta} 字**——优先删背景铺垫和重复论述，"
+                f"保留具体数字、方法名与结论。"
+            )
         return (
-            f"上一稿约 {seconds:.0f} 秒，超出上限 {high:.0f} 秒。"
-            f"请**删掉约 {delta}{unit}**——优先删背景铺垫和重复论述，"
-            f"保留具体数字、方法名与结论。"
+            f"The previous draft runs about {seconds:.0f}s, over the {high:.0f}s limit. "
+            f"**Cut roughly {delta} words.** Drop background and repetition first; "
+            f"keep every figure, method name and conclusion."
         )
 
     delta = max(1, int((low - seconds) * rate))
+    if lang == "zh":
+        return (
+            f"上一稿约 {seconds:.0f} 秒，不足下限 {low:.0f} 秒。"
+            f"请**补充约 {delta} 字**——补技术细节、数据或对比，"
+            f"不要用背景介绍和套话凑长度。"
+        )
     return (
-        f"上一稿约 {seconds:.0f} 秒，不足下限 {low:.0f} 秒。"
-        f"请**补充约 {delta}{unit}**——补技术细节、数据或对比，"
-        f"不要用背景介绍和套话凑长度。"
+        f"The previous draft runs about {seconds:.0f}s, under the {low:.0f}s minimum. "
+        f"**Add roughly {delta} words** of technical detail, data or comparison. "
+        f"Do not pad with background or filler."
     )
 
 
@@ -218,6 +258,7 @@ __all__ = [
     "CHARS_PER_SECOND_ZH",
     "MIXED_COPY_CHAR_FACTOR",
     "WORDS_PER_SECOND_EN",
+    "count_units",
     "estimate_seconds",
     "length_feedback",
     "observed_chars_per_second",

@@ -989,3 +989,160 @@ qwen3_torch 后端: 本机 torch 2.8.0+cpu 且无 N 卡，交付代码与离线�
 
 提交后跑一遍文件开头那两条检查。**本轮新增了两个包目录**
 （`src/dna/tts/` 与 `tests/tts/`），第 2 条尤其要跑——`__init__.py` 是最容易漏的文件。
+
+---
+
+## 阶段：P3.5 quater 实测返工（2026-09-06）
+
+用户实测报了六条：两个**没有任何报错的失效**（重做拿回旧答案、NEW 过夜消失），
+四条功能调整（修改指令、表头字号、英文并入总结、文稿加语言开关）。
+
+```bash
+cd /c/Users/test/Downloads/xkd/DailyNewsAssistant
+
+# --- 核心 ---
+git add src/dna/store/db.py
+git add src/dna/store/ledger.py
+git add src/dna/produce/tasks.py
+git add src/dna/produce/service.py
+git add src/dna/narration/duration.py
+git add src/dna/narration/script_builder.py
+git add src/dna/narration/longform.py
+git add src/dna/pipeline/summarize.py
+git add src/dna/pipeline/translate.py
+git add src/dna/tts/factory.py
+git add src/dna/core/config.py
+
+# --- 前端 ---
+git add frontends/cli/main.py
+git add frontends/nicegui_app/actions.py
+git add frontends/nicegui_app/ledger_table.py
+git add frontends/nicegui_app/detail_panel.py
+git add frontends/nicegui_app/theme.py
+
+# --- 配置与测试 ---
+git add config/profile.yaml
+git add tests/produce/test_service.py
+git add tests/narration/test_duration.py
+git add tests/store/test_ledger.py
+git add tests/frontends/test_workbench.py
+
+# --- 文档 ---
+git add docs/00_STAGE_SUMMARY.md
+git add docs/03_unit_tests.md
+git add docs/06_prompt_spec.md
+git add docs/07_db_schema.md
+git add docs/13_workbench_guide.md
+git add docs/git_commands.md
+
+# ⚠️ docs/issues/ 是 gitignored，010 不要 add
+git status --short          # 预期：上面 27 个都在 staged，没有多余的
+
+git commit -m "fix+feat: 实测返工 —— 重做绕开缓存、NEW 按来源判定、语言成为产物维度
+
+═══ 两个没有任何报错的失效 ═══
+
+重做调了 LLM 但内容一字未变（看起来像「生成了没保存」）
+  LLM 响应缓存故意不设过期，键是 provider + 模型 + 完整提示词——
+  同样的输入永远给同样的输出，这正是它平时的价值
+  但重做的字面意思就是要一份不一样的：提示词没改、temperature 是写死的，
+  于是缓存命中，模型确实被调了、文件确实被重写了，内容却一字未变
+  台账里留着痕迹：此前两次重做的字数都是 258，一模一样
+  修法：force=True 时构造不带缓存的 provider
+  顺带修掉两个放大它的因素：刷新后保持展开（原先面板会关掉，
+  而那正是最想看新内容的时刻）；新增「修改指令」（改了提示词自然错开缓存）
+  真机复验 1 次调用：内容确实变了，新版还多带出一个原文里的事实
+
+NEW 标识过一夜就消失
+  判定原本是「最近 24 小时内导入 且 零产物」。实测 fe3b7d3c 导入 47 小时、
+  零产物，被时间窗清掉了
+  时间窗当初压的是泛滥（37 篇里 32 篇零产物，全挂 NEW 等于没有标识），
+  但它压错了维度——把「昨天粘的、今天还没处理」这类最需要标识的行清掉了
+  改成看来源：人工投递（gui/inbox）的是「我特意要处理的」，RSS 抓的是候选池
+  实测 37 行里 5 行挂 NEW，既不泛滥也不会过夜清空
+  Profile.new_badge_hours 与 profile.yaml 里对应那行一并删除——
+  判定里不再有时间成分，留着就是个改了没反应的死配置
+
+═══ 语言成为产物的一个维度（台账 v4）═══
+
+summary_zh + summary_en 合并成 summary + lang
+  它们本来就是同一份东西的两个语言版本，却占了表格两列
+  要给短视频/口播/长文案都加英文版时这个建模撑不住：照原样得再造三个 kind
+  加各自的音频，枚举翻倍而语义没变清楚一点
+  (article_id, kind, lang) 现在才是一份产物的完整标识；文件名走 filename_for(lang)
+  迁移把 9 行历史数据改写到位
+
+查询必须带语言
+  漏掉的话，生成过英文版之后再查中文版会拿到英文那一行——
+  「已存在就跳过」于是拿英文版冒充中文版，一次都不会报错
+
+英文文稿原生生成，不翻译
+  中文 30 秒的稿子翻成英文不是 30 秒的稿子，而时长正是这三种文案的验收标准，
+  刚按人工参考稿校准过一轮（issue 008）。走翻译等于把那一轮作废
+  英文写作要求逐条重写而非直译：它是给模型看的指令，用目标语言写遵守得明显更好；
+  且「白话」「套话」直译过去会变成空泛的 avoid vague language，
+  等于把最要紧的那条规则说没了
+
+英文预算不乘混排系数（这是「英文文本量太大」的根因之一）
+  1.5 量的是「中文字数 vs 中英混排稿的实际字符数」，英文单位本来就是词
+  照样乘会让英文稿超长 50%
+  英文总结另外收紧：提示词从「与原文长度相当」改成至多 45 词，
+  schema 上限 800 → 400——提示词是建议，schema 是约束，
+  放着一个两倍于目标的上限等于告诉模型写到 800 也算合格
+
+长文案每一节都重复一遍语言声明
+  它是分十几次调用拼起来的，只在提纲那次说「用英文写」，
+  后面几节的模型看不到那句话，会跟着中文原文滑回中文——
+  拼出来是中英夹杂的半成品，而这时钱已经花完了
+
+═══ 修改指令 ═══
+
+produce(instructions=...) 接在提示词末尾，优先级高于默认要求
+  放最后是因为后出现的指令权重更高，而这段的用途正是覆盖默认要求
+  空指令时返回空串，提示词逐字不变——否则每篇都会因为多一个空标题
+  而错开 LLM 缓存，白花一轮钱
+  指令记进 productions.instructions，界面下次自动预填：
+  调稿子是渐进的，不该每次都要人回忆上次改了什么
+
+═══ 界面 ═══
+
+表头 11px 灰色 → 13px 加粗白色，下边框加重
+  它是「哪一列是哪个功能」的唯一答案，读不到的表头等于没有表头
+格子上加 EN 标记：收起状态下语言开关看不见，这是唯一的「已有英文版」信号
+刷新后自动展开原来那一格
+
+测试: 813 passed（+10）
+  两条无报错失效都钉在「意图」而不是「实现」上：
+  重做那条断言传给 get_llm 的 cache 参数，NEW 那条把入库时间推到一年前
+真机复验: dna produce decef4a4 --kind summary --force（1 次调用）
+界面验证: Playwright 截图，零费用"
+```
+
+提交后跑一遍文件开头那两条检查。**本轮改了台账 schema（v3 → v4）**，
+干净克隆跑测试时会新建库、直接建到 v4；而你自己那份库是迁移上来的，
+`dna list` 能正常出结果就说明迁移没问题（已验证：9 行 summary_zh/en 全部改写到位）。
+
+### 追加：实测第二轮的三处修正（同一个提交，文件已在上面的 add 列表里）
+
+`service.py` / `detail_panel.py` / `ledger_table.py` / 两个测试文件都已包含在上面，
+**不需要再 add 别的**。若想把这三处单独说明，在 commit message 末尾补一段：
+
+```
+═══ 实测第二轮 ═══
+
+「修改指令」关掉后仍然生效
+  输入框的文字与开关状态原本是同一个字段，关掉只把框藏起来，
+  预填的上一句要求照旧进提示词。台账坐实：14:45 那次无指令，
+  之后三次都记着「长度增加到40s」——人只写过一次
+  改成 use / instructions 两个字段：关掉是「这次不发」，不是「删掉」
+
+台账字数比文件里写的多两百
+  chars 记的是整个文件长度，抬头带着标题和整条 URL。
+  400 字的口播稿记成 600 多，与同一格的预估秒数、文件里那行
+  「约 N 秒 · M 字」三个数字互相打架。改成只数正文
+  （历史行仍是旧数字，重做一次即刷新）
+
+重做比首次慢：不是错觉，是多花的调用
+  6.5s/2 次 → 11.9s/3 次 → 8.9s/3 次。重做不走缓存（本就是设计），
+  而回炉次数随「指令要 40 秒 vs 窗口 25~35 秒」的冲突涨到上限
+```

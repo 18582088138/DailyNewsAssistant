@@ -22,12 +22,11 @@ import os
 import subprocess
 import sys
 from dataclasses import dataclass
-from datetime import datetime
 from pathlib import Path
 
 from nicegui import app, run
 
-from dna.core.config import get_settings, safe_profile
+from dna.core.config import get_settings
 from dna.core.urls import extract_urls
 from dna.llm.factory import get_llm
 from dna.produce import (
@@ -38,7 +37,7 @@ from dna.produce import (
     read_production,
     spec,
 )
-from dna.produce.tasks import audio_kind, json_sidecar
+from dna.produce.tasks import DEFAULT_LANGUAGE, audio_kind, json_sidecar
 from dna.store import FetchStatus, Ledger, ProductionRecord, intake_urls
 from dna.store.ledger import ArticleRecord
 
@@ -54,7 +53,8 @@ class RowView:
     """
 
     article: ArticleRecord
-    productions: dict[str, ProductionRecord]
+    productions: dict[tuple[str, str], ProductionRecord]
+    """按 `(产物类型, 语言)` 索引 / keyed by kind and language."""
 
     is_new: bool = False
     """
@@ -66,8 +66,15 @@ class RowView:
     produced is the production layer's knowledge, and the view only draws the badge.
     """
 
-    def production(self, kind: ProductionKind) -> ProductionRecord | None:
-        return self.productions.get(str(kind))
+    def production(
+        self, kind: ProductionKind, lang: str = DEFAULT_LANGUAGE
+    ) -> ProductionRecord | None:
+        return self.productions.get((str(kind), lang))
+
+    def has_language(self, kind: ProductionKind, lang: str) -> bool:
+        """该语言版本是否已经生成 / Whether that language edition exists."""
+        record = self.production(kind, lang)
+        return bool(record and record.ok)
 
     @property
     def media_label(self) -> str:
@@ -107,17 +114,11 @@ def load_rows(
     )
     matrix = ledger.production_matrix([r.id for r in records])
 
-    # 「新导入」的判定一次算完：`now` 传同一个值，避免同一屏里前几行按 14:59:59
-    # 算、后几行按 15:00:00 算，边界上的那一行时有时无。
-    # Evaluated against a single `now` so a row on the boundary does not flicker between
-    # refreshes within the same screen.
-    window = safe_profile().new_badge_hours
-    now = datetime.now()
     rows = [
         RowView(
             article=r,
             productions=(prods := matrix.get(r.id, {})),
-            is_new=is_new_article(r, prods, now=now, within_hours=window),
+            is_new=is_new_article(r, prods),
         )
         for r in records
     ]
@@ -148,8 +149,10 @@ async def run_production(
     article_id: str,
     kind: ProductionKind | str,
     *,
+    lang: str = DEFAULT_LANGUAGE,
     variant: str | None = None,
     force: bool = False,
+    instructions: str = "",
     progress: dict | None = None,
 ) -> ProduceResult:
     """
@@ -177,19 +180,27 @@ async def run_production(
             progress.update(done=done, total=total, seconds=seconds)
 
     def _work() -> ProduceResult:
+        # provider 交给 `produce` 自己构造：**重做时它要一个不带缓存的**。
+        # 在这里先建好再传进去，就会把「重做要绕开缓存」这条规则绕过去——
+        # 于是重做调了 LLM、写了文件，内容却一字未变。
+        # `produce` builds the provider itself because a redo needs an uncached one;
+        # constructing it here would bypass that rule and make every redo a no-op.
         return produce(
             article_id,
             kind,
+            lang=lang,
             variant=variant,
             force=force,
-            llm=None if is_audio else get_llm(),
+            instructions=instructions,
             on_progress=_on_progress if is_audio else None,
         )
 
     return await run.io_bound(_work)
 
 
-def audio_estimate_seconds(record: ArticleRecord, kind: ProductionKind | str) -> float:
+def audio_estimate_seconds(
+    record: ArticleRecord, kind: ProductionKind | str, lang: str = DEFAULT_LANGUAGE
+) -> float:
     """
     合成这一格音频大约要等多久 / How long synthesising this cell will take.
 
@@ -207,8 +218,26 @@ def audio_estimate_seconds(record: ArticleRecord, kind: ProductionKind | str) ->
         return 0.0
 
     ledger = Ledger(get_settings().db_file)
-    script = ledger.latest_production(record.id, str(script_kind))
+    script = ledger.latest_production(record.id, str(script_kind), lang)
     return estimate_synthesis_seconds(script.est_seconds or 0.0) if script else 0.0
+
+
+def last_instructions(
+    record: ArticleRecord, kind: ProductionKind | str, lang: str = DEFAULT_LANGUAGE
+) -> str:
+    """
+    上一版是带着什么额外要求生成的 / The extra requirements the last version used.
+
+    用来预填「修改指令」输入框。**人调稿子是渐进的**——上次写了「用词再专业一点」，
+    这次多半是在此基础上再加一条，而不是从零重想。每次都给一个空框，
+    等于每次都要求人回忆上次改了什么。
+    Used to pre-fill the instruction box. Tuning is incremental: the next round usually
+    builds on the last one, and an empty box asks the user to remember what they wrote.
+    """
+    production = Ledger(get_settings().db_file).latest_production(
+        record.id, str(kind), lang
+    )
+    return (production.instructions or "") if production else ""
 
 
 def audio_for(kind: ProductionKind | str) -> ProductionKind | None:
@@ -284,9 +313,11 @@ async def import_links(
 
 
 
-def production_text(article_id: str, kind: ProductionKind | str) -> str:
+def production_text(
+    article_id: str, kind: ProductionKind | str, lang: str = DEFAULT_LANGUAGE
+) -> str:
     """读回产物内容供预览 / Read a production back for preview."""
-    return read_production(article_id, kind)
+    return read_production(article_id, kind, lang=lang)
 
 
 def article_directory(record: ArticleRecord) -> str:
@@ -296,7 +327,9 @@ def article_directory(record: ArticleRecord) -> str:
     return str(get_settings().output_path / record.store_dir)
 
 
-def production_file(record: ArticleRecord, kind: ProductionKind | str) -> Path | None:
+def production_file(
+    record: ArticleRecord, kind: ProductionKind | str, lang: str = DEFAULT_LANGUAGE
+) -> Path | None:
     """
     某个产物的文件路径 / The file path of one production.
 
@@ -307,18 +340,20 @@ def production_file(record: ArticleRecord, kind: ProductionKind | str) -> Path |
     """
     if not record.store_dir:
         return None
-    path = get_settings().output_path / record.store_dir / spec(kind).filename
+    path = get_settings().output_path / record.store_dir / spec(kind).filename_for(lang)
     return path if path.exists() else None
 
 
-def production_sidecar(record: ArticleRecord, kind: ProductionKind | str) -> Path | None:
+def production_sidecar(
+    record: ArticleRecord, kind: ProductionKind | str, lang: str = DEFAULT_LANGUAGE
+) -> Path | None:
     """
     产物的 JSON 附件 / A production's JSON sidecar, when it has one.
 
     目前只有长文案有：按发言人切好的轮次，P6/P7 的 TTS 要用它分配音色。
     Only the long-form script has one today: the speaker turns the TTS stage needs.
     """
-    name = json_sidecar(spec(kind))
+    name = json_sidecar(spec(kind), lang)
     if not name or not record.store_dir:
         return None
     path = get_settings().output_path / record.store_dir / name
@@ -395,6 +430,7 @@ def longform_estimate(record: ArticleRecord) -> str:
     carried its own character-based formula, long since replaced in the core, so the
     minutes it quoted no longer matched what was produced.
     """
+    from dna.core.config import safe_profile
     from dna.core.models import Article
     from dna.narration.longform import plan_target_seconds
 
@@ -428,6 +464,7 @@ __all__ = [
     "article_directory",
     "audio_estimate_seconds",
     "audio_for",
+    "last_instructions",
     "cache_status",
     "import_links",
     "preview_links",

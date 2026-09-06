@@ -13,9 +13,10 @@
 | 3 | 参考 prompts | `xkd/best-prompts/prompts/`，按阶段取 `dev-requirement` → `dev-design` → `dev-implementation` → `dev-review`/`code-review-excellence` → `dev-bug-fix` |
 | 4 | 专属资产 | Skill：`~/.claude/skills/dailynews-dev/SKILL.md`；Memory：`~/.claude/projects/c--Users-test-Downloads-xkd/memory/`（一事一文件 + MEMORY.md 索引）。随开发持续更新 |
 | 5 | 流程 | 调研 → 构建方案 → 方案调整 → 开发 → 测试 → 人工审阅 → debug&修改 → **git 命令汇总（人工手动提交，AI 不执行提交）** |
-| 6 | 文档与测试 | 每阶段留档于 `docs/`；每个基础功能配单元测试，**测试文件头部写完整复测命令**，同步 `docs/03_unit_tests.md`。测试不过不进下一模块 |
-| 7 | 代码规范 | 分层单向依赖、功能独立封装、核心函数中英双语注释 |
-| 8 | AI 推理 | `LLMProvider` 抽象：API（OpenRouter/DeepSeek）与 Local（Ollama → OpenVINO）可互换。先用 API 验证功能，后续迁 Local。TTS 同构抽象 |
+| 6 | 文档与测试 | 每**阶段**留档于 `docs/`（bug 修复只写 `issues/`，不动全套）；每个基础功能配单元测试，**测试文件头部写完整复测命令**。测试不过不进下一模块。`03_unit_tests.md` 与本文件在**阶段收尾时**统一更新，不是每次改动都更新 |
+| 7 | 代码规范 | 分层单向依赖、功能独立封装、**跨层接口与算法核心**中英双语注释（内部 helper 与测试中文即可）。注释只写「为什么」，不写「是什么」 |
+| 8 | 成本纪律（2026-09-06 追加） | 不必须的流程/验证/测试/修改一律省掉；整体 review 与全功能测试由用户**阶段性点名**时一次做完。详细规则见 `~/.claude/skills/dailynews-dev/SKILL.md` 的「成本纪律」一节 |
+| 9 | AI 推理 | `LLMProvider` 抽象：API（OpenRouter/DeepSeek）与 Local（Ollama → OpenVINO）可互换。先用 API 验证功能，后续迁 Local。TTS 同构抽象 |
 
 ---
 
@@ -61,6 +62,7 @@
 | P3 Pipeline 核心 | clean → dedup → score → summarize → translate → trend → `_digest.json`；LLM 响应缓存；`dna digest` | ✅ **完成** | 610 passed (6.9s) + 真机验证（DeepSeek，8 次调用） | `06_prompt_spec.md` · `12_digest_guide.md` · `issues/006` |
 | P3.5 台账工作台 | NiceGUI 产出矩阵（5 列逐格重做）/ 单篇产物层 / 三种文案（25~35s·1~2min·5~15min 专题·访谈）/ 目录迁到 outputs / 媒体上限可配置 | ✅ **完成** | 705 passed (12.3s) + 真机验证（DeepSeek，11 次调用） | `07_db_schema.md` · `13_workbench_guide.md` · `issues/007` |
 | P3.5 bis 文案质量返工 | 信息密度列为第一要求 / 字数预算按中英混排密度换算 / 短视频改为覆盖主干 / 摘要加信息完整性与指标优先级 / profile 时长区间与 CTA 接通 | ✅ **完成** | 722 passed (12.9s) + 真机复验（DeepSeek，4 次调用） | `06_prompt_spec.md` · `13_workbench_guide.md` · `issues/008` |
+| P3.5 quater 实测返工 | **重做绕开 LLM 缓存**（此前重做拿回字节相同的旧答案）/ **NEW 改按来源判定**，不再过夜消失 / 新增「修改指令」扩展提示词 / **语言成为产物的一个维度**（`summary_zh`+`summary_en` 合并为 `summary`+`lang`，台账 v4）/ 四种产物都可切中英，英文文稿原生生成、英文总结压到 45 词 / 表头加粗放大 / 刷新后保持展开 | ✅ **完成** | 813 passed (31.8s) + 真机复验（1 次调用） | `issues/010` · `13_workbench_guide.md` |
 | P4 落盘 + 台账 DB | **期次级**目录规则 / `_references.md` / 期次装配 / `dna issue`。⚠️ DB 与条目级落盘已在 P2+ 与 P3.5 提前完成；条目布局以 P3.5 的 `outputs/articles/` 为唯一权威，`topics/` 与 `_history/` 均已取消（`02_development_plan.md` §9.2 §9.3） | ✅ **完成** | 766 passed (16.7s) + 真机验证（20260902 期，零 LLM 调用） | `05_output_spec.md`（落盘唯一权威） |
 | P4.5 语音合成层 | `dna/tts/` 两个后端（OpenVINO / PyTorch CUDA）同一协议 / 清洗·分段·拼接·逐段容错 / 三种条目级音频进产出矩阵 / GUI 合成按钮与进度 / `dna tts` `dna produce --kind *_audio` | ✅ **完成** | 802 passed (19.0s) + 真机验证（本地合成，零费用） | `14_tts_guide.md` · `issues/009` |
 | P5 场景1 图文版 | md/html 双语 + 长图 | ⬜ | — | 🔍 人工审阅 |
@@ -106,6 +108,7 @@
 | 002 | 小模型（qwen2.5:3b）把 JSON Schema 原样抄回，且修复重试的反馈无效导致三次全废 | ✅ 已修复并真机复验 | [issues/002](issues/002-small-model-echoes-json-schema.md) |
 | 004 | 落盘验证暴露两个问题：①图床防盗链导致配图全部 403 ②抽取降级时站点通用标题覆盖了 RSS 正确标题且不可恢复 | ✅ 已修复并真机复验 | [issues/004](issues/004-image-hotlink-and-title-overwrite.md) |
 | 008 | 文案信息量不够：①**字数预算按纯中文语速折算，系统性少要三分之一**，而稿子时长照样达标、回炉不触发，错误完全静默 ②短视频「只讲一个点」导致技术正确却没把文章讲清楚 ③笼统的「不要白话」模型执行不了 ④正文截到 3000 字，最有价值的那条局限模型没看到 ⑤摘要选了文件体积而非激活参数 | ✅ 全部已修并真机复验 | [issues/008](008-copy-information-density.md) |
+| 010 | 实测两个无报错失效：①**重做调了 LLM 但内容一字未变**——响应缓存不设过期且键是提示词，重做既没改提示词也没绕开缓存，看起来像「生成了没保存」②**NEW 标识过一夜消失**——24 小时时间窗压错了维度，把「昨天粘的、今天还没处理」这类最需要标识的行清掉了 | ✅ 两个都已修复并真机复验 | [issues/010](010-redo-cache-and-new-badge.md) |
 | 009 | P4.5 首次真机合成：口播稿估算 93.9 秒，实际合成 153.3 秒，**差 63%**；Qwen3-TTS 实测中文语速 5.4 字/秒 | ⚠️ 已量出，本阶段不改（发布加速倍率未定，且改语速会连带推翻 issue 008 刚校准过的字数） | [issues/009](009-tts-speaking-rate.md) |
 | 007 | P3.5：①arXiv 抓到的「配图」是页脚基金会 logo ②长文案目标按字符数推导，与按秒数验收对不上（目标 15 分钟实测 7.4 分钟）③**图片水印实测无法在抓取时绕开**（发布方烧进像素） | ✅ ①②已修，③确认为外部限制、按用户决定不处理 | [issues/007](007-p35-workbench.md) |
 | 006 | P3 开发中发现：①`db_path` 不跟随 `DATA_DIR`，改数据目录会让台账与落盘静默失联（测试因此写进了真实数据库）②NFKC 归一化把中文逗号折成半角，中文稿读起来像机翻 | ✅ 已修复 | [issues/006](006-p3-config-and-normalisation.md) |

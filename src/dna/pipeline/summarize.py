@@ -100,7 +100,7 @@ class SummaryResult:
     """True 表示 LLM 调用失败、退回用标题 / the LLM call failed and the title was used."""
 
 
-def build_messages(cluster: Cluster) -> list[ChatMessage]:
+def build_messages(cluster: Cluster, *, instructions: str = "") -> list[ChatMessage]:
     """
     构造提示词 / Build the prompt.
 
@@ -127,10 +127,15 @@ def build_messages(cluster: Cluster) -> list[ChatMessage]:
     else:
         lines.append("\n（正文抓取失败，只有标题可用——请基于标题写，不要编造细节）")
 
-    return [system(SYSTEM_PROMPT), user("\n".join(lines))]
+    from dna.narration.script_builder import instruction_block
+
+    prompt = SYSTEM_PROMPT + instruction_block(instructions)
+    return [system(prompt), user("\n".join(lines))]
 
 
-def summarize_cluster(cluster: Cluster, llm: LLMProvider) -> SummaryResult:
+def summarize_cluster(
+    cluster: Cluster, llm: LLMProvider, *, instructions: str = ""
+) -> SummaryResult:
     """
     为一个事件生成摘要 / Summarise one event.
 
@@ -138,7 +143,9 @@ def summarize_cluster(cluster: Cluster, llm: LLMProvider) -> SummaryResult:
     Failures degrade to the title rather than raising; see the module docstring.
     """
     try:
-        out = llm.chat_json(build_messages(cluster), SummaryOut, temperature=0.3)
+        out = llm.chat_json(
+            build_messages(cluster, instructions=instructions), SummaryOut, temperature=0.3
+        )
     except Exception as exc:  # noqa: BLE001 - 单条失败不能毁掉整期日报
         logger.warning("摘要失败，退回使用标题：%s —— %s", cluster.canonical.title[:40], exc)
         return SummaryResult(summary=cluster.canonical.title, tags=[], degraded=True)

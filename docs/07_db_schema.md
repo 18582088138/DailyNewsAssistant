@@ -127,3 +127,41 @@ ledger.production_matrix([r.id for r in records])   # {article_id: {kind: record
 
 - 实现：`src/dna/store/`（`db.py` 建表迁移 · `ledger.py` 读写 · `migrate_layout.py` 迁移）
 - 操作手册：[11_article_store_guide.md](11_article_store_guide.md) · [13_workbench_guide.md](13_workbench_guide.md)
+
+---
+
+## productions v4：语言与指令
+
+台账 schema 升到 **v4**，`productions` 加两列：
+
+| 列 | 类型 | 说明 |
+|---|---|---|
+| `lang` | TEXT NOT NULL DEFAULT 'zh' | 输出语言，`zh` / `en` |
+| `instructions` | TEXT | 生成这一版时附带的额外要求 |
+
+### 为什么语言是列，不是新的 kind
+
+`summary_zh` 与 `summary_en` 原本是两种产物类型，于是工作台里占两列——
+可它们是**同一份东西的两个语言版本**。要给短视频、口播、长文案都加英文版时，
+照原样得再造三个 kind 加它们各自的音频，枚举翻倍而语义没变清楚一点。
+
+v4 之后 **`(article_id, kind, lang)` 才是一份产物的完整标识**：
+
+```sql
+UPDATE productions SET kind='summary', lang='zh' WHERE kind='summary_zh';
+UPDATE productions SET kind='summary', lang='en' WHERE kind='summary_en';
+CREATE INDEX idx_productions_kind ON productions(article_id, kind, lang);
+```
+
+**查询必须带上语言。**漏掉的话，生成过英文版之后再查中文版会拿到英文那一行——
+「已存在就跳过」于是拿英文版冒充中文版，一次都不会报错。
+`latest_production(article_id, kind, lang)` 与 `production_matrix()`
+（返回 `{article_id: {(kind, lang): record}}`）都按三元组走。
+
+### `instructions` 记什么
+
+人在界面上写的「加长到 40 秒」「用词再专业一点」。记下来有两个用处：
+
+1. **界面预填**——调稿子是渐进的，下次重做在上次基础上再加一条，
+   而不是从零回忆上次改了什么
+2. **内容出问题时第一个要看的**——这一版是带着什么要求做出来的

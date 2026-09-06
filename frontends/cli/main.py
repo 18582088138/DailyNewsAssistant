@@ -408,11 +408,15 @@ def produce(
         "--kind",
         "-k",
         help=(
-            "summary_zh | summary_en | shortvideo | narration | longform"
+            "summary | shortvideo | narration | longform"
             " | shortvideo_audio | narration_audio | longform_audio"
         ),
     ),
-    all_kinds: bool = typer.Option(False, "--all", help="生成常规四项（不含长文案）"),
+    lang: str = typer.Option("zh", "--lang", "-l", help="输出语言：zh | en"),
+    instructions: str = typer.Option(
+        "", "--instructions", "-i", help="本次的额外要求，例如「加长到 40 秒」"
+    ),
+    all_kinds: bool = typer.Option(False, "--all", help="生成常规三项（不含长文案与音频）"),
     variant: str | None = typer.Option(
         None, "--variant", help="长文案形式：feature（专题，单角色）| interview（访谈，双角色）"
     ),
@@ -425,7 +429,16 @@ def produce(
     要重做请加 --force。
 
     长文案（5~15 分钟）**不在 --all 里**，必须显式 --kind longform：
-    它一篇要 5~9 次调用，是其余四项加起来的两倍多。
+    它一篇要 5~9 次调用，是其余三项加起来的两倍多。
+
+    `--lang en` 出英文版。**英文版单独计费**，而且不进 --all——
+    多数文章不需要英文版，跟着批量跑等于每篇都翻倍。
+    总结类的英文版翻译已写好的中文（便宜）；三种文稿的英文版**原生重写**，
+    因为中文 30 秒的稿子翻成英文不是 30 秒的稿子，而时长是它们的验收标准。
+
+    `--force` 时**不走 LLM 缓存**：缓存故意不设过期、键是完整提示词，
+    照常走的话重做会拿回一模一样的旧答案。要引导出不同的结果，
+    再配 `--instructions "加长到 40 秒"`。
 
     三种 `*_audio` 是**本地 TTS 合成，一分钱不花，但很花时间**（实测 RTF≈2.5：
     口播约 4 分钟，长文案约 37 分钟）。它们同样不在 --all 里，理由是时间不是钱。
@@ -447,7 +460,7 @@ def produce(
             f"{estimate_calls(list(batch_kinds()))} 次 LLM 调用（已有产物会跳过）[/dim]"
         )
         with console.status(f"生成中：{record.title[:30]}…"):
-            results = produce_all(record.id, force=force)
+            results = produce_all(record.id, lang=lang, force=force)
     else:
         task = spec(kind)
         if task.needs_variant and variant is None:
@@ -462,7 +475,16 @@ def produce(
             console.print(f"[dim]预估 {task.approx_calls} 次 LLM 调用[/dim]")
 
         with console.status(f"生成中：{task.label}…"):
-            results = [produce_one(record.id, kind, variant=variant, force=force)]
+            results = [
+                produce_one(
+                    record.id,
+                    kind,
+                    lang=lang,
+                    variant=variant,
+                    force=force,
+                    instructions=instructions,
+                )
+            ]
 
     console.print(f"\n[bold]{record.title}[/bold]")
     for result in results:

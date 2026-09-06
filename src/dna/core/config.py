@@ -404,16 +404,14 @@ class Profile(BaseModel):
     # entirely different rates.
     cta_line: str = "关注我，下期分享 AI 行业最新进展"
 
-    # 「NEW」标识挂多久（小时）/ how long the "new import" badge stays
+    # 「NEW」标识没有时间窗，也就没有对应的配置项 / the badge has no window and no setting
     #
-    # 标识的作用是**从几十行里找出刚粘进去的那几条**，所以必须有时间窗：
-    # 实测台账 37 篇里有 32 篇从来没生成过任何产物（RSS 存量大多如此），
-    # 只看「有没有产物」的话 NEW 会挂在 32 行上，等于没有这个标识。
-    # 设 0 表示不限时间，只看有没有产物。
-    # The badge exists to pick out the few links just pasted, so a window is required:
-    # 32 of 37 articles in the real ledger have no productions at all, and without the
-    # window the badge would sit on all of them. Zero disables the window.
-    new_badge_hours: int = 24
+    # 曾经有过一个 `new_badge_hours`（24 小时），已删除：时间窗解决错了问题。
+    # 它让**昨天粘进来、今天还没处理**的链接第二天失去标识，而那恰恰是最需要
+    # 标识的一条。判定改成看来源（人工投递 vs RSS 抓取），见
+    # `produce.is_new_article`。
+    # A 24-hour window used to live here and has been removed: it stripped the badge from
+    # exactly the rows that still needed it. The predicate now keys on provenance.
 
 
 def _read_yaml(path: Path) -> Any:

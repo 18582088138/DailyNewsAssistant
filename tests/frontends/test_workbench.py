@@ -220,8 +220,7 @@ def test_spoken_kinds_are_exactly_the_script_kinds() -> None:
         ProductionKind.NARRATION,
         ProductionKind.LONGFORM,
     }
-    assert not spec(ProductionKind.SUMMARY_ZH).spoken
-    assert not spec(ProductionKind.SUMMARY_EN).spoken
+    assert not spec(ProductionKind.SUMMARY).spoken
 
 
 def test_every_displayed_kind_has_a_header_label() -> None:
@@ -277,10 +276,10 @@ def test_production_file_is_none_when_missing(settings: Settings, monkeypatch) -
     article_id, directory = _seed(settings)
     record = Ledger(settings.db_file).get(article_id)
 
-    assert actions.production_file(record, ProductionKind.SUMMARY_ZH) is None
+    assert actions.production_file(record, ProductionKind.SUMMARY) is None
 
-    (directory / spec(ProductionKind.SUMMARY_ZH).filename).write_text("x", encoding="utf-8")
-    assert actions.production_file(record, ProductionKind.SUMMARY_ZH) is not None
+    (directory / spec(ProductionKind.SUMMARY).filename_for("zh")).write_text("x", encoding="utf-8")
+    assert actions.production_file(record, ProductionKind.SUMMARY) is not None
 
 
 def test_sidecar_only_exists_for_longform(settings: Settings, monkeypatch) -> None:
@@ -372,3 +371,22 @@ def test_longform_estimate_uses_the_core_formula(settings: Settings, monkeypatch
 
     assert text.endswith("分钟")
     assert 0 < int(text.removesuffix(" 分钟")) <= MAX_TARGET_SECONDS / 60
+
+
+def test_instructions_are_not_sent_when_the_switch_is_off() -> None:
+    """
+    关掉「修改指令」就必须真的不发那句话。
+
+    实测报的是「关了开关照样生效」：输入框的文字与开关状态原本合成一个字段，
+    关掉只是把框藏起来，预填的上一句要求照旧进了提示词——于是每次重做都还按
+    「增加生成文本长度」写，稿子越写越长、回炉三次仍超时，而界面上看不出原因。
+    """
+    from frontends.nicegui_app.detail_panel import effective_instructions
+
+    state = {"instructions": "增加生成文本长度", "use": True}
+    assert effective_instructions(state) == "增加生成文本长度"
+
+    # 关掉开关：不发，但**文字要留着**，再打开时还在
+    state["use"] = False
+    assert effective_instructions(state) == ""
+    assert state["instructions"] == "增加生成文本长度"

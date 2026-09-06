@@ -46,7 +46,12 @@ Rules:
 1. Translate meaning, not words — the result must read as if originally written in English
 2. Keep product names, company names, version numbers and metrics EXACTLY as given
    (GPT-4o stays GPT-4o; 通义千问 becomes Qwen; 智谱 becomes Zhipu AI)
-3. Keep the summary to one or two sentences, matching the source's length
+3. **Be shorter than the Chinese.** One or two sentences, at most 45 words.
+   English needs more characters than Chinese to say the same thing, so a faithful
+   translation always renders longer — and these summaries sit in a fixed-width
+   column where the overflow is what the reader actually notices.
+   Compress by dropping hedges and connectives, never by dropping a figure:
+   every number, model name and benchmark in the Chinese must survive
 4. Titles stay headline-style: no trailing period, no "The" padding
 5. Do NOT add information the Chinese does not contain, and do NOT omit any
 
@@ -58,7 +63,12 @@ class TranslatedEntry(BaseModel):
 
     id: str = Field(description="必须与输入的 id 完全一致 / must match the input id exactly")
     title_en: str = Field(min_length=1, max_length=300)
-    summary_en: str = Field(min_length=1, max_length=800)
+    # 400 而不是 800：上限是**这条规则的最后一道防线**。提示词里说了「至多 45 词」，
+    # 但提示词是建议，schema 是约束——放着一个两倍于目标的上限，等于告诉模型
+    # 写到 800 也算合格。
+    # The ceiling is the last line of defence for the length rule: leaving it at twice the
+    # target tells the model that twice the target passes.
+    summary_en: str = Field(min_length=1, max_length=400)
 
 
 class TranslationOut(BaseModel):
@@ -67,7 +77,9 @@ class TranslationOut(BaseModel):
     entries: list[TranslatedEntry] = Field(default_factory=list)
 
 
-def build_messages(items: list[tuple[str, str, str]]) -> list[ChatMessage]:
+def build_messages(
+    items: list[tuple[str, str, str]], *, instructions: str = ""
+) -> list[ChatMessage]:
     """
     构造提示词 / Build the prompt.
 
@@ -84,11 +96,14 @@ def build_messages(items: list[tuple[str, str, str]]) -> list[ChatMessage]:
     for entry_id, title, summary in items:
         lines.append(f"[id: {entry_id}]\n标题：{title}\n摘要：{summary}\n")
 
-    return [system(SYSTEM_PROMPT), user("\n".join(lines))]
+    from dna.narration.script_builder import instruction_block
+
+    prompt = SYSTEM_PROMPT + instruction_block(instructions, "en")
+    return [system(prompt), user("\n".join(lines))]
 
 
 def translate_batch(
-    items: list[tuple[str, str, str]], llm: LLMProvider
+    items: list[tuple[str, str, str]], llm: LLMProvider, *, instructions: str = ""
 ) -> dict[str, tuple[str, str]]:
     """
     翻译一批条目 / Translate one batch.
@@ -104,7 +119,9 @@ def translate_batch(
         return {}
 
     try:
-        out = llm.chat_json(build_messages(items), TranslationOut, temperature=0.2)
+        out = llm.chat_json(
+            build_messages(items, instructions=instructions), TranslationOut, temperature=0.2
+        )
     except Exception as exc:  # noqa: BLE001 - 翻译失败只影响英文版，中文版照常
         logger.warning("翻译失败（%d 条），本批跳过英文版：%s", len(items), exc)
         return {}

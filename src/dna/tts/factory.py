@@ -94,7 +94,9 @@ def reset_cache() -> None:
     _CACHE.clear()
 
 
-def voice_for_role(role: str, settings: Settings | None = None) -> VoiceSpec:
+def voice_for_role(
+    role: str, settings: Settings | None = None, *, lang: str = "zh"
+) -> VoiceSpec:
     """
     按角色取音色 / Pick the voice for a speaker role.
 
@@ -104,6 +106,11 @@ def voice_for_role(role: str, settings: Settings | None = None) -> VoiceSpec:
     Falls back to defaults when unset, and guarantees the two roles differ: an interview
     read in a single voice leaves the listener unable to tell who is speaking, which
     defeats the point of writing two parts.
+
+    `lang` 决定的是**发音语言**，不是音色。同一把嗓子念中文和英文都行，但必须告诉
+    模型这段是哪种语言——按中文念英文稿会得到一串带中文腔的拼读。
+    `lang` sets the pronunciation, not the voice: the same speaker reads either language,
+    but the model has to be told which, or English comes out with Chinese phonetics.
     """
     s = settings or get_settings()
     host = (s.tts_voice_host or "").strip() or DEFAULT_SPEAKER
@@ -117,7 +124,8 @@ def voice_for_role(role: str, settings: Settings | None = None) -> VoiceSpec:
             guest,
         )
 
-    return VoiceSpec(speaker=guest if role == "guest" else host, language="chinese")
+    language = "chinese" if lang == "zh" else "english"
+    return VoiceSpec(speaker=guest if role == "guest" else host, language=language)
 
 
 # ---------------------------------------------------------------------------

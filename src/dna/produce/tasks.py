@@ -8,9 +8,20 @@ GUI read it, so adding a production kind means editing this file only and neithe
 front-end can drift out of sync.
 
 每个任务声明它的元数据 / Each task declares its metadata:
-    输出文件名、前置依赖、**是否进批量**、预估调用次数、是否要念出来
+    输出文件名、前置依赖、**是否进批量**、预估调用次数、是否要念出来、
+    非母语版本是翻译还是原生生成
     the output filename, its prerequisite, whether it joins the batch, the estimated call
-    count and whether it is meant to be spoken
+    count, whether it is meant to be spoken, and whether other languages are translated
+    or generated natively
+
+语言是**维度，不是类型** / Language is a dimension, not a kind:
+    `summary_zh` 与 `summary_en` 曾经是两种产物类型，于是表格里占两列——
+    可它们是同一份东西的两个语言版本。文稿类要加英文版时这个建模就撑不住了：
+    照原样得再造 `shortvideo_en`、`narration_en`、`longform_en` 加各自的音频，
+    枚举翻倍而语义没变清楚一点。
+    现在 `(kind, lang)` 才是一份产物的完整标识，文件名走 `filename_for(lang)`。
+    They were two kinds occupying two columns, though they are two language versions of
+    one thing. `(kind, lang)` now identifies a production, and the filename follows.
 
 **不含生成函数**：分派在 `service._generate` 里。放这里会让 tasks 反向依赖
 narration 与 pipeline，而 tasks 现在是一张零依赖的纯数据表，两个前端都能安全导入。
@@ -41,12 +52,24 @@ from __future__ import annotations
 from dataclasses import dataclass
 from enum import StrEnum
 
+from dna.core.naming import lang_suffix_name
+
+# 支持的输出语言 / the output languages every kind supports
+#
+# 默认中文：这个应用是给中文读者做的，英文版是**可选的第二份**，不是并列的两份。
+# 界面上的开关默认停在中文，切过去才生成英文——英文版同样计费。
+# Chinese is the default: the English edition is an optional second version rather than a
+# co-equal one, and generating it bills like anything else.
+LANGUAGES: tuple[str, ...] = ("zh", "en")
+DEFAULT_LANGUAGE = "zh"
+
+LANGUAGE_LABELS = {"zh": "中文", "en": "English"}
+
 
 class ProductionKind(StrEnum):
     """一篇文章可以生成的产物 / What can be produced for one article."""
 
-    SUMMARY_ZH = "summary_zh"
-    SUMMARY_EN = "summary_en"
+    SUMMARY = "summary"
     SHORTVIDEO = "shortvideo"
     NARRATION = "narration"
     LONGFORM = "longform"
@@ -64,17 +87,40 @@ class TaskSpec:
     label: str
     """中文名，GUI 表头与 CLI 提示都用它 / the Chinese name shown in both front-ends."""
 
-    filename: str
-    """输出文件名，相对文章目录 / output file name, relative to the article directory."""
+    stem: str
+    """
+    输出文件名的主干 / the stem of the output file name.
+
+    真实文件名由 `filename_for(lang)` 拼出来：`summary` + `zh` + `md` → `summary.zh.md`。
+    语言后缀走 `core/naming.lang_suffix_name`，和期次级产物用的是同一条规则。
+    The real name is assembled per language through the same suffix rule the issue-level
+    outputs use.
+    """
+
+    extension: str = "md"
+    """输出扩展名 / the output file's extension（音频是 `wav`）。"""
 
     requires: ProductionKind | None = None
     """
-    前置产物 / prerequisite.
+    前置产物（**同语言**）/ prerequisite, in the same language.
 
-    英文总结依赖中文总结：翻译的输入是已写好的中文，不是原始正文。
-    这样中英两版一定说的是同一件事，成本也低得多。
-    The English summary translates the finished Chinese one rather than the raw body, so
-    the two versions are guaranteed to say the same thing, at much lower cost.
+    音频依赖它那份稿子：英文音频念英文稿，中文音频念中文稿。
+    Audio depends on its script in the matching language.
+    """
+
+    translated_from: str = ""
+    """
+    非该语言的版本由这个语言翻译而来；空表示**每种语言都原生生成**。
+    Other languages are translated from this one; empty means each is generated natively.
+
+    总结类填 `zh`：翻译一份已写好的中文，比用英文重写一遍便宜，而且中英两版
+    保证说的是同一件事——P3 已验证术语能原样保留。
+    文稿类留空：**中文 30 秒的稿子翻成英文不是 30 秒的稿子**。时长是这三种文案的
+    验收标准，刚按人工参考稿校准过一轮（issue 008），走翻译等于把那一轮作废，
+    而且英文稿的实际时长会无声地不可控。
+    Summaries translate: it is cheaper and guarantees both versions say the same thing.
+    Scripts do not: a thirty-second Chinese script is not a thirty-second English one,
+    and duration is precisely what these three kinds are accepted on.
     """
 
     in_batch: bool = True
@@ -103,6 +149,10 @@ class TaskSpec:
     matching audio kind, which is how the workbench knows where to offer synthesis.
     """
 
+    def filename_for(self, lang: str = DEFAULT_LANGUAGE) -> str:
+        """某个语言版本的文件名 / The file name of one language edition."""
+        return lang_suffix_name(self.stem, normalize_lang(lang), self.extension)
+
     audio_of: ProductionKind | None = None
     """
     这一格是哪份稿子的音频 / which script this is the audio of.
@@ -117,35 +167,30 @@ class TaskSpec:
 
 
 TASKS: dict[ProductionKind, TaskSpec] = {
-    ProductionKind.SUMMARY_ZH: TaskSpec(
-        kind=ProductionKind.SUMMARY_ZH,
+    ProductionKind.SUMMARY: TaskSpec(
+        kind=ProductionKind.SUMMARY,
         label="总结",
-        filename="summary.zh.md",
-    ),
-    ProductionKind.SUMMARY_EN: TaskSpec(
-        kind=ProductionKind.SUMMARY_EN,
-        label="英文总结",
-        filename="summary.en.md",
-        requires=ProductionKind.SUMMARY_ZH,
+        stem="summary",
+        translated_from="zh",  # 英文版翻译已写好的中文，见 translated_from 的说明
     ),
     ProductionKind.SHORTVIDEO: TaskSpec(
         kind=ProductionKind.SHORTVIDEO,
         label="短视频文案",
-        filename="shortvideo.zh.md",
+        stem="shortvideo",
         approx_calls=1,
         spoken=True,
     ),
     ProductionKind.NARRATION: TaskSpec(
         kind=ProductionKind.NARRATION,
         label="口播文案",
-        filename="narration.zh.md",
+        stem="narration",
         approx_calls=1,
         spoken=True,
     ),
     ProductionKind.LONGFORM: TaskSpec(
         kind=ProductionKind.LONGFORM,
         label="长文案",
-        filename="longform.zh.md",
+        stem="longform",
         in_batch=False,  # 见模块文档：最贵的产物，必须显式指定
         approx_calls=7,
         needs_variant=True,
@@ -155,7 +200,8 @@ TASKS: dict[ProductionKind, TaskSpec] = {
     ProductionKind.SHORTVIDEO_AUDIO: TaskSpec(
         kind=ProductionKind.SHORTVIDEO_AUDIO,
         label="短视频音频",
-        filename="shortvideo.zh.wav",
+        stem="shortvideo",
+        extension="wav",
         requires=ProductionKind.SHORTVIDEO,
         in_batch=False,
         approx_calls=0,
@@ -164,7 +210,8 @@ TASKS: dict[ProductionKind, TaskSpec] = {
     ProductionKind.NARRATION_AUDIO: TaskSpec(
         kind=ProductionKind.NARRATION_AUDIO,
         label="口播音频",
-        filename="narration.zh.wav",
+        stem="narration",
+        extension="wav",
         requires=ProductionKind.NARRATION,
         in_batch=False,
         approx_calls=0,
@@ -173,7 +220,8 @@ TASKS: dict[ProductionKind, TaskSpec] = {
     ProductionKind.LONGFORM_AUDIO: TaskSpec(
         kind=ProductionKind.LONGFORM_AUDIO,
         label="长文案音频",
-        filename="longform.zh.wav",
+        stem="longform",
+        extension="wav",
         requires=ProductionKind.LONGFORM,
         in_batch=False,
         approx_calls=0,
@@ -187,21 +235,57 @@ AUDIO_OF: dict[ProductionKind, ProductionKind] = {
 }
 
 # 批量顺序：依赖在前 / batch order, prerequisites first
+#
+# **只跑默认语言。**英文版是可选的第二份，跟着 `--all` 一起跑等于每篇都翻倍计费，
+# 而多数文章根本不需要英文版。要英文版就显式指定语言。
+# Only the default language: the English edition is optional, and including it in the
+# batch would double the bill on every article for something most do not need.
 BATCH_ORDER: tuple[ProductionKind, ...] = (
-    ProductionKind.SUMMARY_ZH,
-    ProductionKind.SUMMARY_EN,
+    ProductionKind.SUMMARY,
     ProductionKind.SHORTVIDEO,
     ProductionKind.NARRATION,
 )
 
 # GUI 表格的列顺序 / column order in the workbench table
 DISPLAY_ORDER: tuple[ProductionKind, ...] = (
-    ProductionKind.SUMMARY_ZH,
-    ProductionKind.SUMMARY_EN,
+    ProductionKind.SUMMARY,
     ProductionKind.SHORTVIDEO,
     ProductionKind.NARRATION,
     ProductionKind.LONGFORM,
 )
+
+
+def normalize_lang(lang: str | None) -> str:
+    """
+    归一化语言代码，不认识的退回默认 / Normalise a language code, falling back to default.
+
+    退回而不是报错：语言来自界面开关与命令行参数，写错了应该出中文版，
+    而不是让整次生成失败。
+    Falls back rather than raising: the value comes from a switch and a flag, and a typo
+    should yield the default edition rather than abort the run.
+    """
+    value = (lang or DEFAULT_LANGUAGE).strip().lower()
+    return value if value in LANGUAGES else DEFAULT_LANGUAGE
+
+
+def prerequisite(kind: ProductionKind | str, lang: str) -> tuple[ProductionKind, str] | None:
+    """
+    这份产物依赖哪一份 / What this production depends on, if anything.
+
+    返回 `(前置类型, 前置语言)`。两条规则，都由 `TaskSpec` 的字段推出来，
+    不在这里写死 / Two rules, both derived from the spec rather than hard-coded here:
+
+        音频       → 同语言的那份稿子（英文音频念英文稿）
+        翻译型产物 → 源语言的那一份（英文总结依赖中文总结）
+    """
+    task = spec(kind)
+    lang = normalize_lang(lang)
+
+    if task.audio_of is not None:
+        return task.audio_of, lang
+    if task.translated_from and lang != task.translated_from:
+        return task.kind, task.translated_from
+    return None
 
 
 def spec(kind: ProductionKind | str) -> TaskSpec:
@@ -239,7 +323,7 @@ def audio_kind(kind: ProductionKind | str) -> ProductionKind | None:
     return AUDIO_OF.get(ProductionKind(kind))
 
 
-def json_sidecar(spec_: TaskSpec) -> str | None:
+def json_sidecar(spec_: TaskSpec, lang: str = DEFAULT_LANGUAGE) -> str | None:
     """
     该产物是否额外产出一份 JSON / Whether this kind writes a JSON sibling.
 
@@ -247,7 +331,7 @@ def json_sidecar(spec_: TaskSpec) -> str | None:
     Only the long-form script does: the TTS stage needs it split into speaker turns.
     """
     if spec_.kind is ProductionKind.LONGFORM:
-        return spec_.filename.replace(".md", ".json")
+        return lang_suffix_name(spec_.stem, normalize_lang(lang), "json")
     return None
 
 
