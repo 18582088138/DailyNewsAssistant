@@ -13,6 +13,7 @@
 | 3 | 参考 prompts | `xkd/best-prompts/prompts/`，按阶段取 `dev-requirement` → `dev-design` → `dev-implementation` → `dev-review`/`code-review-excellence` → `dev-bug-fix` |
 | 4 | 专属资产 | Skill：`~/.claude/skills/dailynews-dev/SKILL.md`；Memory：`~/.claude/projects/c--Users-test-Downloads-xkd/memory/`（一事一文件 + MEMORY.md 索引）。随开发持续更新 |
 | 5 | 流程 | 调研 → 构建方案 → 方案调整 → 开发 → 测试 → 人工审阅 → debug&修改 → **git 命令汇总（人工手动提交，AI 不执行提交）** |
+| 5b | git 分步提交（2026-09-06 追加） | **一步一个功能面，`git add` 与 `git commit` 成对出现**，不再攒成一个大而全的 add 块。按文件边界自下而上切：store → narration/pipeline → produce → frontends/CLI → docs。commit message 三行以内 + 要点，根因写 `issues/`。切法与理由见 `docs/git_commands.md` 开头的「分步提交」 |
 | 6 | 文档与测试 | 每**阶段**留档于 `docs/`（bug 修复只写 `issues/`，不动全套）；每个基础功能配单元测试，**测试文件头部写完整复测命令**。测试不过不进下一模块。`03_unit_tests.md` 与本文件在**阶段收尾时**统一更新，不是每次改动都更新 |
 | 7 | 代码规范 | 分层单向依赖、功能独立封装、**跨层接口与算法核心**中英双语注释（内部 helper 与测试中文即可）。注释只写「为什么」，不写「是什么」 |
 | 8 | 成本纪律（2026-09-06 追加） | 不必须的流程/验证/测试/修改一律省掉；整体 review 与全功能测试由用户**阶段性点名**时一次做完。详细规则见 `~/.claude/skills/dailynews-dev/SKILL.md` 的「成本纪律」一节 |
