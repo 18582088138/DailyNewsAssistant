@@ -2,11 +2,10 @@
 TTS 抽象层 / The text-to-speech abstraction.
 
 和 `dna/llm/` 完全同一套做法：**上层只认这个协议，不认具体实现**。
-本地 OpenVINO 跑得动就用本地，将来部署成服务就换一个 provider，
-`produce/` 与两个前端一行都不用改。
-Mirrors `dna/llm/`: callers depend on this protocol, never on a concrete backend. The
-local OpenVINO model is one implementation; a deployed service will be another, and
-neither `produce/` nor the front-ends change when the backend does.
+这套协议当初就是按「将来会换成服务」设计的，所以本地后端删掉、换成
+`service.TTSServiceProvider` 之后，`produce/` 与两个前端**一行都没改**。
+Mirrors `dna/llm/`. The protocol was written anticipating a service, which is why
+replacing the local backends with an HTTP one changed nothing above this layer.
 
 为什么 provider 收「一串分段」而不是「一段文本」/ Why providers take a list of segments:
     长文本必须切开合成再拼接（整段送进去又慢又容易崩），而**拼接必须在
@@ -40,12 +39,18 @@ DEFAULT_SAMPLE_RATE = 24_000
 
 # 实测的实时率 / measured real-time factor
 #
-# 2026-09-04 在本机 GPU 上实测：63 字 → 11.0 秒音频，耗时 27.3 秒，RTF ≈ 2.48。
 # 用来在**按下按钮之前**告诉人要等多久——长文案 15 分钟的稿子要算约 37 分钟，
 # 这个数字不摆出来，人会以为界面卡死了。
-# Measured on this machine's GPU: 63 characters produced 11.0 s of audio in 27.3 s.
-# Used to state the wait before the button is pressed: a 15-minute script takes about
-# 37 minutes, and without saying so the interface merely looks frozen.
+# Used to state the wait before the button is pressed; without it the interface merely
+# looks frozen for half an hour.
+#
+# ⚠️ 这是**一个 GPU 上的估算值**（2026-09-04 实测 0.6B OpenVINO 核显：63 字 →
+# 11.0 秒音频、耗时 27.3 秒，RTF≈2.48）。服务侧换成 1.7B 之后：4060 上量级相近，
+# **CPU 上实测 RTF≈13**，也就是这里会**少报五倍**。
+# 没有跟着服务动态调整，是因为准确的等待时间要靠服务端逐段回报，而那已经在
+# 界面的进度条上了 —— 这个常量只负责「点之前给个数量级」。
+# The constant gives an order of magnitude before the click; the accurate figure comes
+# from the service's per-piece progress, which the workbench already displays.
 RTF_ESTIMATE = 2.5
 
 # 段与段之间的静音 / silence inserted between segments
@@ -120,6 +125,31 @@ class AudioClip:
     seconds: float = 0.0
     segments: int = 0
     failed_segments: list[int] = field(default_factory=list)
+
+    run: str = ""
+    """服务端这次的产物目录名 / the run directory on the service side."""
+
+    artifacts: list[str] = field(default_factory=list)
+    """
+    服务端自己留下的产物，形如 `run/文件名` / What the service kept, as `run/file`.
+
+    只用于**溯源与日志**（这条音频的每一段在服务端叫什么）。
+    要落到本地的逐段文件走 `pieces`，见下面那条为什么。
+    For provenance only; local copies come from `pieces`.
+    """
+
+    pieces: list[tuple[str, bytes]] = field(default_factory=list)
+    """
+    逐段音频的**本地副本**（文件名, WAV 字节）/ Per-piece audio, ready to write.
+
+    为什么不回头去服务端下载 / Why these are not re-downloaded:
+        服务端按「第几段 + 音色」命名（`seg_001_Serena.wav`）。一次合成里**同一个
+        音色出现两次**时，两段会写到同一个文件名上，后一段把前一段覆盖掉 ——
+        再下载回来就是两份相同的音频，而且是错的那一份。
+        逐段的字节本来就已经在手上（合成时逐段回传的），直接写盘既准确又省一次往返。
+        The service names files by piece index and voice, so two pieces sharing a voice
+        collide and the later one overwrites the earlier. The bytes are already in hand.
+    """
 
     @property
     def complete(self) -> bool:
