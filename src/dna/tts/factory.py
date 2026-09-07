@@ -1,96 +1,65 @@
 """
 TTS provider 工厂 / The TTS provider factory.
 
-和 `llm/factory.py` 同一套：**上层拿到的永远是协议，不知道背后是谁**。
-Intel 机器用 OpenVINO，NVIDIA 机器用 PyTorch CUDA，将来部署成服务再加一个 provider——
-`produce/` 与两个前端一行都不改。
-Same shape as `llm/factory.py`: callers receive the protocol and never learn which
-backend answered. Intel machines run OpenVINO, NVIDIA machines run PyTorch CUDA, and a
-deployed service will be a third — none of which reaches the layers above.
+现在只有一个后端 —— 远端的 **TTS service**（Agent_TTS_Module）。
+本项目内不再有任何模型代码：换设备（CPU → 4060）、换模型（Qwen3-TTS →
+Breeze-TTS 2 / IndexTTS-2）都是服务那一侧的配置，这里一行都不用改。
+One backend remains: the remote TTS service. Swapping devices or models is entirely a
+service-side configuration change.
+
+工厂仍然留着，理由和 `llm/factory.py` 一样：**上层拿到的是协议，不是实现**。
+将来若要加一个「云端 TTS API」的 provider，改的只有这个文件。
+The factory survives for the same reason as the LLM one: callers receive a protocol.
 
 为什么要缓存实例 / Why instances are cached:
-    加载模型实测 10.4 秒。GUI 里每点一次「生成音频」都重新加载的话，
-    这 10 秒会加在每一次等待上，而它本来只该付一次。
-    Loading measured 10.4 seconds. Reloading on every click would add that to every wait
-    when it need only be paid once.
+    provider 会缓存 `/info` 与音色清单。每点一次按钮重新构造，就要多两次
+    往返去问同样的问题。
+    The provider caches `/info` and the voice list; rebuilding it re-asks both.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
-
 from dna.core.config import Settings, get_settings
 from dna.core.logging import get_logger
-from dna.tts.base import TTSError, TTSProvider, VoiceSpec
-from dna.tts.qwen3_base import DEFAULT_GUEST_SPEAKER, DEFAULT_SPEAKER
-from dna.tts.qwen3_openvino import PROVIDER_NAME as OPENVINO_PROVIDER
-from dna.tts.qwen3_openvino import Qwen3OpenVINOTTS
-from dna.tts.qwen3_torch import PROVIDER_NAME as TORCH_PROVIDER
-from dna.tts.qwen3_torch import Qwen3TorchTTS
+from dna.tts.base import TTSProvider, VoiceSpec
+from dna.tts.service import (
+    DEFAULT_GUEST_SPEAKER,
+    DEFAULT_SPEAKER,
+    PROVIDER_NAME,
+    TTSServiceProvider,
+)
 
 logger = get_logger("tts.factory")
 
-PROVIDERS = (OPENVINO_PROVIDER, TORCH_PROVIDER)
+PROVIDERS = (PROVIDER_NAME,)
 
-# (provider, 模型目录, 设备, 精度) → 实例 / cached by backend identity
-_CACHE: dict[tuple[str, str, str, str], TTSProvider] = {}
+# 服务地址 → 实例 / cached by service address
+_CACHE: dict[str, TTSProvider] = {}
 
 
 def get_tts(settings: Settings | None = None, *, fresh: bool = False) -> TTSProvider:
     """
-    按配置取一个 TTS provider / Get the configured TTS provider.
+    取 TTS provider / Get the TTS provider.
 
     参数 / Args:
-        fresh: 跳过缓存，重新构造。改了 `.env` 想立刻生效时用
+        fresh: 跳过缓存重新构造。改了 `.env` 或重启过服务想立刻生效时用
 
-    抛出 / Raises:
-        TTSError: `TTS_PROVIDER` 不认识，或该后端必需的路径没配
+    **不在这里探活**：构造是免费的，探活与自动拉起发生在真正要合成的时候
+    （见 `supervisor.ensure_service`）。否则只是想列一下音色也会先等一次超时。
+    Liveness is not checked here: construction is free, and probing belongs to the
+    moment work is actually requested.
     """
     s = settings or get_settings()
-    name = (s.tts_provider or OPENVINO_PROVIDER).strip().lower()
-    repo_dir = _optional_path(s.qwen3_tts_repo_dir)
+    key = (s.tts_service_url or "").rstrip("/")
 
-    if name == OPENVINO_PROVIDER:
-        model_dir = _required_path(
-            s.qwen3_tts_model_dir, "QWEN3_TTS_MODEL_DIR", "已转换的 OpenVINO IR 目录"
-        )
-        device = (s.tts_device or "GPU").strip().upper()
-        key = (name, str(model_dir), device, "")
-        if fresh or key not in _CACHE:
-            _CACHE[key] = Qwen3OpenVINOTTS(
-                model_dir,
-                device=device,
-                helper_dir=_optional_path(s.qwen3_tts_helper_dir),
-                repo_dir=repo_dir,
-            )
-
-    elif name == TORCH_PROVIDER:
-        model_dir = _required_path(
-            s.qwen3_tts_torch_model_dir,
-            "QWEN3_TTS_TORCH_MODEL_DIR",
-            "原始 HuggingFace 权重目录",
-        )
-        device = (s.tts_device or "cuda:0").strip().lower()
-        dtype = (s.tts_dtype or "bfloat16").strip().lower()
-        key = (name, str(model_dir), device, dtype)
-        if fresh or key not in _CACHE:
-            _CACHE[key] = Qwen3TorchTTS(
-                model_dir, device=device, dtype=dtype, repo_dir=repo_dir
-            )
-
-    else:
-        raise TTSError(
-            f"未知的 TTS provider：{name}　可选：{'、'.join(PROVIDERS)}。"
-            "服务化的 http provider 在 TTS 部署成服务之后补上。"
-        )
-
-    provider = _CACHE[key]
-    logger.debug("TTS provider：%s", provider.info)
-    return provider
+    if fresh or key not in _CACHE:
+        _CACHE[key] = TTSServiceProvider(s)
+        logger.debug("TTS provider：%s @ %s", PROVIDER_NAME, key)
+    return _CACHE[key]
 
 
 def reset_cache() -> None:
-    """丢掉缓存的实例，释放显存 / Drop cached instances and free device memory."""
+    """丢掉缓存的实例 / Drop cached instances（服务重启后想重读 /info 时用）。"""
     _CACHE.clear()
 
 
@@ -116,7 +85,7 @@ def voice_for_role(
     host = (s.tts_voice_host or "").strip() or DEFAULT_SPEAKER
     guest = (s.tts_voice_guest or "").strip() or DEFAULT_GUEST_SPEAKER
 
-    if guest == host:
+    if guest.lower() == host.lower():
         guest = DEFAULT_GUEST_SPEAKER if host != DEFAULT_GUEST_SPEAKER else DEFAULT_SPEAKER
         logger.warning(
             "TTS_VOICE_HOST 与 TTS_VOICE_GUEST 相同，嘉宾改用 %s —— "
@@ -126,24 +95,6 @@ def voice_for_role(
 
     language = "chinese" if lang == "zh" else "english"
     return VoiceSpec(speaker=guest if role == "guest" else host, language=language)
-
-
-# ---------------------------------------------------------------------------
-# 内部实现 / internals
-# ---------------------------------------------------------------------------
-
-
-def _required_path(raw: str, key: str, what: str) -> Path:
-    """必填路径 / A path the backend cannot start without."""
-    value = (raw or "").strip()
-    if not value:
-        raise TTSError(f"没有配置 {key}（{what}），无法合成语音")
-    return Path(value)
-
-
-def _optional_path(raw: str) -> Path | None:
-    value = (raw or "").strip()
-    return Path(value) if value else None
 
 
 __all__ = ["PROVIDERS", "get_tts", "reset_cache", "voice_for_role"]
