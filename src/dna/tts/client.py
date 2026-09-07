@@ -166,16 +166,21 @@ class TTSServiceClient:
         source: str = "DailyNewsAssistant",
         voice: str | None = None,
         instruct: str | None = None,
+        return_url: str = "",
         meta: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """
         把稿子交给 TTS 图形界面 / Hand the script to the TTS workbench.
 
         返回 `{"token", "gui_url"}`：打开那个 URL，文本已经填在多段界面里。
+
+        `return_url` 是**调用方自己的页面地址**：界面生成完会照着它跳回来
+        （关不掉标签页时才退回跳转）。不给的话人得自己找回原来那个标签页。
         """
         return self._post("/gui/handoff", {
             "segments": segments, "title": title, "source": source,
-            "voice": voice, "instruct": instruct, "meta": meta or {},
+            "voice": voice, "instruct": instruct,
+            "return_url": return_url, "meta": meta or {},
         }, timeout=30.0)
 
     def handoff_state(self, token: str) -> dict[str, Any]:
