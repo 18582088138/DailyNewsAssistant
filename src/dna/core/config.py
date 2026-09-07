@@ -117,6 +117,39 @@ class Settings(BaseSettings):
     # Where the service's own artifacts are copied inside the article folder.
     tts_artifact_dirname: str = "tts"
 
+    # 默认怎么发声 / how the default voice is produced:
+    #   voice_clone  —— 克隆 TTS_REF_AUDIO 里那把嗓子（**默认**）
+    #   custom_voice —— 用服务端内置音色（TTS_VOICE_HOST / _GUEST）
+    #
+    # 默认走克隆，是因为内置音色**跟着权重变**：同一个名字（Serena）在
+    # 0.6B 与 1.7B 上并不是同一把嗓子，换服务端配置就会换声音。
+    # 克隆锁的是一个音频文件，只要文件不换，声音就不换。
+    # Cloning is the default because built-in speakers change with the checkpoint: the
+    # same name is not the same voice across models, whereas a reference file is fixed.
+    tts_mode: str = "voice_clone"
+
+    # 参考音频。相对路径按**数据目录**解析（`data/ref_audio/...`）——
+    # 它是素材，和台账、落盘文章一样属于 data/，不该散在仓库根目录。
+    # Relative paths resolve against the data directory: this is material, like the
+    # ledger and the stored articles.
+    tts_ref_audio: str = "ref_audio/qwen3-tts-cpu.wav"
+
+    # 参考音频里说的原话，一字不差。
+    # **留空 = 走纯 x-vector 克隆**（只取音色，不需要原话）。
+    # 填了就走 ICL 克隆：上游硬要求它与音频完全对应，写错会得到更差的结果，
+    # 所以默认留空 —— 不知道原话时，x-vector 是唯一诚实的选择。
+    # Empty means x-vector-only cloning; ICL requires an exact transcript, and a wrong
+    # one degrades the result, so silence is the honest default.
+    tts_ref_text: str = ""
+
+    # 嘉宾（访谈稿的第二个人）的参考音频。
+    # **留空 = 嘉宾用内置音色**，因为两个角色必须听得出区别：
+    # 都克隆同一个文件的话，访谈稿两个人一把嗓子，双角色就白做了。
+    # Empty means the guest uses a built-in speaker: the two roles must be
+    # distinguishable, and cloning one file for both defeats the point.
+    tts_ref_audio_guest: str = ""
+    tts_ref_text_guest: str = ""
+
     tts_voice_host: str = ""
     tts_voice_guest: str = ""
 

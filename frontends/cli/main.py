@@ -542,18 +542,31 @@ def tts(
         raise typer.Exit(code=1) from exc
 
     console.print(f"[dim]可用音色（{len(speakers)}）：{'、'.join(speakers)}[/dim]")
-    console.print(
-        f"[dim]主持人：{voice_for_role('host', settings).speaker}　"
-        f"嘉宾：{voice_for_role('guest', settings).speaker}[/dim]"
-    )
+    def _describe(role: str) -> str:
+        """一行说清这个角色怎么发声 / One line: how this role speaks."""
+        spec_ = voice_for_role(role, settings)
+        if spec_.ref_audio:
+            kind = "x-vector 克隆" if spec_.x_vector_only else "ICL 克隆"
+            return f"{kind} {Path(spec_.ref_audio).name}"
+        return f"内置音色 {spec_.speaker}"
+
+    console.print(f"[dim]主持人：{_describe('host')}　嘉宾：{_describe('guest')}[/dim]")
 
     if say is None:
         console.print("\n[green]服务就绪。[/green][dim]加 --say \"一句话\" 可实际合成试听。[/dim]")
         return
 
-    spec_ = VoiceSpec(
-        speaker=voice or voice_for_role("host", settings).speaker, language="chinese"
-    )
+    # 默认拿 voice_for_role 给的那一份**整体**，不要只取 speaker：
+    # 克隆模式的信息（ref_audio / x_vector_only）都在那个对象里，
+    # 只抄一个字段就等于把「默认走克隆」这件事悄悄丢掉。
+    # The whole spec is used: clone fields live on it, and copying one field would
+    # silently drop cloning.
+    spec_ = voice_for_role("host", settings)
+    if voice:
+        spec_ = VoiceSpec(speaker=voice, language=spec_.language)   # --voice 指定 = 用内置音色
+    console.print(f"[dim]发声方式：{spec_.mode}"
+                  + (f"　参考音频 {spec_.ref_audio}" if spec_.ref_audio else
+                     f"　音色 {spec_.speaker}") + "[/dim]")
     started = _time.perf_counter()
     with console.status(f"合成中（约 {len(say) / 4.5 * RTF_ESTIMATE:.0f} 秒起）…"):
         try:

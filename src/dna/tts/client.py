@@ -91,6 +91,10 @@ class TTSServiceClient:
         role: str | None = None,
         run: str | None = None,
         save: bool = True,
+        mode: str | None = None,
+        ref_audio: str | None = None,
+        ref_text: str | None = None,
+        x_vector_only: bool = False,
     ) -> dict[str, Any]:
         """
         合成一段 / Synthesise one piece，返回服务端的元信息 + `wav` 字节。
@@ -114,6 +118,13 @@ class TTSServiceClient:
             payload["role"] = role
         if run:
             payload["name"] = run
+        if mode:
+            payload["mode"] = mode
+        if ref_audio:
+            payload["ref_audio"] = self._ref_audio_payload(ref_audio)
+            payload["x_vector_only"] = bool(x_vector_only)
+            if ref_text:
+                payload["ref_text"] = ref_text
 
         body = self._post("/tts/synthesize", payload, timeout=self.timeout)
         encoded = body.pop("audio_base64", "")
@@ -121,6 +132,29 @@ class TTSServiceClient:
             raise TTSError("TTS 服务没有回音频（检查服务端日志）")
         body["wav"] = base64.b64decode(encoded)
         return body
+
+    def _ref_audio_payload(self, ref_audio: str) -> str:
+        """
+        参考音频怎么送过去 / How the reference audio travels.
+
+        **本机服务传路径，远程服务传 base64。** 路径是在**服务端**解析的：
+        服务在另一台机器上时，这边的 `C:/…/ref_audio/x.wav` 在那边根本不存在，
+        而报出来的错会是「参考音频不存在」—— 看起来像文件丢了，其实是机器不对。
+        The path is resolved server-side, so a remote service would report "file not
+        found" for a file that exists here, which reads as a missing file rather than
+        the wrong machine.
+
+        服务端只认本地路径与 `data:audio` base64（URL 会被它拒绝，因为上游的
+        加载器不读代理配置）。
+        """
+        if self.trust_env:      # 非本机 = 远程，把字节带过去
+            path = Path(ref_audio)
+            if path.is_file():
+                encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+                suffix = "mpeg" if path.suffix.lower() == ".mp3" else "wav"
+                logger.debug("远程服务，参考音频改用 base64 传输：%s", path.name)
+                return f"data:audio/{suffix};base64,{encoded}"
+        return ref_audio
 
     # ------------------------------------------------- 交接给界面 / hand-off
 

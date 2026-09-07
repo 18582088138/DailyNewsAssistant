@@ -40,6 +40,8 @@ from dna.produce import (
 from dna.produce.tasks import DEFAULT_LANGUAGE, audio_kind, json_sidecar
 from dna.store import FetchStatus, Ledger, ProductionRecord, intake_urls
 from dna.store.ledger import ArticleRecord
+from dna.tts.base import TTSError
+from dna.tts.factory import get_tts
 
 
 @dataclass
@@ -366,10 +368,17 @@ async def open_tts_workbench(
         if not pieces:
             raise TTSError("这一格还没有可朗读的稿子")
 
+        # 只在用内置音色时把音色名带过去 / carry the voice name only for built-ins
+        #
+        # 克隆模式下 `speaker` 是一个**本地文件路径**，不是音色名 —— 带过去 TTS 界面
+        # 只会得到一个「没有这个音色」。参考音频要在那边的上传框里选，
+        # 那个控件本来就在（这也正是「高级配置」存在的理由）。
+        # In clone mode the speaker field holds a file path, not a name.
+        host = voice_for_role("host", settings, lang=lang)
         body = provider.client.handoff(
             pieces,
             title=title,
-            voice=voice_for_role("host", settings, lang=lang).speaker,
+            voice=host.speaker if host.mode == "custom_voice" else None,
             meta={"article_id": article_id, "kind": str(kind), "lang": lang},
         )
         # 交接单里的 gui_url 用的是**服务端**配置的界面地址；本项目自己的

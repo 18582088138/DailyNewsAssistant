@@ -82,6 +82,26 @@ class VoiceSpec:
     language: str = "auto"
     instruct: str = ""
 
+    mode: str = "custom_voice"
+    """
+    怎么发声 / How the voice is produced：`custom_voice` | `voice_clone` | `voice_design`。
+
+    显式带上而不是让后端猜：`ref_audio` 一填就当克隆、一空就当内置音色这种推断，
+    在「配了参考音频但文件不存在」时会**静默降级成另一把嗓子**，
+    而那正是最需要报错的时刻。
+    Carried explicitly rather than inferred: inferring from the presence of `ref_audio`
+    would silently fall back to a different voice exactly when an error is wanted.
+    """
+
+    ref_audio: str = ""
+    """克隆用的参考音频（本地路径）/ the reference audio for cloning."""
+
+    ref_text: str = ""
+    """参考音频里说的原话；空 = 走纯 x-vector / empty means x-vector-only cloning."""
+
+    x_vector_only: bool = False
+    """只取音色向量，不需要原话 / take the timbre only, no transcript needed."""
+
 
 @dataclass(frozen=True)
 class SpeechSegment:

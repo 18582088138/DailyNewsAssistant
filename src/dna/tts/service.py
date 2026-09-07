@@ -133,15 +133,23 @@ class TTSServiceProvider:
         seconds = 0.0
 
         for index, piece in enumerate(pieces):
+            voice = piece.voice
+            cloning = voice.mode == "voice_clone" and bool(voice.ref_audio)
             try:
                 body = self.client.synthesize(
                     piece.text,
-                    voice=self._voice_name(piece.voice.speaker),
-                    language=_LANGUAGES.get((piece.voice.language or "").lower(),
-                                            "Chinese"),
-                    instruct=piece.voice.instruct or None,
+                    # 克隆模式**不能带 voice**：服务端把「有 ref_audio 又有音色名」
+                    # 视为互相冲突的参数并直接报错（它故意不做静默忽略）。
+                    # In clone mode a voice name is a conflicting parameter, not a hint.
+                    voice=None if cloning else self._voice_name(voice.speaker),
+                    language=_LANGUAGES.get((voice.language or "").lower(), "Chinese"),
+                    instruct=voice.instruct or None,
                     role=piece.role,
                     run=run,
+                    mode=voice.mode or None,
+                    ref_audio=voice.ref_audio or None,
+                    ref_text=voice.ref_text or None,
+                    x_vector_only=voice.x_vector_only,
                 )
             except TTSError as exc:
                 # 一段失败不毁掉整条：几十分钟的合成里丢一句，比全部重来划算得多。

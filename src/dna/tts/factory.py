@@ -19,6 +19,8 @@ The factory survives for the same reason as the LLM one: callers receive a proto
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from dna.core.config import Settings, get_settings
 from dna.core.logging import get_logger
 from dna.tts.base import TTSProvider, VoiceSpec
@@ -82,6 +84,20 @@ def voice_for_role(
     but the model has to be told which, or English comes out with Chinese phonetics.
     """
     s = settings or get_settings()
+    language = "chinese" if lang == "zh" else "english"
+
+    # 默认走音色克隆 / cloning is the default
+    #
+    # 内置音色**跟着权重变**：同一个 `Serena` 在 0.6B 与 1.7B 上不是同一把嗓子，
+    # 服务端换个 checkpoint 声音就变了。克隆锁的是一个音频文件，文件不换声音就不换。
+    # 参考音频不存在时**不静默降级**——那会换成另一把嗓子，而且没人会发现。
+    # A built-in speaker changes with the checkpoint; a reference file does not. A
+    # missing file is reported rather than silently swapped for another voice.
+    if (s.tts_mode or "").strip().lower() == "voice_clone":
+        clone = _clone_voice(role, s, language)
+        if clone is not None:
+            return clone
+
     host = (s.tts_voice_host or "").strip() or DEFAULT_SPEAKER
     guest = (s.tts_voice_guest or "").strip() or DEFAULT_GUEST_SPEAKER
 
@@ -93,8 +109,57 @@ def voice_for_role(
             guest,
         )
 
-    language = "chinese" if lang == "zh" else "english"
     return VoiceSpec(speaker=guest if role == "guest" else host, language=language)
+
+
+def _clone_voice(role: str, s: Settings, language: str) -> VoiceSpec | None:
+    """
+    这个角色的克隆音色 / The cloned voice for one role，配不齐就回 None。
+
+    嘉宾**没配自己的参考音频时回 None**，于是落回内置音色 —— 两个角色必须听得出
+    区别，都克隆同一个文件的话，访谈稿两个人一把嗓子，双角色就白做了。
+    A guest without its own reference falls back to a built-in speaker, because the two
+    roles have to be distinguishable.
+    """
+    if role == "guest":
+        raw, ref_text = s.tts_ref_audio_guest, s.tts_ref_audio_guest and s.tts_ref_text_guest
+        if not (raw or "").strip():
+            logger.info("嘉宾没配 TTS_REF_AUDIO_GUEST，改用内置音色（两个角色要听得出区别）")
+            return None
+    else:
+        raw, ref_text = s.tts_ref_audio, s.tts_ref_text
+
+    path = _ref_audio_path(raw, s)
+    if path is None:
+        logger.warning(
+            "参考音频不存在：%s（相对路径按数据目录 %s 解析），改用内置音色。"
+            "克隆是默认方式，这条警告意味着**声音和你预期的不是同一把嗓子**",
+            raw, s.data_path,
+        )
+        return None
+
+    transcript = (ref_text or "").strip()
+    return VoiceSpec(
+        speaker=str(path),          # 克隆没有"音色名"，这里放路径只为日志可读
+        language=language,
+        mode="voice_clone",
+        ref_audio=str(path),
+        ref_text=transcript,
+        # 没有原话就只能走纯 x-vector：ICL 模式上游硬要求 ref_text，
+        # 而随便编一句会让克隆质量明显变差
+        x_vector_only=not transcript,
+    )
+
+
+def _ref_audio_path(raw: str, s: Settings) -> Path | None:
+    """参考音频的绝对路径 / The absolute path of the reference audio，不存在回 None。"""
+    value = (raw or "").strip()
+    if not value:
+        return None
+    path = Path(value)
+    if not path.is_absolute():
+        path = s.data_path / path
+    return path if path.is_file() else None
 
 
 __all__ = ["PROVIDERS", "get_tts", "reset_cache", "voice_for_role"]

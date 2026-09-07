@@ -1359,3 +1359,36 @@ dna tts                             # 探活 + 自动拉起 + 列音色
 dna tts --say "今天的人工智能资讯" -o /c/tmp/tts-check.wav
 dna gui                             # 展开口播格 → 合成音频 / 高级配置
 ```
+
+### 补一步 8/8 · 三处返修（2026-09-08）
+
+```bash
+cd /c/Users/test/Downloads/xkd/DailyNewsAssistant
+
+git add frontends/nicegui_app/actions.py
+git add frontends/cli/main.py
+git add src/dna/core/config.py
+git add src/dna/tts/base.py src/dna/tts/factory.py
+git add src/dna/tts/client.py src/dna/tts/service.py
+git add .env.example
+git add docs/14_tts_guide.md docs/git_commands.md
+
+git commit -m "fix(tts): 高级配置 NameError；默认改用音色克隆
+
+- actions.py 漏了 get_tts / TTSError 的 import，「高级配置」点开就 NameError
+- 默认发声方式改为 voice_clone，克隆 data/ref_audio/qwen3-tts-cpu.wav：
+  内置音色跟着权重变（同一个 Serena 在 0.6B 与 1.7B 上不是同一把嗓子），
+  换 checkpoint 声音就变且不报错；克隆锁的是一个文件
+- VoiceSpec 增加 mode / ref_audio / ref_text / x_vector_only：
+  显式带上而不是让后端按「有没有 ref_audio」猜——参考音频不存在时
+  那种推断会静默降级成另一把嗓子，而那正是最该报错的时刻
+- TTS_REF_TEXT 留空即走纯 x-vector：不知道原话时编一句会让克隆明显变差
+- 嘉宾默认仍用内置音色：都克隆同一个文件等于没做双角色
+- 克隆模式不再往服务端传音色名，服务端视其为冲突参数并报错
+- 远程服务自动把参考音频转 base64：路径在服务端解析，
+  远程会报「参考音频不存在」，看起来像文件丢了，其实是机器不对
+- dna tts 打印发声方式；交接单只在内置音色时带音色名"
+
+git status --short          # 预期：空
+```
+
