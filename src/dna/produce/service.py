@@ -43,6 +43,7 @@ from __future__ import annotations
 
 import json
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -73,8 +74,9 @@ from dna.produce.tasks import (
     spec,
 )
 from dna.store.ledger import ArticleRecord, Ledger, ProductionRecord
-from dna.tts.base import ProgressFn, SpeechSegment, TTSProvider
+from dna.tts.base import ProgressFn, SpeechSegment, TTSProvider, wav_seconds
 from dna.tts.factory import get_tts, voice_for_role
+from dna.tts.preprocess import prepare_for_speech
 from dna.tts.segment import split_for_speech
 
 logger = get_logger("produce.service")
@@ -225,12 +227,16 @@ def produce(
             error=f"正文只有 {len(article.text)} 字，不足 {task.min_body_chars} 字，本篇不适合生成{task.label}",
         )
 
-    # 音频产物不碰 LLM / audio never touches the LLM
+    # 音频产物不在这里构造 LLM / audio does not build the LLM here
     #
-    # 无条件 `get_llm()` 的话，只想合成一段音频也会先要求 API key ——
-    # 而这一步一分钱都不该花，也不该依赖网络。
-    # Constructing the LLM unconditionally would demand an API key to synthesise audio,
-    # which spends nothing and needs no network.
+    # 无条件 `get_llm()` 的话，只想合成一段音频也会先要求 API key，而
+    # `TTS_PREPROCESS=false` 的机器根本不需要 key。所以朗读友好化那一次调用由
+    # `prepare_for_speech` 自己按需构造，失败就退回原文（见 `tts/preprocess.py`）。
+    #
+    # 注意边界：**TTS service 从不调用 LLM**（它是纯 TTS）；那一次调用属于本项目，
+    # 是把文案交出去之前的准备。合成本身仍然记 `calls=0`。
+    # The service never calls an LLM; that one call belongs to this project, as
+    # preparation before handing the copy over. Synthesis itself still bills nothing.
     is_audio = task.audio_of is not None
     provider = None if is_audio else (llm or get_llm(cache=not force))
     speaker = (tts or get_tts(s)) if is_audio else None
@@ -269,7 +275,8 @@ def produce(
     try:
         if is_audio:
             result = _generate_audio(
-                task, speaker, directory, lang=lang, settings=s, on_progress=on_progress
+                task, speaker, directory, lang=lang, settings=s,
+                on_progress=on_progress, llm=llm,
             )
         else:
             result = _generate(
@@ -439,6 +446,110 @@ def read_production(
         return path.read_text(encoding="utf-8")
     except OSError:
         return ""
+
+
+def speech_segments_for(
+    article_id: str,
+    kind: ProductionKind | str,
+    *,
+    lang: str = DEFAULT_LANGUAGE,
+    settings: Settings | None = None,
+    llm: LLMProvider | None = None,
+) -> list[SpeechSegment]:
+    """
+    这一格音频会念哪些分段 / The pieces this audio cell would speak.
+
+    「高级配置」用它把稿子交给 TTS 图形界面 —— 界面里看到的分段与自动合成
+    **完全一致**（同一份 `_build_segments`），否则在界面上调好的东西
+    换成自动合成又不一样了。
+    Used by the advanced hand-off so the workbench shows exactly what the pipeline would
+    synthesise.
+    """
+    s = settings or get_settings()
+    task = spec(kind)
+    if task.audio_of is None:
+        return []
+
+    record = Ledger(s.db_file).get(article_id)
+    if record is None or not record.store_dir:
+        return []
+    segments, _ = _build_segments(
+        task, s.output_path / record.store_dir, lang=lang, settings=s, llm=llm
+    )
+    return segments
+
+
+def import_audio(
+    article_id: str,
+    kind: ProductionKind | str,
+    wav: Path,
+    *,
+    lang: str = DEFAULT_LANGUAGE,
+    extras: Sequence[Path] = (),
+    source: str = "tts_gui",
+    settings: Settings | None = None,
+) -> ProduceResult:
+    """
+    收下一份**在别处生成**的音频 / Adopt audio produced elsewhere.
+
+    「高级配置」把稿子交给 TTS 图形界面精修之后，成品在 TTS 那一侧。这个函数把它
+    收进文章目录并**记进台账** —— 不记的话工作台上那一格仍然是空的，
+    人会以为刚才在界面里忙半天的成果丢了。
+    After the workbench hands a script to the TTS GUI, the finished audio lives on the
+    service side. This adopts it and records it, or the cell would still read empty and
+    the work would look lost.
+
+    参数 / Args:
+        wav:    已经落到本地的整条音频
+        extras: 一起收下的附件（逐段 wav、字幕），放进 `<文章目录>/tts/<来源>/`
+        source: 记进台账的来源标记，用来区分「界面精修的」与「流水线合成的」
+
+    落盘位置与正常合成**完全一致**（`narration_audio.wav` 这些），
+    这样下载按钮、播放器、视频合成都不必区分音频是从哪条路来的。
+    The file lands exactly where a pipeline run would put it, so nothing downstream
+    needs to know which route produced it.
+    """
+    s = settings or get_settings()
+    task = spec(kind)
+    ledger = Ledger(s.db_file)
+
+    record = ledger.get(article_id)
+    if record is None or not record.store_dir:
+        return ProduceResult(kind=task.kind, ok=False, error=f"台账里没有这篇文章：{article_id}")
+    if not wav.is_file():
+        return ProduceResult(kind=task.kind, ok=False, error=f"音频文件不存在：{wav}")
+
+    directory = s.output_path / record.store_dir
+    directory.mkdir(parents=True, exist_ok=True)
+    output = directory / task.filename_for(lang)
+    payload = wav.read_bytes()
+    output.write_bytes(payload)
+
+    seconds = wav_seconds(payload)
+    kept: list[Path] = []
+    if extras:
+        target = directory / (s.tts_artifact_dirname or "tts") / source
+        target.mkdir(parents=True, exist_ok=True)
+        for extra in extras:
+            if extra.is_file() and extra.resolve() != wav.resolve():
+                destination = target / extra.name
+                destination.write_bytes(extra.read_bytes())
+                kept.append(destination)
+
+    ledger.record_production(
+        article_id,
+        str(task.kind),
+        status="ok",
+        lang=lang,
+        output_path=output.relative_to(s.output_path).as_posix(),
+        est_seconds=seconds,
+        llm_provider="tts_service",
+        llm_model=source,
+        calls=0,
+    )
+    logger.info("收下外部音频 %s：%.1f 秒，附件 %d 个", output.name, seconds, len(kept))
+
+    return ProduceResult(kind=task.kind, ok=True, path=output, seconds=seconds)
 
 
 # ---------------------------------------------------------------------------
@@ -624,6 +735,7 @@ def _generate_audio(
     lang: str,
     settings: Settings,
     on_progress: ProgressFn | None,
+    llm: LLMProvider | None = None,
 ) -> Generated:
     """
     把已有的稿子合成为音频 / Synthesise the existing script into audio.
@@ -638,38 +750,30 @@ def _generate_audio(
         两个音色；其余走 Markdown，解析出「口播」那一段。
         Long-form reads the JSON sidecar, already split into speaker turns; the others
         parse the spoken section out of the Markdown.
+
+    三步，顺序不能反 / Three steps in this order:
+        1. **朗读友好化**（一次 LLM 调用，见 `tts/preprocess.py`）：型号、公式、
+           多音字、断句。必须在分段**之前**做 —— 它会调整断句与停顿标记，
+           先切好再改写，切点就落在了改写前的位置上
+        2. **分段**：切成一段段独立合成的长度，只在句子边界切
+        3. **合成**：交给 TTS 服务，逐段回报进度
+        Preprocessing precedes segmentation because it rewrites the very punctuation the
+        segmentation depends on.
     """
-    script_spec = spec(task.audio_of)
-    script_path = directory / script_spec.filename_for(lang)
-    try:
-        markdown = script_path.read_text(encoding="utf-8")
-    except OSError as exc:
-        raise RuntimeError(f"读不到{script_spec.label}：{script_path.name}") from exc
-
-    sidecar_name = json_sidecar(script_spec, lang)
-    sidecar = directory / sidecar_name if sidecar_name else None
-    turns = longform_turns(sidecar) if sidecar and sidecar.exists() else []
-
-    if turns:
-        pairs = [(role, text) for role, text in turns]
-    else:
-        pairs = [("narrator", spoken_text(markdown))]
-
-    segments: list[SpeechSegment] = []
-    spoken_chars = 0
-    for role, text in pairs:
-        # 音色跟着语言走：英文稿用英文音色，否则模型会用中文的发音习惯念英文
-        # The voice follows the language; otherwise English is read with Chinese phonetics.
-        voice = voice_for_role(role, settings, lang=lang)
-        for piece in split_for_speech(text):
-            segments.append(SpeechSegment(text=piece, voice=voice, role=role))
-            spoken_chars += len(piece)
-
+    segments, spoken_chars = _build_segments(
+        task, directory, lang=lang, settings=settings, llm=llm
+    )
     if not segments:
-        raise RuntimeError(f"{script_spec.label}里没有可朗读的内容")
+        raise RuntimeError(f"{spec(task.audio_of).label}里没有可朗读的内容")
 
     logger.info("开始合成 %s：%d 段 · %d 字", task.label, len(segments), spoken_chars)
     clip = tts.synthesize(segments, on_progress=on_progress)
+
+    # 服务端留下的逐段 wav 与字幕拷进文章目录 —— 产物必须在**本项目的**输出里
+    # 找得齐，否则想换一句话或拿字幕去剪辑时得翻到另一个仓库的 outputs/ 下。
+    # The service's own files are copied next to the production so everything for one
+    # article stays in one place.
+    _copy_tts_artifacts(tts, clip, directory, settings)
 
     if not clip.complete:
         # 缺了几段的音频照样存下来——重跑要几十分钟，把能用的先留住，
@@ -692,12 +796,96 @@ def _generate_audio(
     )
 
 
+def _build_segments(
+    task: TaskSpec,
+    directory: Path,
+    *,
+    lang: str,
+    settings: Settings,
+    llm: LLMProvider | None,
+) -> tuple[list[SpeechSegment], int]:
+    """
+    稿子文件 → 一串待合成的分段 / The script file to a list of pieces.
+
+    两条路径都在这里，**两个入口共用它**：流水线合成（`_generate_audio`）与
+    交给 TTS 界面精修（`speech_segments_for`）必须切得一模一样，
+    否则界面上看到的分段和自动合成出来的对不上。
+    Shared by both entry points so the pieces a person sees in the TTS workbench are
+    exactly the pieces the pipeline would have synthesised.
+    """
+    script_spec = spec(task.audio_of)
+    script_path = directory / script_spec.filename_for(lang)
+    try:
+        markdown = script_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise RuntimeError(f"读不到{script_spec.label}：{script_path.name}") from exc
+
+    sidecar_name = json_sidecar(script_spec, lang)
+    sidecar = directory / sidecar_name if sidecar_name else None
+    turns = longform_turns(sidecar) if sidecar and sidecar.exists() else []
+
+    if turns:
+        pairs = [(role, text) for role, text in turns]
+    else:
+        pairs = [("narrator", spoken_text(markdown))]
+
+    segments: list[SpeechSegment] = []
+    spoken_chars = 0
+    for role, text in pairs:
+        prepared = prepare_for_speech(text, llm=llm, settings=settings)
+        if prepared.reason:
+            # 退回原文也要留一行日志：音质问题还在，只是没挡住音频
+            logger.info("TTS 预处理未生效（%s）：%s", role, prepared.reason)
+        elif prepared.notes:
+            logger.info("TTS 预处理（%s）：%s", role, "；".join(prepared.notes[:5]))
+
+        # 音色跟着语言走：英文稿用英文音色，否则模型会用中文的发音习惯念英文
+        # The voice follows the language; otherwise English is read with Chinese phonetics.
+        voice = voice_for_role(role, settings, lang=lang)
+        for piece in split_for_speech(prepared.text):
+            segments.append(SpeechSegment(text=piece, voice=voice, role=role))
+            spoken_chars += len(piece)
+
+    return segments, spoken_chars
+
+
+def _copy_tts_artifacts(
+    tts: TTSProvider, clip, directory: Path, settings: Settings
+) -> list[Path]:
+    """
+    把 TTS 服务那边的产物取回来 / Pull the service's artifacts over.
+
+    provider 不一定实现（协议里是可选的），所以用 `getattr` 探一下 ——
+    将来换个不落盘的 provider 时，这里不该因此报错。
+    Optional in the protocol, so its absence is not an error.
+
+    取不回来只记一条警告：**主音频已经在手上了**，拿不到逐段文件不该让整次
+    生成算失败。
+    The main track is already in hand; a failed copy must not void the production.
+    """
+    fetch = getattr(tts, "fetch_artifacts", None)
+    if fetch is None or not getattr(clip, "pieces", None):
+        return []
+
+    target = directory / (settings.tts_artifact_dirname or "tts") / (clip.run or "run")
+    try:
+        saved = fetch(clip, target)
+    except Exception as exc:  # noqa: BLE001 - 拷贝失败不影响成品
+        logger.warning("TTS 产物拷贝失败：%s", exc)
+        return []
+    if saved:
+        logger.info("已拷回 %d 个 TTS 产物 → %s", len(saved), target)
+    return saved
+
+
 __all__ = [
     "MANUAL_SOURCES",
     "Generated",
     "ProduceResult",
+    "import_audio",
     "is_new_article",
     "produce",
     "produce_all",
     "read_production",
+    "speech_segments_for",
 ]

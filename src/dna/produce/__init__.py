@@ -28,10 +28,12 @@ standing rule here, and it also means the two cannot break differently.
 
 from dna.produce.service import (
     ProduceResult,
+    import_audio,
     is_new_article,
     produce,
     produce_all,
     read_production,
+    speech_segments_for,
 )
 from dna.produce.tasks import (
     DISPLAY_ORDER,
@@ -49,6 +51,7 @@ __all__ = [
     "ProduceResult",
     "ProductionKind",
     "TaskSpec",
+    "import_audio",
     "is_new_article",
     "batch_kinds",
     "estimate_calls",
@@ -56,4 +59,5 @@ __all__ = [
     "produce_all",
     "read_production",
     "spec",
+    "speech_segments_for",
 ]
