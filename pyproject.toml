@@ -40,11 +40,10 @@ sources = [
 pipeline = ["scikit-learn>=1.5", "sentence-transformers>=3.0", "numpy>=1.26"]
 llm = ["openai>=1.40"]
 render = ["Jinja2>=3.1", "playwright>=1.45", "Pillow>=10.0", "markdown>=3.6"]
-# TTS 有两个后端，装哪个看部署环境 / two backends, install per environment:
-#   Intel（CPU/核显/NPU）→ openvino；NVIDIA → 另外装 CUDA 版 torch
-#   pip install torch --index-url https://download.pytorch.org/whl/cu124
-# numpy 是拼接波形要用的，不能只挂在 pipeline 那一组下面——只装 tts 的环境同样需要它。
-tts = ["openvino>=2024.0", "transformers>=4.44", "soundfile>=0.12", "numpy>=1.26", "torch>=2.4"]
+# TTS 全部走独立服务（Agent_TTS_Module），**本项目不装任何模型依赖**：
+# 没有 torch、没有 openvino、没有 transformers。要装的东西在那个仓库里。
+# 波形拼接用标准库 wave，所以连 numpy 都不需要——只剩一个 HTTP 客户端。
+tts = ["httpx>=0.27"]
 gui = ["nicegui>=2.0"]
 inbox = ["lark-oapi>=1.4"]
 scheduler = ["APScheduler>=3.10"]

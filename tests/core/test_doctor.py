@@ -14,7 +14,7 @@ test_doctor.py —— 环境自检单元测试 / Environment self-check unit tes
     4. check_proxy()：NO_PROXY 漏放行 localhost 必须报 FAIL（Ollama/RSSHub 会被代理拦截）
     5. check_inbox()：未启用报 SKIP（部署在私人电脑）；启用但缺凭证报 FAIL；
        **启用但白名单为空必须报 FAIL**（否则等于拒收全部却毫无提示）
-    6. check_tts_model()：路径为空 / 不存在 / 无 IR 文件 → WARN；有 IR 文件 → OK
+    6. check_tts_service()：不在线且拉不起来 → WARN，且**说清缺哪一项配置**
     7. check_writable_dirs()：临时目录可写，且会自动创建目录
     8. run_all() / summarize() / has_failure() 汇总逻辑
 
@@ -34,7 +34,7 @@ from dna.core.doctor import (
     check_packages,
     check_proxy,
     check_python,
-    check_tts_model,
+    check_tts_service,
     check_writable_dirs,
     has_failure,
     run_all,
@@ -170,57 +170,62 @@ def test_inbox_fully_configured_ok() -> None:
     assert "2" in r.detail
 
 
-# --- TTS 模型 / TTS model ----------------------------------------------------
+# --- TTS 服务 / TTS service --------------------------------------------------
+#
+# 本项目已经没有模型文件了，所以这里只剩一个问题：那个地址上有没有活的服务，
+# 以及**不在线时能不能自动拉起**。一律 WARN —— 采集/日报/文案都不需要它。
 
 
-def test_tts_model_unset_warns() -> None:
-    """未配置 TTS 路径只是 WARN（P6 才用）/ An unset TTS path only warns."""
-    s = Settings(_env_file=None, qwen3_tts_model_dir="")
-    assert check_tts_model(s).status is Status.WARN
+def _offline(monkeypatch) -> None:
+    """把探活按成「不在线」/ Force the liveness probe to fail."""
+    monkeypatch.setattr("dna.tts.client.TTSServiceClient.health",
+                        lambda self, timeout=3.0: False)
 
 
-def test_tts_model_missing_dir_warns(tmp_path: Path) -> None:
-    """路径不存在 → WARN / A missing directory warns."""
-    s = Settings(_env_file=None, qwen3_tts_model_dir=str(tmp_path / "nope"))
-    assert check_tts_model(s).status is Status.WARN
-
-
-def test_tts_model_dir_without_ir_warns(tmp_path: Path) -> None:
-    """目录存在但无 IR 文件 → WARN / A directory without IR files warns."""
-    s = Settings(_env_file=None, qwen3_tts_model_dir=str(tmp_path))
-    assert check_tts_model(s).status is Status.WARN
-
-
-def test_tts_model_dir_with_ir_ok(tmp_path: Path) -> None:
-    """存在 *.xml 即认为 OpenVINO 后端就位 / IR files mean the OpenVINO backend is ready."""
-    (tmp_path / "openvino_talker_language_model.xml").write_text("<net/>", encoding="utf-8")
-    s = Settings(_env_file=None, qwen3_tts_model_dir=str(tmp_path))
-    r = check_tts_model(s)
+def test_tts_service_online_is_ok(monkeypatch) -> None:
+    monkeypatch.setattr("dna.tts.client.TTSServiceClient.health",
+                        lambda self, timeout=3.0: True)
+    r = check_tts_service(Settings(_env_file=None))
     assert r.status is Status.OK
-    assert "1 个OpenVINO IR" in r.detail
+    assert "在线" in r.detail
 
 
-def test_tts_check_follows_the_configured_backend(tmp_path: Path) -> None:
+def test_tts_service_offline_but_startable_is_ok(monkeypatch, tmp_path: Path) -> None:
     """
-    检查的是**当前配的那个后端**，不是两个都要。
-
-    Intel 机器上没有 CUDA 权重是完全正常的，把它报成问题只会让人学会忽略
-    doctor 的输出——而 doctor 唯一的价值就是它说话时值得当真。
-    Flagging the absence of the backend this machine does not use would train the user to
-    ignore doctor, whose only value is being worth taking seriously.
+    不在线**但能自动拉起**时报 OK：那是正常状态，报成问题会让人跑去手动开服务，
+    而那一步本来是自动的。
+    Reporting a problem here would send the user off to do what happens automatically.
     """
-    (tmp_path / "openvino_talker_language_model.xml").write_text("<net/>", encoding="utf-8")
+    _offline(monkeypatch)
+    (tmp_path / "agentic_tts").mkdir()
+    r = check_tts_service(Settings(_env_file=None, tts_module_dir=str(tmp_path)))
+    assert r.status is Status.OK
+    assert "自动拉起" in r.detail
 
-    s = Settings(
-        _env_file=None,
-        tts_provider="qwen3_torch",
-        qwen3_tts_model_dir=str(tmp_path),  # OV 的目录在，但当前用的是 torch 后端
-        qwen3_tts_torch_model_dir="",
-    )
-    r = check_tts_model(s)
 
+def test_tts_service_without_module_dir_names_the_setting(monkeypatch) -> None:
+    """缺配置时要说出配置项的名字，而不是只说「起不来」。"""
+    _offline(monkeypatch)
+    r = check_tts_service(Settings(_env_file=None, tts_module_dir=""))
     assert r.status is Status.WARN
-    assert "QWEN3_TTS_TORCH_MODEL_DIR" in r.detail
+    assert "TTS_MODULE_DIR" in r.detail
+
+
+def test_tts_service_remote_says_it_cannot_be_started(monkeypatch) -> None:
+    """远程地址拉不起来（那是别人机器上的进程），提示要给出去哪儿启动。"""
+    _offline(monkeypatch)
+    r = check_tts_service(Settings(_env_file=None,
+                                   tts_service_url="http://10.0.0.9:8300"))
+    assert r.status is Status.WARN
+    assert "远程" in r.detail
+
+
+def test_tts_service_wrong_module_dir_warns(monkeypatch, tmp_path: Path) -> None:
+    """指到了一个不含 agentic_tts/ 的目录 —— 这是最常见的配错方式。"""
+    _offline(monkeypatch)
+    r = check_tts_service(Settings(_env_file=None, tts_module_dir=str(tmp_path)))
+    assert r.status is Status.WARN
+    assert "agentic_tts" in r.detail
 
 
 # --- 目录可写 / writable directories -----------------------------------------

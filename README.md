@@ -24,7 +24,7 @@ narration / render                     ← 文案与音频公用层（视频与�
    ↓
 pipeline                               ← 清洗→去重聚类→打分→摘要→双语→趋势
    ↓
-sources / inbox / llm / tts / store    ← 可插拔的外部接入层
+sources / inbox / llm / tts / store    ← 可插拔的外部接入层（tts 是一层薄的服务客户端）
    ↓
 core                                   ← 配置、数据模型、命名规则、日志
 ```
@@ -106,5 +106,5 @@ python -m pytest -m live      # 仅需要联网/真实服务的测试
 - Python 3.12（conda env `ov_env_py312`）
 - 云 LLM：DeepSeek（默认）/ OpenRouter（备用）
 - 本地 LLM：Ollama `qwen3.5:9b` → 后续 OpenVINO
-- TTS：Qwen3-TTS OpenVINO（Intel CPU/GPU，中英双语）
+- TTS：**独立服务** `Agent_TTS_Module`（Qwen3-TTS torch，本项目零模型依赖）
 - 长图：Jinja2 + Playwright 截图

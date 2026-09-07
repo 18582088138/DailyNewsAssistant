@@ -36,7 +36,7 @@ PHASE_PACKAGES: dict[str, tuple[str, ...]] = {
     "P2 sources": ("feedparser", "trafilatura", "bs4", "httpx"),
     "P3 pipeline": ("sklearn", "sentence_transformers", "numpy"),
     "P5 render": ("jinja2", "playwright", "PIL", "markdown"),
-    "P4.5 tts": ("openvino", "transformers", "soundfile"),
+    "P4.5 tts": ("httpx",),
     "P8 gui": ("nicegui",),
     "P9 inbox": ("lark_oapi",),
 }
@@ -182,98 +182,51 @@ def check_playwright() -> CheckResult:
     )
 
 
-def check_tts_model(settings: Settings) -> CheckResult:
+def check_tts_service(settings: Settings) -> CheckResult:
     """
-    语音合成后端是否就位 / Whether the configured TTS backend can start.
+    TTS 服务在不在线 / Whether the TTS service is reachable.
 
-    按 `TTS_PROVIDER` 检查对应后端要的目录：OpenVINO 后端看 IR，PyTorch 后端看权重。
-    检查的是**当前这台机器配的那一个**，不是两个都要——Intel 机器上没有 CUDA 权重
-    是完全正常的，报成问题只会让人学会忽略 doctor 的输出。
-    Checks whichever backend this machine is configured for. Flagging the absence of the
-    other one would train the user to ignore doctor's output.
+    先前这里检查的是**本机的模型目录与 `qwen_tts` 包**——那些东西现在都在
+    Agent_TTS_Module 那一侧，本项目一个模型文件都不需要。所以只剩一个问题：
+    那个地址上有没有一个活着的 TTS 服务。
+    This used to check local model directories; the models now live in the service, so
+    the only remaining question is whether the address answers.
 
-    全部按 WARN 而非 FAIL：没有 TTS 不影响采集、日报与文案，只影响音频。
-    Warnings rather than failures: without TTS everything except audio still works.
+    **不在线不算阻塞（WARN）**，因为：
+      · 采集、日报、文案全都不需要它；
+      · 真要合成时会**自动拉起**（见 tts/supervisor.py），现在不在线是正常状态。
+    所以这一条要说清「能不能自动拉起」，而不只是「在不在」——
+    只报「不在线」会让人跑去手动开服务，而那一步本来是自动的。
+    Not blocking: nothing but audio needs it, and it gets started on demand. The check
+    therefore reports whether autostart is available, not merely whether it is up.
     """
-    provider = (settings.tts_provider or "qwen3_ov").strip().lower()
-    name = "Qwen3-TTS 模型"
+    from dna.tts.client import TTSServiceClient, is_local_url
 
-    if provider == "qwen3_torch":
-        raw, key, marker, what = (
-            settings.qwen3_tts_torch_model_dir,
-            "QWEN3_TTS_TORCH_MODEL_DIR",
-            "*.safetensors",
-            "PyTorch 权重",
-        )
-    else:
-        raw, key, marker, what = (
-            settings.qwen3_tts_model_dir,
-            "QWEN3_TTS_MODEL_DIR",
-            "*.xml",
-            "OpenVINO IR",
-        )
+    name = "TTS 服务"
+    url = (settings.tts_service_url or "").strip()
+    if not url:
+        return CheckResult(name, Status.WARN, "未配置 TTS_SERVICE_URL")
 
-    raw = (raw or "").strip()
-    if not raw:
-        return CheckResult(name, Status.WARN, f"未配置 {key}（{provider} 后端要用）")
+    if TTSServiceClient(url).health():
+        return CheckResult(name, Status.OK, f"在线 @ {url}")
 
-    model_dir = Path(raw)
-    if not model_dir.exists():
-        return CheckResult(
-            name, Status.WARN, f"目录不存在：{model_dir}", hint=f"核对 .env 里的 {key}"
-        )
+    if not settings.tts_autostart:
+        return CheckResult(name, Status.WARN, f"不在线 @ {url}，且已关闭自动拉起",
+                           hint="TTS_AUTOSTART=true，或手动启动服务")
+    if not is_local_url(url):
+        return CheckResult(name, Status.WARN, f"不在线 @ {url}（远程地址，无法代为启动）",
+                           hint="到那台机器上跑 python -m agentic_tts.cli serve")
 
-    found = len(list(model_dir.glob(marker)))
-    if found == 0:
-        return CheckResult(
-            name,
-            Status.WARN,
-            f"目录存在但没有{what}（{marker}）：{model_dir}",
-            hint="确认这个目录是该后端要的那一种",
-        )
+    directory = (settings.tts_module_dir or "").strip()
+    if not directory:
+        return CheckResult(name, Status.WARN, f"不在线 @ {url}，且未配置 TTS_MODULE_DIR",
+                           hint="配上 Agent_TTS_Module 的目录，合成时会自动拉起")
+    if not (Path(directory) / "agentic_tts").is_dir():
+        return CheckResult(name, Status.WARN,
+                           f"TTS_MODULE_DIR 下没有 agentic_tts/：{directory}",
+                           hint="指向 Agent_TTS_Module 的仓库根目录")
 
-    detail = f"{provider}：{found} 个{what} @ {model_dir.name}"
-    return CheckResult(name, Status.OK, detail)
-
-
-def check_tts_repo(settings: Settings) -> CheckResult:
-    """
-    `qwen_tts` 包是否导得到 / Whether the `qwen_tts` package can be imported.
-
-    **两个后端都依赖它**，而它是 editable 安装的——2026-09-04 实测，
-    源码仓库从 `openvino_notebooks/` 搬到 `Models/` 之后安装记录就指向了不存在的
-    路径，`import qwen_tts` 直接 ModuleNotFoundError，而错误信息完全看不出是搬家导致的。
-    这条检查存在的意义就是把「搬过家」这件事说出来。
-    Both backends need it, and the editable install breaks silently when the repository
-    moves — with an error that says nothing about the move. This check names the cause.
-    """
-    import importlib.util
-    import sys
-
-    name = "qwen_tts 包"
-    repo = (settings.qwen3_tts_repo_dir or "").strip()
-
-    if importlib.util.find_spec("qwen_tts") is not None:
-        return CheckResult(name, Status.OK, "可直接导入")
-
-    if repo and (Path(repo) / "qwen_tts").is_dir():
-        return CheckResult(name, Status.OK, f"由 QWEN3_TTS_REPO_DIR 提供 @ {repo}")
-
-    if repo:
-        return CheckResult(
-            name,
-            Status.WARN,
-            f"QWEN3_TTS_REPO_DIR 下没有 qwen_tts/ 子目录：{repo}",
-            hint="指向 Qwen3-TTS 源码仓库的根目录",
-        )
-
-    _ = sys  # 保持导入可读，说明这条检查只看导入路径
-    return CheckResult(
-        name,
-        Status.WARN,
-        "导入不到，且未配置 QWEN3_TTS_REPO_DIR",
-        hint="editable 安装在仓库被移动后会失效；配一份路径兜底",
-    )
+    return CheckResult(name, Status.OK, f"未运行，合成时自动拉起（{directory}）")
 
 
 def check_writable_dirs(settings: Settings) -> list[CheckResult]:
@@ -399,8 +352,7 @@ def run_all(
     results.append(check_env_file(env_file))
     results.append(check_llm_config(s))
     results.append(check_playwright())
-    results.append(check_tts_model(s))
-    results.append(check_tts_repo(s))
+    results.append(check_tts_service(s))
     results.extend(check_writable_dirs(s))
     results.append(check_proxy(s))
     results.append(check_inbox(s))
@@ -432,8 +384,7 @@ __all__ = [
     "check_playwright",
     "check_proxy",
     "check_python",
-    "check_tts_model",
-    "check_tts_repo",
+    "check_tts_service",
     "check_writable_dirs",
     "has_failure",
     "run_all",

@@ -53,7 +53,13 @@ from tests.llm.fakes import ScriptedProvider
 def settings(tmp_path: Path) -> Settings:
     """指向临时目录的配置 / Settings pointing at a temp directory."""
     return Settings(
-        _env_file=None, data_dir=tmp_path / "data", output_dir=tmp_path / "outputs"
+        _env_file=None,
+        data_dir=tmp_path / "data",
+        output_dir=tmp_path / "outputs",
+        # 朗读友好化是**一次真的 LLM 调用**，开着会让「音频不重新计费」这类断言
+        # 数不清账。它本身在 tests/tts/test_tts.py 里单独测。
+        # A real LLM call; left on it would muddy the audio billing assertions.
+        tts_preprocess=False,
     )
 
 

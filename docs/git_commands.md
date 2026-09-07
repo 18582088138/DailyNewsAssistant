@@ -5,6 +5,49 @@
 
 ---
 
+## 分步提交（2026-09-06 起）
+
+**一步一个功能面，`git add` 与 `git commit` 成对出现**，不再把一个阶段攒成一个
+大而全的 add 块 + 一条百行 commit message。
+
+```bash
+# --- 步骤 N/M · 这一步是什么 ---
+git add <显式路径>
+git add <显式路径>
+git commit -m "type(scope): 一句话
+
+- 要点
+- 要点"
+```
+
+### 怎么切
+
+**按功能面切，不按改动主题切。**一个阶段里的改动主题常有四五个（缓存、标识规则、
+数据建模、界面……），但 `git add` 的粒度是**整个文件的当前内容**——
+`produce/service.py` 一个文件里往往同时装着其中的三四个。想按主题切就只能
+`git add -p` 逐块挑，挑错一块就是一个编译不过的提交。所以切在**文件边界**上，
+一步一层。这个项目的天然分法是：
+
+```
+台账 store  →  文案 narration/pipeline  →  产物 produce  →  界面 frontends/CLI  →  文档 docs
+```
+
+**顺序自下而上。**新增的参数一律带默认值，上层不动也调得通，所以停在任何一步，
+那个 commit 单独检出都能起来。反过来先提交界面，界面会调到还不存在的接口。
+
+**同生共死的文件必须同一步。**典型是 `core/config.py` 与 `config/*.yaml`：
+Profile 删了字段而 yaml 还留着那一行，pydantic 直接 `extra_forbidden` 起不来。
+
+**测试只在最后跑一次。**`pytest` 读的是工作区、不是索引，中间步骤跑等于反复跑同一份
+代码。要验证某个 commit 自洽只有干净检出这一条路（见下一节第 2 条）。
+
+### commit message
+
+三行以内 + 要点。根因分析写进 `docs/issues/NNN`，不写进 commit——
+提交完成之后没有人会再从 `git log` 里翻它。
+
+---
+
 ## 每次提交后必做的两条检查
 
 「按文件列表提交」有一个不会报错的失效模式：**某一轮的 add 块没执行，
@@ -994,6 +1037,12 @@ qwen3_torch 后端: 本机 torch 2.8.0+cpu 且无 N 卡，交付代码与离线�
 
 ## 阶段：P3.5 quater 实测返工（2026-09-06）
 
+> 已提交为 `c0e4814`，**27 个文件一个 commit**——本阶段是最后一次这么提交。
+> 下一阶段起按上面的[分步提交](#分步提交2026-09-06-起)执行。
+> 这一轮如果重来，会切成五步：
+> 台账（db/ledger + 其测试）→ 文案层（narration/pipeline + 其测试）→
+> 产物层（produce/config/profile + 其测试）→ 界面与 CLI → 文档。
+
 用户实测报了六条：两个**没有任何报错的失效**（重做拿回旧答案、NEW 过夜消失），
 四条功能调整（修改指令、表头字号、英文并入总结、文稿加语言开关）。
 
@@ -1145,4 +1194,168 @@ produce(instructions=...) 接在提示词末尾，优先级高于默认要求
 重做比首次慢：不是错觉，是多花的调用
   6.5s/2 次 → 11.9s/3 次 → 8.9s/3 次。重做不走缓存（本就是设计），
   而回炉次数随「指令要 40 秒 vs 窗口 25~35 秒」的冲突涨到上限
+```
+
+---
+
+## 阶段：改用分步提交（2026-09-06）
+
+用户要求：**每一步都要包含 `git add` 和 `git commit`**，按代码功能分步，
+不再一个大而全的 add 块。规则写在本文件开头的[分步提交](#分步提交2026-09-06-起)
+与 `00_STAGE_SUMMARY.md` 要求 5b（Skill 与 memory 同步更新，不在仓库里）。
+
+本轮只动文档，一步就够：
+
+```bash
+cd /c/Users/test/Downloads/xkd/DailyNewsAssistant
+
+# --- 步骤 1/1 · 提交守则 ---
+git add docs/git_commands.md
+git add docs/00_STAGE_SUMMARY.md
+
+git commit -m "docs: 改用分步提交，一步一个功能面
+
+- git add 与 git commit 成对出现，按文件边界自下而上切：
+  store → narration/pipeline → produce → frontends/CLI → docs
+- 按改动主题切要 git add -p，挑错一块就是编译不过的提交
+- core/config.py 与 config/*.yaml 这类同生共死的文件必须同一步"
+
+git status --short          # 预期：空
+```
+
+---
+
+## 阶段：TTS 改为调用独立服务（2026-09-08）
+
+删掉本项目内的全部 TTS 实现，改为调用 `Agent_TTS_Module` 提供的 TTS service。
+**七步，自下而上**（协议 → 客户端/看门人 → 预处理 → 工厂 → 产物层 → 前端 → 文档配置），
+每一步都能单独通过 `python -m pytest -q`。
+
+```bash
+cd /c/Users/test/Downloads/xkd/DailyNewsAssistant
+
+# --- 步骤 1/7 · 删掉本地 TTS 后端，协议保留 ---
+git rm src/dna/tts/qwen3_base.py src/dna/tts/qwen3_openvino.py src/dna/tts/qwen3_torch.py
+git add src/dna/tts/base.py
+
+git commit -m "refactor(tts): 删除本地 OpenVINO/PyTorch 后端，只留协议
+
+- 同一件事维护两份实现，两边的音质、参数与失败处理迟早对不上；
+  权重轮动/失控拦截/克隆/字幕都已在 Agent_TTS_Module 里做完并实测
+- AudioClip 增加 run 与 artifacts：服务端留下的逐段 wav 与字幕要能带回来
+- 协议一行未改，这正是当初按「将来会换成服务」设计的结果
+- RTF_ESTIMATE 注释写明它是 0.6B 核显上的数量级，1.7B CPU 实测约 13"
+
+# --- 步骤 2/7 · HTTP 客户端与服务看门人 ---
+git add src/dna/tts/client.py
+git add src/dna/tts/supervisor.py
+
+git commit -m "feat(tts): 服务客户端 + 探活与自动拉起
+
+- client：/health /info /voices /tts/synthesize /gui/handoff /outputs
+  本机地址关掉 trust_env——公司代理会把 127.0.0.1 也代理走再回 502，
+  报错看起来像服务挂了，而服务好得很（sources/http.py 踩过同一个坑）
+- supervisor：不在线就起 agentic_tts.cli serve，最多 3 次，之后上报不可用
+  第一次可能只是冷启动慢，第二次排除端口竞争，第三次失败就是环境问题
+- 子进程日志写 data/logs/tts_service.log：拉起失败时原因只在那里
+- Windows 上子进程脱离控制台组，否则 Ctrl+C 工作台会连带杀死共用服务
+- 远程地址一律不代为启动，并在报错里说清是这个原因"
+
+# --- 步骤 3/7 · 朗读友好化（一次 LLM 调用）---
+git add src/dna/tts/preprocess.py
+
+git commit -m "feat(tts): 送进 TTS 前用一次 LLM 做朗读友好化
+
+- 一次调用解决四类问题：型号/公式/符号的读法、多音字同音替换、
+  合理断句、插入 [pause:400ms]
+- 不堆规则表：规则永远穷举不完，还会互相干扰
+  （4060 改成四零六零之后，4060 Ti 又不对了）
+- 三条护栏：调用失败退回原文；长度偏离 0.6~1.8 倍之外丢弃改写结果
+  （那说明模型自己续写或大段删除，音频里多念不存在的内容更严重）；
+  TTS_PREPROCESS=false 可彻底关掉
+- 这次调用属于本项目，TTS service 是纯 TTS、自己从不调 LLM"
+
+# --- 步骤 4/7 · 工厂与包出口 ---
+git add src/dna/tts/factory.py
+git add src/dna/tts/__init__.py
+
+git commit -m "refactor(tts): 工厂只产服务 provider，音色默认值改用服务端写法
+
+- provider 按服务地址缓存：它缓存了 /info 与音色清单，重建就要多两次往返
+- 默认音色 Serena / Uncle_Fu（服务端内置 speaker 的大小写）
+- 小写音色名按服务端清单纠正——大小写不符会在加载完权重之后才报错，
+  那时已经白等了几十秒"
+
+# --- 步骤 5/7 · 服务 provider 与产物层接线 ---
+git add src/dna/tts/service.py
+git add src/dna/produce/service.py
+git add src/dna/produce/__init__.py
+
+git commit -m "feat(produce): 音频改走 TTS 服务，逐段合成并收回产物
+
+- 一段一个请求，不用 /tts/batch：整批一个请求界面只能看转圈，
+  中途失败一段就整批失败；逐段发才能报「第 7/23 段」并只丢失败那段
+- 拼接留在本侧（协议原样）：段间 0.25s、换角色 0.5s；用标准库 wave，
+  不为搬运帧数拉 numpy 依赖
+- 抽出 _build_segments，供流水线与「交给 TTS 界面」共用——
+  否则界面里看到的分段和自动合成出来的对不上
+- 新增 import_audio()：收下在 TTS 界面生成的音频并记台账，
+  不记的话那一格仍显示未生成，人会以为界面里忙半天的成果丢了
+- 逐段音频写进 <文章目录>/tts/<run>/，用手上的字节而不是回头下载：
+  服务端按「段号+音色」命名，同一音色出现两次会互相覆盖（实测踩到）"
+
+# --- 步骤 6/7 · 工作台：动态进度与「高级配置」---
+git add frontends/nicegui_app/audio_progress.py
+git add frontends/nicegui_app/actions.py
+git add frontends/nicegui_app/detail_panel.py
+git add frontends/nicegui_app/ledger_table.py
+git add frontends/cli/main.py
+
+git commit -m "feat(frontends): 音频进度浮窗 + 高级配置跳转 TTS 界面
+
+- audio_progress：秒表 + 进度条 + 已产出秒数 + 按实测速度推的剩余时间。
+  静止的转圈只能回答「在跑吗」，而且卡死的页面上它照样在转（那是 CSS 动画）
+- 段数未知前保持不确定态，不画 0%——0% 会被读成「卡在开头」
+- 高级配置开关：交接单 POST 给服务、新标签页打开 TTS 多段界面、
+  右下角每 4 秒轮询（上限 90 分钟），出活后拷回产物并记台账
+- 轮询而不是回调：TTS 可能在另一台机器上，不该知道工作台的地址
+- dna tts 先探活再列音色；合成结果把 音频/耗时/RTF 分开报"
+
+# --- 步骤 7/7 · 配置、体检、文档与测试 ---
+git add src/dna/core/config.py
+git add src/dna/core/doctor.py
+git add .env.example
+git add pyproject.toml
+git add tests/conftest.py
+git add tests/tts/test_tts.py
+git add tests/core/test_doctor.py
+git add tests/produce/test_service.py
+git add docs/14_tts_guide.md
+git add README.md
+git add docs/git_commands.md
+
+git commit -m "chore(tts): 配置项换成服务地址，体检改查服务，文档与测试跟上
+
+- 配置：TTS_SERVICE_URL / TTS_GUI_URL / TTS_MODULE_DIR / TTS_AUTOSTART /
+  TTS_START_ATTEMPTS / TTS_REQUEST_TIMEOUT / TTS_PREPROCESS，
+  删掉 TTS_PROVIDER 与四个 QWEN3_TTS_* 路径
+- TTS_REQUEST_TIMEOUT 默认 900s：CPU 上一段 120 字要三四分钟，
+  短超时会在服务正常工作时把请求掐掉
+- doctor：check_tts_model/check_tts_repo → check_tts_service，
+  「不在线但能自动拉起」报 OK（那是正常状态，报成问题会让人去做本已自动的事）
+- pip install -e .[tts] 现在只装 httpx：没有 torch/openvino/transformers
+- 测试夹具关掉 TTS_PREPROCESS：它是一次真的 LLM 调用，
+  开着会把「音频不重新计费」这类断言搅浑；预处理本身单独测
+- 全量：819 passed, 3 deselected"
+
+git status --short          # 预期：空
+```
+
+**手动验证（提交前后都可以跑）**：
+
+```bash
+dna doctor                          # 「TTS 服务」一项
+dna tts                             # 探活 + 自动拉起 + 列音色
+dna tts --say "今天的人工智能资讯" -o /c/tmp/tts-check.wav
+dna gui                             # 展开口播格 → 合成音频 / 高级配置
 ```

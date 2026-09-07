@@ -56,15 +56,17 @@ from dna.tts.base import (
     SPEAKER_CHANGE_PAUSE_SECONDS,
     SpeechSegment,
     TTSError,
-    TTSInfo,
     VoiceSpec,
     encode_wav,
     estimate_synthesis_seconds,
     wav_seconds,
 )
-from dna.tts.qwen3_base import DEFAULT_GUEST_SPEAKER, DEFAULT_SPEAKER, Qwen3Backend
-from dna.tts.qwen3_torch import Qwen3TorchTTS
 from dna.tts.segment import clean_for_speech, split_for_speech
+from dna.tts.service import (
+    DEFAULT_GUEST_SPEAKER,
+    DEFAULT_SPEAKER,
+    TTSServiceProvider,
+)
 
 SAMPLE_RATE = 24_000
 
@@ -202,46 +204,55 @@ def test_estimate_uses_measured_rtf() -> None:
     assert estimate_synthesis_seconds(0.0) == 0.0
 
 
-# --- 拼接与容错 / joining and fault tolerance ---------------------------------
+# --- 逐段合成、拼接与容错 / per-piece synthesis, joining, fault tolerance ------
 
 
-class FakeBackend(Qwen3Backend):
+class FakeClient:
     """
-    一个不加载任何模型的后端 / A backend that loads nothing.
+    一个不连网的 TTS 服务 / A TTS service that never leaves the process.
 
-    每段返回 1 秒的静音；`fail_at` 里的下标会抛异常，用来验证「一段失败不毁整篇」。
-    Returns one second of silence per piece; indices in `fail_at` raise.
+    每段回 1 秒静音；`fail_at` 里的下标抛 TTSError，用来验「一段失败不毁整篇」。
     """
 
     def __init__(self, *, fail_at: set[int] | None = None) -> None:
-        super().__init__("/nowhere", device="CPU", repo_dir=None)
         self.fail_at = fail_at or set()
         self.calls = 0
+        self.seen: list[dict] = []
 
-    @property
-    def info(self) -> TTSInfo:
-        return TTSInfo(name="fake", model="fake", device="CPU")
+    def health(self, timeout: float = 3.0) -> bool:
+        return True
 
-    def _model_ready(self):  # noqa: ANN202 - 跳过目录检查与加载
-        return self
+    def speakers(self) -> list[str]:
+        return ["Serena", "Uncle_Fu"]
 
-    def _synthesize_one(self, model, piece, fallback_rate):  # noqa: ANN001, ANN202
+    def synthesize(self, text: str, **kwargs) -> dict:
         index = self.calls
         self.calls += 1
+        self.seen.append({"text": text, **kwargs})
         if index in self.fail_at:
-            raise RuntimeError("这一段炸了")
-        return np.zeros(SAMPLE_RATE, dtype=np.float32), SAMPLE_RATE
+            raise TTSError("这一段炸了")
+        silence = np.zeros(SAMPLE_RATE, dtype=np.float32)
+        run = kwargs.get("run") or "run"
+        return {"wav": encode_wav(silence, SAMPLE_RATE), "seconds": 1.0,
+                "path": f"/outputs/{run}/seg_{index + 1:03d}.wav"}
+
+
+def _provider(*, fail_at: set[int] | None = None) -> TTSServiceProvider:
+    """一个注入了假客户端的 provider / A provider wired to the fake client."""
+    provider = TTSServiceProvider(Settings(_env_file=None))
+    provider.client = FakeClient(fail_at=fail_at)
+    return provider
 
 
 def _segments(count: int, *, roles: list[str] | None = None) -> list[SpeechSegment]:
-    voice = VoiceSpec(speaker="serena", language="chinese")
+    voice = VoiceSpec(speaker="Serena", language="chinese")
     roles = roles or ["narrator"] * count
     return [SpeechSegment(text=f"第{i}段。", voice=voice, role=roles[i]) for i in range(count)]
 
 
 def test_joins_segments_with_pauses() -> None:
     """段间要有停顿，否则两句黏在一起像抢话 / Without a gap the sentences run together."""
-    clip = FakeBackend().synthesize(_segments(3))
+    clip = _provider().synthesize(_segments(3))
 
     expected = 3 + 2 * PAUSE_SECONDS
     assert clip.seconds == pytest.approx(expected, abs=0.01)
@@ -250,57 +261,73 @@ def test_joins_segments_with_pauses() -> None:
 
 
 def test_speaker_change_gets_a_longer_pause() -> None:
-    """
-    换人的停顿比换句子长——听感上才像两个人在对话。
-    A speaker change needs a longer gap to sound like a conversation.
-    """
-    clip = FakeBackend().synthesize(_segments(2, roles=["host", "guest"]))
+    """换人处的停顿更长，听感上才像两个人在对话 / A speaker change gets more silence."""
+    clip = _provider().synthesize(_segments(2, roles=["host", "guest"]))
 
-    assert clip.seconds == pytest.approx(2 + SPEAKER_CHANGE_PAUSE_SECONDS, abs=0.01)
-    assert SPEAKER_CHANGE_PAUSE_SECONDS > PAUSE_SECONDS
+    expected = 2 + SPEAKER_CHANGE_PAUSE_SECONDS
+    assert clip.seconds == pytest.approx(expected, abs=0.01)
 
 
 def test_one_failed_segment_does_not_destroy_the_take() -> None:
     """
-    **一段失败不毁整篇。**长文案有几十段，跑到第 40 段崩掉就把前面的半小时赔进去。
-    缺段照样落盘，但 `complete` 为 False，界面据此提示音频不完整。
-    A long-form run has dozens of pieces; discarding all of them over one failure would
-    throw away half an hour. The clip is kept but marked incomplete.
+    **一段失败不毁整篇。** 几十分钟的合成里丢一句，比全部重来划算得多；
+    但 `failed_segments` 必须记下来，上层据此告诉人「音频不完整」。
     """
-    clip = FakeBackend(fail_at={1}).synthesize(_segments(3))
+    clip = _provider(fail_at={1}).synthesize(_segments(3))
 
-    assert clip.segments == 3
     assert clip.failed_segments == [1]
     assert not clip.complete
-    assert clip.seconds > 1.5  # 另外两段还在
+    assert clip.seconds == pytest.approx(2 + PAUSE_SECONDS, abs=0.01)
 
 
 def test_all_segments_failing_raises() -> None:
-    """全失败要抛，不能返回一个空音频冒充成功 / A total failure must not look like success."""
+    """全失败要抛，不能回一条空音频 / Total failure raises rather than returning silence."""
     with pytest.raises(TTSError, match="全部合成失败"):
-        FakeBackend(fail_at={0, 1}).synthesize(_segments(2))
+        _provider(fail_at={0, 1}).synthesize(_segments(2))
 
 
 def test_nothing_to_speak_raises() -> None:
-    """没有可念的内容要抛 / Nothing to speak is an error, not silence."""
+    voice = VoiceSpec(speaker="Serena")
     with pytest.raises(TTSError, match="没有可朗读"):
-        FakeBackend().synthesize([])
+        _provider().synthesize([SpeechSegment(text="   ", voice=voice)])
 
 
 def test_progress_is_reported_per_segment() -> None:
-    """
-    每段都要报进度——长文案要跑半小时，一个不动的转圈无法区分「在跑」和「卡死」。
-    A motionless spinner cannot distinguish work from a hang over half an hour.
-    """
+    """长合成必须逐段报进度，否则界面只能看一个转圈 / Progress is per piece."""
     seen: list[tuple[int, int]] = []
-    FakeBackend().synthesize(
+    _provider().synthesize(
         _segments(3), on_progress=lambda done, total, _s: seen.append((done, total))
     )
 
     assert seen == [(1, 3), (2, 3), (3, 3)]
 
 
-# --- 工厂与配置 / factory and configuration -----------------------------------
+def test_artifacts_carry_the_run_directory() -> None:
+    """
+    产物清单形如 `run/文件名` —— 上层就是拿这两段去 `GET /outputs/{run}/{file}`。
+    用**路径里真实的父目录名**：产物目录重名时服务端会加后缀，
+    写死请求时给的名字就取不到了。
+    """
+    clip = _provider().synthesize(_segments(2))
+
+    assert clip.run.startswith("dna-")
+    assert [a.split("/")[-1] for a in clip.artifacts] == ["seg_001.wav", "seg_002.wav"]
+    assert all(a.count("/") == 1 for a in clip.artifacts)
+
+
+def test_voice_case_is_corrected_against_the_service() -> None:
+    """
+    `.env` 里写小写的音色名要能对上服务端的写法 —— 大小写不符会在**加载完权重
+    之后**才报错，那时已经白等了几十秒。
+    """
+    provider = _provider()
+    provider.synthesize([SpeechSegment(text="一句话。",
+                                       voice=VoiceSpec(speaker="serena"))])
+
+    assert provider.client.seen[0]["voice"] == "Serena"
+
+
+# --- 工厂与音色 / factory and voices ------------------------------------------
 
 
 @pytest.fixture(autouse=True)
@@ -314,45 +341,18 @@ def _settings(**kwargs) -> Settings:
     return Settings(_env_file=None, **kwargs)
 
 
-def test_unknown_provider_lists_the_options() -> None:
-    """报错要说清可选是什么，不是只说「未知」/ The error names the alternatives."""
-    with pytest.raises(TTSError, match="qwen3_ov"):
-        factory.get_tts(_settings(tts_provider="espeak"))
-
-
-def test_missing_path_names_the_setting() -> None:
-    """缺配置时说清缺哪一项 / A missing path is named by its setting key."""
-    with pytest.raises(TTSError, match="QWEN3_TTS_MODEL_DIR"):
-        factory.get_tts(_settings(tts_provider="qwen3_ov", qwen3_tts_model_dir=""))
-
-    with pytest.raises(TTSError, match="QWEN3_TTS_TORCH_MODEL_DIR"):
-        factory.get_tts(_settings(tts_provider="qwen3_torch", qwen3_tts_torch_model_dir=""))
-
-
-def test_instance_is_cached() -> None:
-    """
-    **加载模型要 10 秒，实例必须复用。**
-    每点一次按钮都重新加载，这 10 秒会加在每一次等待上。
-    Loading takes ten seconds; reloading per click would add it to every wait.
-    """
-    s = _settings(tts_provider="qwen3_ov", qwen3_tts_model_dir="/models/ov")
-
+def test_instance_is_cached_per_service_url() -> None:
+    """provider 缓存了 /info 与音色清单，每次重建就要多两次往返。"""
+    s = _settings(tts_service_url="http://127.0.0.1:8300")
     assert factory.get_tts(s) is factory.get_tts(s)
-    assert factory.get_tts(s, fresh=True) is not factory.get_tts(s, fresh=True)
+    assert factory.get_tts(s, fresh=True) is not None
 
 
-def test_device_change_gets_a_new_instance() -> None:
-    """换设备要换实例，不能复用编译在别的设备上的那一个 / A device change is a new instance."""
-    cpu = factory.get_tts(
-        _settings(tts_provider="qwen3_ov", qwen3_tts_model_dir="/m", tts_device="CPU")
-    )
-    gpu = factory.get_tts(
-        _settings(tts_provider="qwen3_ov", qwen3_tts_model_dir="/m", tts_device="GPU")
-    )
-
-    assert cpu is not gpu
-    assert cpu.info.device == "CPU"
-    assert gpu.info.device == "GPU"
+def test_different_service_gets_a_new_instance() -> None:
+    """换地址（本机 → 4060 那台）必须换实例，否则还在问旧服务。"""
+    first = factory.get_tts(_settings(tts_service_url="http://127.0.0.1:8300"))
+    second = factory.get_tts(_settings(tts_service_url="http://10.0.0.9:8300"))
+    assert first is not second
 
 
 def test_two_roles_never_share_a_voice() -> None:
@@ -361,7 +361,7 @@ def test_two_roles_never_share_a_voice() -> None:
     访谈稿两个人一个嗓子，听众分不出谁在说话，双角色这件事就白做了。
     An interview read in one voice leaves the listener unable to tell who is speaking.
     """
-    s = _settings(tts_voice_host="serena", tts_voice_guest="serena")
+    s = _settings(tts_voice_host="Serena", tts_voice_guest="Serena")
 
     host = factory.voice_for_role("host", s)
     guest = factory.voice_for_role("guest", s)
@@ -380,43 +380,110 @@ def test_default_voices_differ() -> None:
 
 def test_narrator_uses_the_host_voice() -> None:
     """专题模式只有旁白，用主持人那把嗓子 / A feature has only a narrator."""
-    s = _settings(tts_voice_host="eric")
-    assert factory.voice_for_role("narrator", s).speaker == "eric"
+    s = _settings(tts_voice_host="Eric")
+    assert factory.voice_for_role("narrator", s).speaker == "Eric"
 
 
-# --- torch 后端的前置校验 / the torch backend's pre-flight checks --------------
+# --- 服务探活与自动拉起 / liveness and autostart -------------------------------
+#
+# 这三条都在验**报错说得清不清**：服务不在线时人要能立刻知道
+# 「该等它自己起来」还是「该自己去开」，而不是看一个连接错误。
 
 
-def test_torch_rejects_cuda_before_loading_weights() -> None:
+def _dead_client() -> FakeClient:
+    client = FakeClient()
+    client.health = lambda timeout=3.0: False
+    return client
+
+
+def test_remote_service_is_never_started_for_you() -> None:
+    """远程地址不做自动拉起，而且要说清是这个原因。"""
+    from dna.tts.supervisor import ensure_service
+
+    with pytest.raises(TTSError, match="不在本机"):
+        ensure_service(_settings(tts_service_url="http://10.0.0.9:8300"),
+                       client=_dead_client())
+
+
+def test_autostart_off_says_so() -> None:
+    from dna.tts.supervisor import ensure_service
+
+    with pytest.raises(TTSError, match="自动拉起"):
+        ensure_service(_settings(tts_autostart=False), client=_dead_client())
+
+
+def test_missing_module_dir_is_named() -> None:
+    """没配 TTS_MODULE_DIR 时要说出这个名字，而不是只说「起不来」。"""
+    from dna.tts.supervisor import ensure_service
+
+    with pytest.raises(TTSError, match="TTS_MODULE_DIR"):
+        ensure_service(_settings(tts_module_dir=""), client=_dead_client())
+
+
+# --- 朗读友好化 / speakable rewriting -----------------------------------------
+
+
+class FakeLLM:
+    """按需回一个 SpokenOut / Returns whatever the test asks for."""
+
+    def __init__(self, spoken: str, *, boom: bool = False) -> None:
+        self.spoken = spoken
+        self.boom = boom
+        self.calls = 0
+
+    def chat_json(self, messages, schema, **kwargs):
+        self.calls += 1
+        if self.boom:
+            raise RuntimeError("模型不可用")
+        return schema(spoken=self.spoken, notes=["改了型号读法"])
+
+
+def test_preprocess_uses_the_rewrite() -> None:
+    from dna.tts.preprocess import prepare_for_speech
+
+    llm = FakeLLM("RTX 四零六零 发布了，比上代快三点五倍。")
+    result = prepare_for_speech("RTX 4060 发布了，比上代快 3.5x。",
+                                llm=llm, settings=_settings())
+
+    assert result.used_llm and llm.calls == 1
+    assert "四零六零" in result.text
+
+
+def test_preprocess_failure_falls_back_to_the_original() -> None:
+    """**预处理失败绝不能挡住音频。** 它只是润色，音频能不能出来不该取决于它。"""
+    from dna.tts.preprocess import prepare_for_speech
+
+    result = prepare_for_speech("原文一句话。", llm=FakeLLM("", boom=True),
+                                settings=_settings())
+
+    assert result.text == "原文一句话。"
+    assert not result.used_llm and "LLM 调用失败" in result.reason
+
+
+def test_preprocess_rejects_a_wildly_different_length() -> None:
     """
-    **没有 CUDA 时在加载之前就报错。**
-
-    等 PyTorch 自己抛的话，要先把权重全读进内存才失败；先查一遍只要几毫秒，
-    而且能给出一句照做就行的提示。本机是 CPU-only 构建，这条走的就是真实路径。
-    Letting PyTorch raise means loading the weights first; checking up front turns a long
-    wait into an actionable message. This machine is a CPU-only build, so the assertion
-    exercises the real path.
+    长度偏离过大 ⇒ 模型自己续写或大段删除了，宁可不要 ——
+    音频里多念一段不存在的内容，比读音不完美严重得多。
     """
-    import torch
+    from dna.tts.preprocess import prepare_for_speech
 
-    if torch.cuda.is_available():
-        pytest.skip("这台机器有 CUDA，测不到这条路径")
+    original = "第一句话在这里。第二句话在这里。第三句话在这里。"
+    result = prepare_for_speech(original, llm=FakeLLM("短。"), settings=_settings())
 
-    backend = Qwen3TorchTTS("/weights", device="cuda:0")
-    with pytest.raises(TTSError, match="CUDA 不可用"):
-        backend._check_device()
-
-
-def test_torch_rejects_unknown_dtype() -> None:
-    """精度写错要在加载前拦下 / A bad dtype is caught before loading."""
-    with pytest.raises(TTSError, match="TTS_DTYPE"):
-        Qwen3TorchTTS("/weights", device="cpu", dtype="int4")._check_device()
+    assert result.text == original
+    assert "偏离过大" in result.reason
 
 
-def test_torch_rejects_unknown_device() -> None:
-    """设备名写错要说清可用的是什么 / An unknown device names the valid ones."""
-    with pytest.raises(TTSError, match="cuda"):
-        Qwen3TorchTTS("/weights", device="xpu")._check_device()
+def test_preprocess_can_be_switched_off() -> None:
+    """关掉时一次都不该调 / Switched off means zero calls."""
+    from dna.tts.preprocess import prepare_for_speech
+
+    llm = FakeLLM("不该被用到")
+    result = prepare_for_speech("**加粗**的一句话。", llm=llm,
+                                settings=_settings(tts_preprocess=False))
+
+    assert llm.calls == 0
+    assert result.text == "加粗的一句话。"      # Markdown 清洗仍然生效
 
 
 # --- 与产物层的接口 / the interface to the production layer -------------------

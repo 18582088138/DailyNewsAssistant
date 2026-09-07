@@ -1,180 +1,202 @@
-# 14 语音合成指南 / Text-to-Speech Guide
+# 14 · 语音合成 / TTS
 
-> **TTS 跑在本地，一分钱都不花。**但它很花时间——实测 RTF ≈ 2.5，
-> 也就是说生成 1 分钟音频要算 2.5 分钟。长文案的音频要跑半小时以上。
-> 后面所有要出声的功能（P6 视频版、P7 播客版）都建立在这一层上。
+**本项目内没有任何语音模型代码。** 合成全部交给独立的 **TTS service**
+（`Agent_TTS_Module`），这边只剩一个地址、一层薄客户端、和一次朗读友好化的 LLM 调用。
 
----
-
-## 一、两个后端，同一个接口
-
-| provider | 跑在哪 | 模型 | 何时用 |
-|---|---|---|---|
-| `qwen3_ov` | Intel CPU / 核显 / NPU | 已转换的 OpenVINO IR | **本机默认**，已验证 |
-| `qwen3_torch` | NVIDIA CUDA（也支持 cpu / mps） | 原始 HuggingFace 权重 | 有 N 卡的部署环境 |
-
-换环境只改 `.env` 里的 `TTS_PROVIDER` 一行。业务代码、命令行、界面全都不动——
-`produce/` 拿到的永远是 `TTSProvider` 协议，不知道背后是谁，和 `dna/llm/` 是同一套做法。
-
-```
-produce/  ──▶  tts/  ──▶  qwen3_ov     OpenVINO
-                    ├──▶  qwen3_torch  PyTorch
-                    └──▶  http service （TTS 部署成服务之后补，接口不变）
-```
-
-两个后端的调用签名完全一致，公共部分（分段、拼接、停顿、进度、逐段容错）
-在 `tts/qwen3_base.py` 里只有一份，各自只实现「怎么加载模型」。
+先前的两个本地后端（`qwen3_ov` / `qwen3_torch`）已经**删除**。原因不是「服务更时髦」：
+同一件事维护两份实现，两边的音质、参数、失败处理迟早对不上，而 TTS 模块已经把
+权重轮动、失控生成拦截、音色克隆/设计、字幕这些都做完并实测过了。
 
 ---
 
-## 二、配置
+## 1 · 分工
 
-```ini
-# .env
-TTS_PROVIDER=qwen3_ov
-
-# --- qwen3_ov：OpenVINO 后端 ---
-QWEN3_TTS_MODEL_DIR=C:/Users/test/Downloads/xkd/Models/Qwen3-TTS-CustomVoice-0.6B-OV
-QWEN3_TTS_HELPER_DIR=C:/Users/test/Downloads/xkd/openvino_notebooks/notebooks/qwen3-tts
-
-# --- qwen3_torch：PyTorch 后端 ---
-QWEN3_TTS_TORCH_MODEL_DIR=
-
-# --- 两个后端都要：Qwen3-TTS 源码仓库（提供 qwen_tts 包）---
-QWEN3_TTS_REPO_DIR=C:/Users/test/Downloads/xkd/Models/Qwen3-TTS
-
-TTS_DEVICE=GPU          # qwen3_ov：CPU|GPU|NPU　　qwen3_torch：cuda|cuda:0|cpu|mps
-TTS_DTYPE=bfloat16      # 仅 qwen3_torch
-TTS_VOICE_HOST=         # 留空 → serena
-TTS_VOICE_GUEST=        # 留空 → uncle_fu
+```
+DailyNewsAssistant                          Agent_TTS_Module（另一个进程/另一台机器）
+─────────────────────────────────────       ────────────────────────────────────────
+tts/preprocess  朗读友好化（1 次 LLM）  →   /tts/synthesize   单段合成
+tts/segment     清洗 + 按句分段         →   （服务内还会再按模型上限分块）
+tts/service     逐段发请求 + 拼接波形        权重加载 / 8GB 轮动 / 失控重试
+tts/supervisor  探活 + 自动拉起              音色克隆 / 音色设计 / 字幕
+tts/client      HTTP（httpx）           →   /gui/handoff      交给图形界面精修
 ```
 
-### `QWEN3_TTS_REPO_DIR` 为什么要单独配
-
-`qwen_tts` 包是 **editable 安装**的，安装记录里存的是当时那个路径。
-2026-09-04 实测：源码仓库从 `openvino_notebooks/` 搬到 `Models/` 之后，
-`import qwen_tts` 直接 `ModuleNotFoundError`，而报错信息完全看不出是搬家导致的。
-
-`dna doctor` 有一条专门的检查会把这件事说出来，`get_tts()` 也会把配好的路径
-加进 `sys.path` 兜底。
-
-### `TTS_DEVICE` 是真的会生效的
-
-参考实现 `qwen_3_tts_helper.py` 里写着 `tmp_device = "GPU"`，
-传进去的 `device` 参数**只对 speaker encoder 生效**——照原样用的话这个配置是死的。
-
-本项目在加载时把两个类临时换成固定设备的子类，让配置真的传下去
-（`tts/qwen3_openvino.py::_load_on_device`）。声码器保持在 CPU，与上游一致。
-
-> ⚠️ 上游那句 `Loading OpenVINO Talker on GPU` 的打印读的是它自己的局部变量，
-> **替换之后这句话就不再是真的了**。以 `dna tts` 显示的为准。
+依赖也跟着变干净了：`pip install -e ".[tts]"` 现在只装 `httpx` ——
+没有 torch、没有 openvino、没有 transformers，连 numpy 都不需要（拼接用标准库 `wave`）。
 
 ---
 
-## 三、命令
+## 2 · 配置（`.env`）
+
+| 变量 | 默认 | 说明 |
+|---|---|---|
+| `TTS_SERVICE_URL` | `http://127.0.0.1:8300` | 服务地址。**换机器只改这一行** |
+| `TTS_GUI_URL` | `http://127.0.0.1:8301` | 「高级配置」要打开的图形界面 |
+| `TTS_MODULE_DIR` | 空 | `Agent_TTS_Module` 根目录，**只为自动拉起** |
+| `TTS_PYTHON` | 空 | 拉起用的解释器，空 = 当前这个 |
+| `TTS_AUTOSTART` | `true` | 关掉就只报「不在线」，不代为启动 |
+| `TTS_START_ATTEMPTS` / `TTS_START_TIMEOUT` | `3` / `120` | 拉起次数与单次等待上限 |
+| `TTS_REQUEST_TIMEOUT` | `900` | 单段合成的 HTTP 超时 |
+| `TTS_PREPROCESS` | `true` | 朗读友好化开关（唯一的 LLM 调用） |
+| `TTS_ARTIFACT_DIRNAME` | `tts` | 服务端产物拷进文章目录的哪个子目录 |
+| `TTS_VOICE_HOST` / `TTS_VOICE_GUEST` | 空 | 空 = `Serena` / `Uncle_Fu` |
+
+> `TTS_REQUEST_TIMEOUT` 别往小改。CPU 上实测 RTF≈13，一段 120 字要三四分钟，
+> 默认的 20 秒超时会在**服务正常工作时**把请求掐掉 —— 那是最难查的一类失败。
+
+---
+
+## 3 · 探活与自动拉起
+
+```
+用之前 → GET /health（3 秒超时）
+         在线 → 直接用
+         不在线 → 能自动拉起吗？
+                   不能（关了 / 远程地址 / 没配 TTS_MODULE_DIR）→ 报错并说清是哪一条
+                   能 → python -m agentic_tts.cli serve，等就绪，最多 3 次
+                        3 次都失败 → 上报「TTS 不可用」，附上手动排查命令
+```
+
+三次而不是无限重试：第一次可能只是**冷启动慢**（加载权重几十秒），第二次能排除
+偶发的端口竞争，第三次还不行就不是运气问题，而是环境不对，继续重试只是把一个
+确定的失败拖长。
+
+两条实现上的取舍：
+
+- **子进程日志写到 `data/logs/tts_service.log`**，不丢弃 ——
+  拉起失败时唯一能说明原因的东西就在那里（缺依赖、端口被占、权重路径错）。
+- **Windows 上子进程脱离控制台组**（`CREATE_NEW_PROCESS_GROUP`）：
+  否则工作台被 Ctrl+C 时，这个共用的服务会跟着一起死。
+- 退出时**不杀**服务：它是共用的，CLI 与别的项目可能还在用。
+
+---
+
+## 4 · 默认路径（单段合成）
+
+工作台点「合成音频」，或 `dna produce <id> --kind narration_audio`：
+
+1. 读稿子（长文案读 `.json` 附件里的角色轮次，其余解析 Markdown 的「口播」段）
+2. **朗读友好化**：一次 LLM 调用（见 §6）
+3. **分段**：只在句子边界切，每段 ≤120 字
+4. 逐段 `POST /tts/synthesize`（`encoding=base64`，一次一段）
+5. 本地拼接：段间 0.25s 静音，**换角色 0.5s**
+6. 写 `narration_audio.wav`，记台账
+7. 把**逐段音频**写进 `<文章目录>/tts/<run>/`（`seg_001_host.wav` …）
+
+> 逐段文件写的是**合成时已经拿到的字节**，不回头去服务端下载。服务端按
+> 「段号 + 音色」命名，一次合成里同一个音色出现两次就会互相覆盖（实测踩到），
+> 下载回来的是错的那一份。
+
+**为什么一段一个请求，而不是把整批丢给 `/tts/batch`**：
+整批一个请求下去，界面在几十分钟里只能看一个转圈，而且中间失败一段就整批失败。
+逐段发才能报「第 7/23 段」，也才能一段失败只丢那一段。服务端本来就是串行合成
+（一把锁，8GB 卡上并发必然 OOM），逐段发不会更慢。
+
+一段失败**不会**毁掉整条：`failed_segments` 记下来，界面上明说「音频不完整」——
+重跑要几十分钟，把能用的先留住，但绝不能让人把残缺音频当成品发出去。
+
+---
+
+## 5 · 高级路径（交给 TTS 图形界面）
+
+音频按钮旁边的 **「高级配置」** 开关（点亮即触发，随后自动弹回）：
+
+```
+点亮 → 确认服务在线（不在线自动拉起）
+     → 确认图形界面在线（它是另一个进程、另一个端口）
+     → 稿子按**同一份分段逻辑**切好，POST /gui/handoff 拿一个 token
+     → 新标签页打开 TTS_GUI_URL/?import=<token>，文本已填进多段界面
+     → 工作台右下角出现「等 TTS 界面出活」，每 4 秒轮询一次（最多 90 分钟）
+     → 那边生成/合并完 → 产物清单写回交接单
+     → 工作台拷回全部产物 → 整条音频记进台账 → 通知 + 刷新表格
+```
+
+在那边能做这边故意不做的事：逐段换音色、音色克隆（上传参考音频）、音色设计、
+单句重生成、换种子重掷、导出 SRT 字幕。**在这里再画一套控件是重复实现**，
+而且两套迟早不一致。
+
+三条设计取舍：
+
+- **轮询而不是回调**：TTS 服务可能在另一台机器上，它不该知道工作台的地址，
+  工作台也不必为此开一个入站端口。
+- **分段必须与自动合成完全一致**（共用 `_build_segments`），否则在界面里调好的
+  东西，换成自动合成又是另一批分段。
+- 整条音频认哪个文件：优先 `merged.wav`，没有就取唯一/最后一个 wav。
+  规则写死，不做「最大文件」这类启发式 —— 猜错的代价很直接。
+
+---
+
+## 6 · 朗读友好化（唯一的 LLM 调用）
+
+`tts/preprocess.py`，**一次**调用解决四类问题：
+
+| 类别 | 例子 |
+|---|---|
+| 不易读的写法 | `RTX 4060` → `RTX 四零六零`；`3.5x` → `三点五倍`；`P(A\|B)` → 念得出来的说法 |
+| 多音字 | 会读错时换成**完全同音**的另一个字；人名/地名/产品名一律不动 |
+| 断句 | 按朗读的呼吸停顿加标点、拆长句 |
+| 自然度 | 该停的地方插 `[pause:400ms]`（TTS 模块的确定性停顿标记） |
+
+**为什么不用规则表**：规则必须穷举，而它永远穷举不完 —— 每来一个新缩写、新公式
+就要改代码，而且会互相干扰（把 `4060` 改成「四零六零」之后，`4060 Ti` 又不对了）。
+所以规则化的部分只留 `clean_for_speech`（去 Markdown 与网址，那是格式清洗，
+不是语言判断）。
+
+**三条护栏**（预处理绝不能挡住音频）：
+
+1. 调用失败、超时 → 退回清洗后的原文，记一行日志
+2. 改写后长度偏离原文 0.6~1.8 倍之外 → **丢弃**。那说明模型自己续写或大段删除了，
+   而音频里多念一段不存在的内容，比读音不完美严重得多
+3. `TTS_PREPROCESS=false` 彻底关掉
+
+调用走 LLM 缓存：同一段稿子重做音频时，这一次是免费的。
+
+**这次调用发生在本项目，不在 TTS service 里** —— 两件事别混：
+
+| | 谁调 LLM |
+|---|---|
+| **TTS service**（`Agent_TTS_Module`） | **从不调用**。它是纯 TTS：给文本、给参数，回音频。instruct、停顿标记这些都由调用方给 |
+| **本项目的音频生成流程** | 调一次（朗读友好化），因为「什么写法念得顺」是文案层的判断，不是合成器该管的事 |
+
+所以「TTS 不调 LLM」和「合成音频前有一次 LLM 调用」不矛盾：前者说的是那个服务的
+职责边界，后者是本项目在把文案交出去之前自己做的准备。台账里音频仍记 `calls=0`
+（合成本身不计费），预处理那一次计入 LLM 缓存统计。
+
+---
+
+## 7 · 界面上的动态效果
+
+音频合成时右下角一个浮窗（`frontends/nicegui_app/audio_progress.py`）：
+**秒表 + 进度条 + 已产出秒数 + 按实测速度推的剩余时间**。
+
+一个静止的转圈图标只能回答「在跑吗」，而且回答得并不可信 ——
+卡死的页面上转圈照样在转（那是 CSS 动画，不是程序还活着的证据）。
+秒表在走才说明事件循环还活着；进度条按「已完成段/总段」推进才是真实进展。
+
+服务报出段数之前保持**不确定态**，而不是画一个 0% —— 0% 会被读成「卡在开头」。
+
+---
+
+## 8 · 命令
 
 ```bash
-dna tts                                     # 后端能不能起来、有哪些音色（秒回，不合成）
-dna tts --say "一句话" -o out.wav           # 真的合成一次，看 RTF 与音质
-dna produce <id> --kind narration_audio     # 口播音频
-dna produce <id> --kind shortvideo_audio    # 短视频音频
-dna produce <id> --kind longform_audio      # 长文案音频（几十分钟）
+dna doctor                          # 含「TTS 服务」一项：在线 / 会自动拉起 / 缺哪项配置
+dna tts                             # 探活（会自动拉起）+ 列音色，不合成
+dna tts --say "一句话" -o out.wav   # 真的合成一次，报 音频/耗时/RTF
+dna produce <id> --kind narration_audio
+dna gui                             # 展开口播格 → 「合成音频」或「高级配置」
 ```
 
-**换部署环境后第一件事就跑 `dna tts`。**它只加载模型、列音色，不合成，
-几秒就能确认「模型在 + 设备对 + 包导得到」三件事。
+换到 4060 那台机器时：那边起服务（`python -m agentic_tts.cli serve --host 0.0.0.0`），
+这边把 `TTS_SERVICE_URL` 指过去。**远程地址不会自动拉起**，doctor 会明说这一点。
 
 ---
 
-## 四、界面里怎么用
+## 9 · 已知限制
 
-工作台展开任意口播类产物（短视频 / 口播 / 长文案）→ 面板右侧有「合成音频」。
-
-- **按钮不是琥珀色。**琥珀色在这个界面里专表示「这会计费」；音频不花钱，
-  用同一个颜色会让「花钱」这个信号贬值。tooltip 里写的是预估等待时间。
-- 稿子还没生成时按钮禁用——先有稿子才有音频。
-- 预计超过 5 分钟的会先弹确认框（长文案音频总会弹）。
-- 合成期间提示条显示 `12/47 段（已产出 83 秒音频）`——半小时的等待不能只给一个转圈。
-- 合成完成后，同一面板里的耳机图标变成可点的下载按钮。
-
----
-
-## 五、时长与代价
-
-实测（本机 Intel 核显，`qwen3_ov`）：
-
-| | 字数 | 音频 | 耗时 | RTF |
-|---|---|---|---|---|
-| 一句话 | 46 | 8.4s | 22.3s | 2.67 |
-| 口播稿 | 827 | 153s | ~6.5min | ~2.5 |
-| 长文案 | ~5500 | ~15min | **~37min** | ~2.5 |
-
-因此三种音频**都不进 `dna produce --all`**。护栏的理由和长文案不同：
-长文案拦的是账单，音频拦的是「点一下之后这台机器半小时没法用」。
-
-### 实测语速与文案时长估算对不上
-
-口播稿的估算是 93.9 秒，实际合成出来 153 秒——**差 63%**。
-实测 Qwen3-TTS 的中文语速是 **5.4 字/秒**，而文案层按 4.5 字/秒（纯中文）
-配 1.5 倍混排系数在算。
-
-**本阶段不动文案层的换算。**发布时视频会加速播放，而加速倍率是人定的；
-在没确定倍率之前调整语速常数，只会把一个偏差换成另一个偏差。
-详见 [issues/009](issues/009-tts-speaking-rate.md)。
-
----
-
-## 六、文本是怎么变成声音的
-
-```
-产物 .md ──▶ spoken_text() ──▶ clean_for_speech() ──▶ split_for_speech() ──▶ 逐段合成 ──▶ 拼接
-            取出「口播」那段      去 URL / 标记        按句子边界切
-```
-
-三件事各自都有非做不可的理由：
-
-1. **`spoken_text`**：产物抬头里有 `> 口播文案　·　来源：https://…`。
-   整篇照念的话，模型会把网址一个字符一个字符读出来——不是音质变差，是整段废掉。
-2. **`clean_for_speech`**：星号会被念成别的东西，长文案的提纲藏在 HTML 注释里。
-3. **`split_for_speech`**：整段送进去又慢又容易在结尾掉字。
-   **只在句子边界切**——每段是独立一次合成，句中切开拼起来能听见断裂与语调重置。
-
-长文案走的是另一条路：它的 `.json` 附件已经按发言人切好 turns，
-访谈的两个角色直接对应两把嗓子，不必回头解析 Markdown。
-
-**一段失败不毁整篇。**长文案有几十段，跑到第 40 段崩掉就把前面的半小时赔进去。
-缺段的音频照样落盘，但会明确报出缺了几段——残缺的音频被当成成品发出去才是最坏的结果。
-
----
-
-## 七、在有 N 卡的机器上跑
-
-本机是 `torch 2.8.0+cpu`（CPU-only 构建）且没有 NVIDIA 卡，
-所以 `qwen3_torch` 后端**交付的是代码与离线单测，没有真机联调**——
-和飞书机器人（P9）同一个处理方式：环境不具备就不假装验证过。
-
-```bash
-pip install torch --index-url https://download.pytorch.org/whl/cu124
-huggingface-cli download Qwen/Qwen3-TTS-CustomVoice-0.6B --local-dir <权重目录>
-
-# .env
-TTS_PROVIDER=qwen3_torch
-QWEN3_TTS_TORCH_MODEL_DIR=<权重目录>
-QWEN3_TTS_REPO_DIR=<Qwen3-TTS 源码仓库>
-TTS_DEVICE=cuda:0
-TTS_DTYPE=bfloat16      # Turing 及更早的卡不支持 bf16，改 float16
-
-dna tts --say "测试一句话"
-```
-
-设备与精度都在**加载权重之前**校验：CPU-only 的 torch 请求 cuda 时，
-让 PyTorch 自己抛要先把权重全读进内存才失败，先查一遍几毫秒就能给出照做即可的提示。
-
----
-
-## 八、相关
-
-- 产物落盘规范：[05_output_spec.md](05_output_spec.md)
-- 工作台使用：[13_workbench_guide.md](13_workbench_guide.md)
-- 文案时长换算：`src/dna/narration/duration.py`
-- 实现：`src/dna/tts/`（`base` · `segment` · `qwen3_base` · `qwen3_openvino` · `qwen3_torch` · `factory`）
+| 限制 | 说明 |
+|---|---|
+| `RTF_ESTIMATE = 2.5` 只是数量级 | 那是 0.6B OpenVINO 核显上量的；服务侧换 1.7B 后 CPU 实测 ≈13，**按钮上的预估会少报五倍**。准确值来自合成时逐段回报的进度 |
+| 「高级配置」需要浏览器能访问 `TTS_GUI_URL` | 图形界面跑在服务那台机器上 |
+| 交接单 7 天过期 | 过期后轮询拿不到，重新点一次高级配置即可 |
+| 服务重启会丢正在跑的那一条 | 已完成的段落仍在服务端 outputs/ 里 |

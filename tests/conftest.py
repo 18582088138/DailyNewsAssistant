@@ -43,7 +43,11 @@ def settings(tmp_path: Path) -> Settings:
         output_dir=tmp_path / "outputs",
         data_dir=tmp_path / "data",
         db_path=tmp_path / "data" / "dna.db",
-        qwen3_tts_model_dir="",
+        # TTS 预处理默认关掉：它是**一次真的 LLM 调用**，开着的话每个音频用例都
+        # 会去调注入的假 provider，把「音频不重新计费」这类断言搅浑。
+        # 预处理本身在 tests/tts/test_tts.py 里单独测。
+        # Off by default: it is a real LLM call and would muddy the audio assertions.
+        tts_preprocess=False,
         inbox_enabled=False,
     )
 

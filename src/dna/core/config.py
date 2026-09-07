@@ -84,32 +84,38 @@ class Settings(BaseSettings):
     # default: while iterating on prompts, only what actually changed costs money.
     llm_cache_enabled: bool = True
 
-    # ---- TTS ----
-    # 两个后端，同一个协议 / Two backends behind one protocol:
-    #   qwen3_ov    —— OpenVINO IR，跑 Intel CPU / 核显 / NPU
-    #   qwen3_torch —— PyTorch，跑 NVIDIA CUDA（也支持 cpu / mps）
-    # 换部署环境只改这一行 / Moving between environments changes only this line.
-    tts_provider: str = "qwen3_ov"
+    # ---- TTS（全部走独立服务 / entirely delegated to a service）----
+    #
+    # 语音合成不在本项目内实现：模型加载、8GB 卡上的轮动换权重、失控重试、
+    # 音色克隆/设计全在 **Agent_TTS_Module** 那一侧。这里只有一个地址。
+    # 换机器（本机 → 4060 那台）改的就是 TTS_SERVICE_URL 这一行。
+    # Synthesis lives in Agent_TTS_Module; this project holds only its address.
+    tts_service_url: str = "http://127.0.0.1:8300"
+    # 高级配置要打开的 TTS 图形界面 / the TTS workbench opened by "高级配置"
+    tts_gui_url: str = "http://127.0.0.1:8301"
 
-    # OpenVINO 后端：已转换的 IR 模型目录 / the converted IR directory
-    qwen3_tts_model_dir: str = ""
-    # OpenVINO 后端：参考实现 qwen_3_tts_helper.py 所在目录（openvino_notebooks/notebooks/qwen3-tts）
-    qwen3_tts_helper_dir: str = ""
-    # PyTorch 后端：原始 HF 权重目录 / the original HuggingFace checkpoint
-    qwen3_tts_torch_model_dir: str = ""
-    # 两个后端都要：Qwen3-TTS 源码仓库（提供 qwen_tts 包）。
-    # 它是 editable 安装的，仓库一被移动安装记录就失效，所以显式配一份路径兜底。
-    # Both backends need it; the editable install breaks when the repository moves.
-    qwen3_tts_repo_dir: str = ""
+    # Agent_TTS_Module 的仓库根目录 / where Agent_TTS_Module lives.
+    # 只为**自动拉起**服务而配：服务没在线时从这里 `python -m agentic_tts.cli serve`。
+    # 留空 = 不自动拉起，只报「服务不在线」。远程地址同理（拉不起别人机器上的进程）。
+    tts_module_dir: str = ""
+    # 拉起服务用哪个解释器；留空 = 当前这个（同一个 conda 环境）
+    tts_python: str = ""
+    tts_autostart: bool = True
+    # 拉起尝试次数与单次等待上限。三次都失败就上报 TTS 不可用——
+    # 权重加载在冷启动时要几十秒，超时给足，但不能无限等。
+    tts_start_attempts: int = 3
+    tts_start_timeout: float = 120.0
+    # 单段合成的 HTTP 超时。CPU 上 RTF≈13，一段 120 字要三四分钟，
+    # 默认的 20 秒会在**服务正常工作时**把请求掐掉，这是最难查的一类失败。
+    tts_request_timeout: float = 900.0
 
-    # 设备。取值随后端而异 / device, interpreted per backend:
-    #   qwen3_ov     CPU | GPU | NPU
-    #   qwen3_torch  cuda | cuda:N | cpu | mps
-    # 这个值**是真的会生效的**——见 tts/qwen3_openvino.py：上游把设备写死成 GPU，
-    # 本项目在加载时把它掰回来了。
-    tts_device: str = "GPU"
-    # 仅 PyTorch 后端 / PyTorch backend only: bfloat16 | float16 | float32
-    tts_dtype: str = "bfloat16"
+    # 送进 TTS 之前先用一次 LLM 做朗读友好化（见 tts/preprocess.py）。
+    # 这是音频产物唯一的 LLM 调用，很小；不想花这一次就设成 false。
+    tts_preprocess: bool = True
+
+    # 服务侧产物（逐段 wav、字幕）拷进文章目录的哪个子目录
+    # Where the service's own artifacts are copied inside the article folder.
+    tts_artifact_dirname: str = "tts"
 
     tts_voice_host: str = ""
     tts_voice_guest: str = ""
