@@ -38,7 +38,7 @@ from dna.tts.factory import PROVIDERS, get_tts, reset_cache, voice_for_role
 from dna.tts.preprocess import PreparedSpeech, prepare_for_speech
 from dna.tts.segment import clean_for_speech, split_for_speech
 from dna.tts.service import DEFAULT_GUEST_SPEAKER, DEFAULT_SPEAKER, PROVIDER_NAME
-from dna.tts.supervisor import ServiceStatus, ensure_gui, ensure_service
+from dna.tts.supervisor import ServiceStatus, ensure_gui, ensure_service, gui_url
 
 __all__ = [
     "DEFAULT_GUEST_SPEAKER",
@@ -61,6 +61,7 @@ __all__ = [
     "ensure_gui",
     "ensure_service",
     "estimate_synthesis_seconds",
+    "gui_url",
     "get_tts",
     "prepare_for_speech",
     "reset_cache",
