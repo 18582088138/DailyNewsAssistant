@@ -338,6 +338,10 @@ def _clear_cache():
 
 
 def _settings(**kwargs) -> Settings:
+    # 音色相关的用例固定走内置音色：默认是克隆，而克隆音色的 `speaker` 是一个
+    # **文件路径**，那些断言问的是「两个角色的音色名是否不同」。
+    # Cloning is the default, but these cases ask about voice names.
+    kwargs.setdefault("tts_mode", "custom_voice")
     return Settings(_env_file=None, **kwargs)
 
 

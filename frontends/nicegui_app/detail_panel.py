@@ -35,6 +35,7 @@ from dna.produce import ProductionKind, spec
 from dna.produce.tasks import DEFAULT_LANGUAGE, LANGUAGE_LABELS, LANGUAGES
 from frontends.nicegui_app import actions
 from frontends.nicegui_app.actions import RowView
+from frontends.nicegui_app.audio_progress import AudioProgress
 
 
 def render(
@@ -304,6 +305,10 @@ def _render_audio_button(
     # 在这里再画一套是重复实现，而且两套迟早不一致。
     # The default path is one click. Everything else already exists in the TTS
     # workbench, and building a second copy of it here would guarantee divergence.
+    note = _HANDOFF_NOTES.get((row.article.id, str(audio_kind), lang))
+    if note:
+        ui.label(note).classes("wb-path").style("color: var(--wb-accent)")
+
     switch = ui.switch("高级配置").props("dense").classes("text-xs")
     switch.tooltip(
         "打开 TTS 图形界面，稿子会自动填进多段模式的文本框："
@@ -332,9 +337,18 @@ def _open_tts_workbench(
     async def _go() -> None:
         notification = ui.notification("正在准备 TTS 界面（服务不在线会自动拉起）…",
                                        spinner=True, timeout=None)
+        # 本页地址从浏览器拿，而不是从配置拼：工作台可能绑在任意 host/port 上，
+        # 而人是通过哪个地址访问到这里的，就该跳回哪个地址。
+        # Read from the browser: whichever address the user came in on is the one to
+        # return to.
+        try:
+            back = await ui.run_javascript("window.location.href", timeout=3.0)
+        except Exception:  # noqa: BLE001 - 拿不到就不跳回，功能照常
+            back = ""
         try:
             handoff = await actions.open_tts_workbench(
-                row.article.id, kind, lang=lang, title=row.article.title
+                row.article.id, kind, lang=lang, title=row.article.title,
+                return_url=str(back or ""),
             )
         except Exception as exc:  # noqa: BLE001 - 原因原样显示给人看
             ui.notify(f"打不开 TTS 界面：{exc}", type="negative", timeout=12000,
@@ -352,6 +366,14 @@ def _open_tts_workbench(
     ui.timer(0.01, _go, once=True)
 
 
+# 「高级配置」那趟的结果留言 / the note left by an advanced-config round
+#
+# 键是 `(文章 id, 产物, 语言)`。一条一闪而过的 notify 不足以回答
+# 「刚才那趟到底成了没有」—— 人可能正好切到别的窗口去了。
+# A transient notification cannot answer "did that round work"; the note persists.
+_HANDOFF_NOTES: dict[tuple[str, str, str], str] = {}
+
+
 # 等 TTS 界面出活最多等多久 / how long to keep watching the hand-off
 #
 # 人在界面里调音色、逐句重掷，半小时是常事；但**不能永远挂着**——
@@ -366,31 +388,29 @@ def _watch_handoff(handoff, kind: ProductionKind, on_change) -> None:
 
     轮询而不是等 TTS 推过来：那边可能在另一台机器上，也不该知道工作台的地址。
     Polling, because the service should not need this application's address.
+
+    等待动效**和自己合成时用的是同一个组件**（`AudioProgress`）：两种等待对人来说
+    是同一件事（"音频在长出来"），换一套样式只会让人以为这是另一种状态。
+    进度条靠 TTS 界面写回交接单的 `done/total` 推进 —— 那边生成到第几段，
+    这边的条就走到第几段。
+    The same widget as local synthesis: to the user both are "audio is being made".
     """
     state: dict = {"ticks": 0, "timer": None, "busy": False}
-
-    card = ui.card().style(
-        "position: fixed; right: 18px; bottom: 18px; z-index: 3000; width: 300px;"
-        "background: var(--wb-panel); border: 1px solid var(--wb-line-strong)"
-    ).classes("p-3 gap-1")
-    with card:
-        with ui.row().classes("items-center gap-2 w-full no-wrap"):
-            ui.spinner("dots", size="sm", color="cyan")
-            ui.label("等 TTS 界面出活").classes("text-sm").style("color: var(--wb-new)")
-            ui.space()
-            ui.button(icon="close", on_click=lambda: _stop("已停止等待")) \
-                .props("flat dense round size=sm")
-        ui.label(f"{handoff.segments} 段　token {handoff.token[-6:]}").classes("wb-path")
-        ui.label("在那个标签页里生成/合并完成即可").classes("wb-path").style(
-            "color: var(--wb-faint)"
-        )
 
     def _stop(message: str = "") -> None:
         if state["timer"] is not None:
             state["timer"].deactivate()
-        card.delete()
+        panel.close()
         if message:
             ui.notify(message, type="info")
+
+    panel = AudioProgress(
+        f"{spec(kind).label}（TTS 界面）",
+        action="生成中",
+        hint=f"在那个标签页里生成/合并完成即会自动回传　token {handoff.token[-6:]}",
+        on_cancel=lambda: _stop("已停止等待（产物仍在 TTS 那边）"),
+    )
+    panel.progress.update(done=0, total=handoff.segments)
 
     async def _poll() -> None:
         if state["busy"]:
@@ -405,15 +425,24 @@ def _watch_handoff(handoff, kind: ProductionKind, on_change) -> None:
             record = await actions.collect_tts_handoff(handoff)
             if record is None:
                 return
+            # TTS 界面每生成一段就把 done/total 写回交接单，进度条据此推进
+            panel.progress.update(done=int(record.get("done") or 0),
+                                  total=int(record.get("total") or handoff.segments))
+            if record.get("status") != "done" or not record.get("files"):
+                return
             result = await actions.import_tts_handoff(handoff, record)
         finally:
             state["busy"] = False
 
         _stop()
         if result.ok:
-            ui.notify(f"已收下 TTS 界面的产物：{result.seconds or 0:.0f} 秒音频"
-                      f"（{len(record.get('files', []))} 个文件已拷进文章目录）",
-                      type="positive", multi_line=True, close_button=True)
+            note = (f"✅ 已由 TTS 界面生成并收下：{result.seconds or 0:.0f} 秒音频，"
+                    f"{len(record.get('files', []))} 个文件已拷进文章目录")
+            # 记在这里，重建表格后那一格下面会把这句话显示出来 ——
+            # 一条一闪而过的提示不足以回答「刚才那趟到底成了没有」。
+            # Remembered so the cell can state it after the refresh.
+            _HANDOFF_NOTES[(handoff.article_id, str(kind), handoff.lang)] = note
+            ui.notify(note, type="positive", multi_line=True, close_button=True)
         else:
             ui.notify(f"产物收取失败：{result.error}", type="negative",
                       multi_line=True, close_button=True)

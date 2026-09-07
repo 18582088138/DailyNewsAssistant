@@ -44,7 +44,7 @@ from __future__ import annotations
 import json
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
@@ -78,6 +78,7 @@ from dna.tts.base import ProgressFn, SpeechSegment, TTSProvider, wav_seconds
 from dna.tts.factory import get_tts, voice_for_role
 from dna.tts.preprocess import prepare_for_speech
 from dna.tts.segment import split_for_speech
+from dna.tts.subtitle import write_srt
 
 logger = get_logger("produce.service")
 
@@ -159,6 +160,9 @@ class Generated:
     calls: int = 0
     within_target: bool = True
     sidecar: dict | None = None
+
+    cues: list[tuple[float, float, str]] = field(default_factory=list)
+    """音频产物的字幕时间轴 / the subtitle timeline of an audio production."""
 
 
 def produce(
@@ -276,7 +280,7 @@ def produce(
         if is_audio:
             result = _generate_audio(
                 task, speaker, directory, lang=lang, settings=s,
-                on_progress=on_progress, llm=llm,
+                on_progress=on_progress, llm=llm, article_id=article_id,
             )
         else:
             result = _generate(
@@ -311,6 +315,13 @@ def produce(
     directory.mkdir(parents=True, exist_ok=True)
     if result.audio is not None:
         output.write_bytes(result.audio)
+        # 字幕和音频**同名同目录**（`narration_audio.srt`）：
+        # 这样拖进剪辑软件时两个文件是一眼配对的，不必再想哪个配哪个。
+        # Same stem, same folder: the pairing is obvious in the editor.
+        if s.tts_subtitles and result.cues:
+            written = write_srt(output.with_suffix(".srt"), result.cues)
+            if written is not None:
+                logger.info("字幕已导出：%s（%d 条）", written.name, len(result.cues))
     else:
         output.write_text(result.text, encoding="utf-8")
 
@@ -501,7 +512,8 @@ def import_audio(
 
     参数 / Args:
         wav:    已经落到本地的整条音频
-        extras: 一起收下的附件（逐段 wav、字幕），放进 `<文章目录>/tts/<来源>/`
+        extras: 一起收下的附件（逐段 wav、字幕），放进 `<文章目录>/tts/`。
+                **一篇一个文件夹、同名覆盖**，不按来源或时间再分层
         source: 记进台账的来源标记，用来区分「界面精修的」与「流水线合成的」
 
     落盘位置与正常合成**完全一致**（`narration_audio.wav` 这些），
@@ -526,14 +538,24 @@ def import_audio(
     output.write_bytes(payload)
 
     seconds = wav_seconds(payload)
+
+    # 字幕跟音频**同名同目录**，和流水线合成出来的完全一样（`narration_audio.srt`），
+    # 这样下游（剪辑、发布）不必区分这条音频是哪条路来的。
+    # The subtitle sits beside the audio exactly as a pipeline run would leave it.
+    for extra in extras:
+        if extra.is_file() and extra.suffix.lower() == ".srt":
+            output.with_suffix(".srt").write_bytes(extra.read_bytes())
+            break
+
     kept: list[Path] = []
     if extras:
-        target = directory / (s.tts_artifact_dirname or "tts") / source
+        target = directory / (s.tts_artifact_dirname or "tts")
         target.mkdir(parents=True, exist_ok=True)
         for extra in extras:
             if extra.is_file() and extra.resolve() != wav.resolve():
                 destination = target / extra.name
-                destination.write_bytes(extra.read_bytes())
+                if destination.resolve() != extra.resolve():
+                    destination.write_bytes(extra.read_bytes())
                 kept.append(destination)
 
     ledger.record_production(
@@ -736,6 +758,7 @@ def _generate_audio(
     settings: Settings,
     on_progress: ProgressFn | None,
     llm: LLMProvider | None = None,
+    article_id: str = "",
 ) -> Generated:
     """
     把已有的稿子合成为音频 / Synthesise the existing script into audio.
@@ -767,7 +790,11 @@ def _generate_audio(
         raise RuntimeError(f"{spec(task.audio_of).label}里没有可朗读的内容")
 
     logger.info("开始合成 %s：%d 段 · %d 字", task.label, len(segments), spoken_chars)
-    clip = tts.synthesize(segments, on_progress=on_progress)
+    # 服务端产物目录名**按「文章 + 产物 + 语言」固定**：重做覆盖同一个目录，
+    # 而不是每次多留一份时间戳目录（那样「哪份是最新的」只能靠人比时间戳）。
+    # A stable name per cell: a redo overwrites rather than accumulating.
+    run = "-".join(filter(None, [article_id[:8] or "adhoc", str(task.kind), lang]))
+    clip = tts.synthesize(segments, on_progress=on_progress, run=run)
 
     # 服务端留下的逐段 wav 与字幕拷进文章目录 —— 产物必须在**本项目的**输出里
     # 找得齐，否则想换一句话或拿字幕去剪辑时得翻到另一个仓库的 outputs/ 下。
@@ -793,6 +820,7 @@ def _generate_audio(
         seconds=clip.seconds,
         calls=0,
         within_target=clip.complete,
+        cues=list(getattr(clip, "cues", [])),
     )
 
 
@@ -867,7 +895,10 @@ def _copy_tts_artifacts(
     if fetch is None or not getattr(clip, "pieces", None):
         return []
 
-    target = directory / (settings.tts_artifact_dirname or "tts") / (clip.run or "run")
+    # 一篇文章一个文件夹，**不按 run 再分一层**：重做直接覆盖同名文件。
+    # 分层的话「这篇的音频是哪一份」要靠人比时间戳，而人只会打开最上面那个。
+    # One folder per article, overwritten on redo.
+    target = directory / (settings.tts_artifact_dirname or "tts")
     try:
         saved = fetch(clip, target)
     except Exception as exc:  # noqa: BLE001 - 拷贝失败不影响成品

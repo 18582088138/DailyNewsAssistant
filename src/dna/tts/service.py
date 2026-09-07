@@ -41,6 +41,7 @@ from dna.tts.base import (
     TTSInfo,
 )
 from dna.tts.client import TTSServiceClient
+from dna.tts.subtitle import build_cues
 from dna.tts.supervisor import ensure_service
 
 logger = get_logger("tts.service")
@@ -107,10 +108,19 @@ class TTSServiceProvider:
     # -------------------------------------------------------- 合成 / synthesis
 
     def synthesize(
-        self, segments: Sequence[SpeechSegment], *, on_progress: ProgressFn | None = None
+        self,
+        segments: Sequence[SpeechSegment],
+        *,
+        on_progress: ProgressFn | None = None,
+        run: str | None = None,
     ) -> AudioClip:
         """
         逐段合成并拼接 / Synthesise each piece and join them.
+
+        参数 / Args:
+            run: 服务端产物目录名。**同一格音频每次都传同一个名字**，重做就覆盖，
+                 不会在服务端堆一串时间戳目录（谁是最新的只能靠人比时间）。
+                 A stable name means a redo overwrites instead of accumulating.
 
         抛出 / Raises:
             TTSError: 服务不可用（含自动拉起失败），或**一段都没成功**
@@ -122,14 +132,14 @@ class TTSServiceProvider:
         status = ensure_service(self.settings, client=self.client)
         logger.info("%s；开始合成 %d 段", status.summary(), len(pieces))
 
-        # 一次合成共用一个产物目录，服务端那边才不会散成几十个时间戳目录
-        # One run directory per clip, or the service scatters dozens of them.
-        run = f"dna-{time.strftime('%Y%m%d-%H%M%S')}"
+        # 没给名字才退回时间戳（命令行试听这种一次性调用）
+        run = run or f"dna-{time.strftime('%Y%m%d-%H%M%S')}"
         wavs: list[bytes] = []
         gaps: list[float] = []
         failed: list[int] = []
         artifacts: list[str] = []
         local: list[tuple[str, bytes]] = []
+        spoken: list[tuple[float, str]] = []      # 字幕要的 (时长, 原文)
         seconds = 0.0
 
         for index, piece in enumerate(pieces):
@@ -171,6 +181,10 @@ class TTSServiceProvider:
             # 同一个音色在一次合成里出现两次就会互相覆盖（实测踩到）。
             local.append((f"seg_{index + 1:03d}_{piece.role or 'narrator'}.wav",
                           body["wav"]))
+            # 字幕时长用**波形自己的长度**，不用服务端报的秒数：
+            # 字幕的误差是累积的，几十段之后半秒的偏差会变成看得见的错位。
+            # Measured from the waveform: subtitle drift accumulates.
+            spoken.append((_wav_seconds(body["wav"]), piece.text))
             if on_progress is not None:
                 on_progress(index + 1, len(pieces), seconds)
 
@@ -179,6 +193,7 @@ class TTSServiceProvider:
 
         joined, rate, real_seconds = _join(wavs, gaps[:-1] if gaps else [])
         return AudioClip(
+            cues=build_cues(spoken, gaps),
             wav=joined,
             sample_rate=rate,
             seconds=real_seconds,
@@ -304,6 +319,13 @@ def _join(wavs: list[bytes], gaps: list[float]) -> tuple[bytes, int, float]:
 
     total = len(payload) / (rate * width * channels) if rate else 0.0
     return buffer.getvalue(), rate, total
+
+
+def _wav_seconds(payload: bytes) -> float:
+    """一段 WAV 的真实时长 / One WAV's measured duration."""
+    with wave.open(io.BytesIO(payload), "rb") as handle:
+        rate = handle.getframerate()
+        return handle.getnframes() / rate if rate else 0.0
 
 
 def _relative(path: str) -> str:

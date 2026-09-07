@@ -21,6 +21,11 @@ when it cannot be started.
 ⚠️ **只拉本机的服务。** 配了远程地址（4060 那台）时这里不做任何事——
 拉起别人机器上的进程既做不到，也不该由这个进程决定。
 Only local services are started: a remote address is somebody else's process.
+
+⚠️ **图形界面不是第二个进程。** 它挂在服务的 `/gui` 上，与服务共用一份权重。
+先前按两个应用来拉（8300 + 8301），实测各加载一份 1.7B —— 8 GB 卡上顶满，
+而且每次点「高级配置」都要等第二个进程冷启动。
+The GUI is mounted on the service rather than started separately.
 """
 
 from __future__ import annotations
@@ -124,41 +129,35 @@ def ensure_service(
     )
 
 
-def ensure_gui(settings: Settings | None = None) -> str:
+def gui_url(settings: Settings | None = None) -> str:
     """
-    确保 TTS 图形界面在线，返回它的地址 / Ensure the TTS workbench is up.
+    TTS 图形界面的地址 / Where the TTS workbench lives.
 
-    「高级配置」要跳过去的就是它。界面和服务是**两个进程**（各占一个端口），
-    所以这里单独探一次、单独拉一次。
-    The workbench is a second process on its own port, so it is probed and started
-    separately from the HTTP service.
+    **它就挂在 TTS 服务上**（同一个进程、同一个端口，路径 `/gui`），所以这里
+    不再单独探活、更不单独拉进程 —— 服务在线，界面就在线。
+    先前把它当成第二个应用（8301 端口）来拉，代价是**两份权重**：1.7B 各占几 GB，
+    8 GB 卡上直接顶满，而且点一次「高级配置」要等第二个进程冷启动。
+    The GUI is mounted on the service: one process, one copy of the weights. Treating it
+    as a second application cost a second copy and a cold start per click.
+
+    `TTS_GUI_URL` 填了就用它（界面确实单独部署的情况），否则按服务地址拼。
     """
     s = settings or get_settings()
-    url = s.tts_gui_url.rstrip("/")
+    explicit = (s.tts_gui_url or "").strip().rstrip("/")
+    if explicit:
+        return explicit
+    return s.tts_service_url.rstrip("/") + "/" + (s.tts_gui_path or "/gui").strip("/")
 
-    if _http_alive(url):
-        return url
 
-    reason = _cannot_start(s)
-    if reason:
-        raise TTSError(f"TTS 图形界面不在线（{url}）：{reason}")
+def ensure_gui(settings: Settings | None = None) -> str:
+    """
+    确保界面可用并返回地址 / Ensure the workbench is reachable.
 
-    attempts = max(1, int(s.tts_start_attempts))
-    for attempt in range(1, attempts + 1):
-        logger.info("拉起 TTS 图形界面（第 %d/%d 次）…", attempt, attempts)
-        try:
-            process = _spawn(s, "gui", ["gui"], url)
-        except OSError as exc:
-            logger.warning("拉起失败：%s", exc)
-            continue
-        if _wait_until(lambda: _http_alive(url), timeout=s.tts_start_timeout,
-                       process=process):
-            return url
-        _terminate(process)
-        _STARTED.pop("gui", None)
-
-    raise TTSError(f"TTS 图形界面拉不起来（{url}）：手动跑 "
-                   f"cd {s.tts_module_dir} && python -m agentic_tts.cli gui")
+    就是「确保服务在线」——界面是服务的一部分。
+    """
+    s = settings or get_settings()
+    ensure_service(s)
+    return gui_url(s)
 
 
 def stop_started(role: str | None = None) -> None:
@@ -257,17 +256,6 @@ def _wait_until(probe, *, timeout: float, process: subprocess.Popen) -> bool:
     return probe()
 
 
-def _http_alive(url: str) -> bool:
-    """这个地址上有东西在应答吗 / Is anything answering there?"""
-    import httpx
-
-    try:
-        with httpx.Client(timeout=3.0, trust_env=not is_local_url(url)) as http:
-            return http.get(url).status_code < 500
-    except Exception:  # noqa: BLE001 - 连不上就是不在线
-        return False
-
-
 def _describe_exit(process: subprocess.Popen, s: Settings) -> str:
     """拉起失败时给人一句能查下去的话 / A message that leads somewhere."""
     code = process.poll()
@@ -291,4 +279,4 @@ def _terminate(process: subprocess.Popen) -> None:
             pass
 
 
-__all__ = ["ServiceStatus", "ensure_gui", "ensure_service", "stop_started"]
+__all__ = ["ServiceStatus", "ensure_gui", "ensure_service", "gui_url", "stop_started"]

@@ -1392,3 +1392,42 @@ git commit -m "fix(tts): 高级配置 NameError；默认改用音色克隆
 git status --short          # 预期：空
 ```
 
+### 补一步 9/9 · 第三轮返修：一个进程、字幕、原地覆盖（2026-09-08）
+
+```bash
+cd /c/Users/test/Downloads/xkd/DailyNewsAssistant
+
+git add src/dna/core/config.py
+git add src/dna/tts/supervisor.py
+git add src/dna/tts/subtitle.py
+git add src/dna/tts/base.py src/dna/tts/service.py
+git add src/dna/produce/service.py
+git add frontends/nicegui_app/audio_progress.py
+git add frontends/nicegui_app/actions.py
+git add frontends/nicegui_app/detail_panel.py
+git add frontends/cli/main.py
+git add .env.example
+git add tests/tts/test_tts.py tests/produce/test_service.py
+git add docs/14_tts_guide.md docs/git_commands.md
+
+git commit -m "perf(tts): 界面挂在服务上（一份权重）；默认导出字幕；一篇一个文件夹
+
+- 不再把 TTS 界面当第二个应用拉起：它挂在服务的 /gui 上，同进程同端口、
+  **共用一份权重**。先前两个进程各加载一份 1.7B，8 GB 卡顶满，
+  而且点一次「高级配置」要等第二个进程冷启动
+- 配置 TTS_GUI_URL → TTS_GUI_PATH（默认 /gui）；前者保留为单独部署时的覆盖项
+- 默认合成路径导出 SRT：与音频同名同目录（narration_audio.srt）。
+  时间轴含段间静音，逐段时长按波形量（字幕误差是累积的），
+  控制标记不进字幕，UTF-8 带 BOM（否则剪映读中文乱码）
+- 一篇文章一个文件夹、重做覆盖：产物目录不再按 run/时间戳分层，
+  服务端 run 名也按「文章+产物+语言」固定 —— 分层之后哪份是最新的只能靠人比时间
+- 高级配置的等待改用与本地合成**同一个进度浮窗**：TTS 界面每生成一段就把
+  done/total 写回交接单，进度条据此推进
+- 交接单带 return_url（取自浏览器地址栏）：那边生成完自己关掉标签页／跳回工作台，
+  产物拷进文章目录，并在那一格下面留一句「已由 TTS 界面生成并收下」
+- 逐段生成只报进度，只有「全部生成/合并」才算完成 —— 否则会把半成品收走
+- TTSProvider.synthesize 增加 run 参数；假 provider 与音色用例跟上"
+
+git status --short          # 预期：空
+```
+

@@ -158,6 +158,16 @@ class AudioClip:
     For provenance only; local copies come from `pieces`.
     """
 
+    cues: list[tuple[float, float, str]] = field(default_factory=list)
+    """
+    字幕时间轴 `(开始秒, 结束秒, 原文)` / the subtitle timeline.
+
+    在 provider 里算，因为只有它知道**段间静音有多长** —— 上层拿到的是一条
+    拼好的音频，从里面反推不出切点。漏算静音会让字幕越往后越提前。
+    Computed by the provider, which alone knows the gap lengths; they cannot be
+    recovered from the joined audio.
+    """
+
     pieces: list[tuple[str, bytes]] = field(default_factory=list)
     """
     逐段音频的**本地副本**（文件名, WAV 字节）/ Per-piece audio, ready to write.
@@ -195,10 +205,19 @@ class TTSProvider(Protocol):
         ...
 
     def synthesize(
-        self, segments: Sequence[SpeechSegment], *, on_progress: ProgressFn | None = None
+        self,
+        segments: Sequence[SpeechSegment],
+        *,
+        on_progress: ProgressFn | None = None,
+        run: str | None = None,
     ) -> AudioClip:
         """
         合成并拼接 / Synthesise every segment and join them.
+
+        参数 / Args:
+            run: 后端侧的产物目录名。**同一格音频每次都给同一个名字**，
+                 于是重做覆盖原目录，而不是每次多留一份（见 produce/service.py）。
+                 A stable name per cell, so a redo overwrites instead of accumulating.
 
         抛出 / Raises:
             TTSError: 后端不可用，或**一段都没成功**

@@ -39,7 +39,8 @@ class AudioProgress:
         panel.close()
     """
 
-    def __init__(self, label: str, *, expected_seconds: float = 0.0) -> None:
+    def __init__(self, label: str, *, expected_seconds: float = 0.0,
+                 hint: str = "", on_cancel=None, action: str = "合成中") -> None:
         self.progress: dict = {}
         """工作线程写、这里读 / written by the worker, read here."""
 
@@ -57,19 +58,26 @@ class AudioProgress:
         with self._card:
             with ui.row().classes("items-center gap-2 w-full no-wrap"):
                 ui.spinner("audio", size="sm", color="green")
-                ui.label(f"{label} 合成中").classes("text-sm").style(
+                ui.label(f"{label} {action}").classes("text-sm").style(
                     "color: var(--wb-accent)"
                 )
                 ui.space()
                 self._clock = ui.label("0:00").classes("wb-path")
+                # 取消只在**等别人干活**时给：自己这条合成已经在跑了，
+                # 半路掐掉只会留下一段废音频。
+                # Cancelling is offered only while waiting on someone else.
+                if on_cancel is not None:
+                    ui.button(icon="close", on_click=on_cancel) \
+                        .props("flat dense round size=sm").tooltip("停止等待")
 
             self._bar = ui.linear_progress(value=0.0, show_value=False, size="6px")
             self._bar.props("color=green track-color=grey-9")
 
             self._detail = ui.label("正在连接 TTS 服务…").classes("wb-path")
-            hint = "服务不在线会自动拉起（首次要等权重加载）"
-            if self._expected >= 60:
-                hint = f"预计 {self._expected / 60:.0f} 分钟左右；" + hint
+            if not hint:
+                hint = "服务不在线会自动拉起（首次要等权重加载）"
+                if self._expected >= 60:
+                    hint = f"预计 {self._expected / 60:.0f} 分钟左右；" + hint
             ui.label(hint).classes("wb-path").style("color: var(--wb-faint)")
 
         self._timer = ui.timer(0.5, self._tick)

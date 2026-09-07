@@ -575,7 +575,7 @@ class FakeTTS:
     def available_speakers(self) -> list[str]:
         return ["serena", "uncle_fu"]
 
-    def synthesize(self, segments, *, on_progress=None):  # noqa: ANN001, ANN201
+    def synthesize(self, segments, *, on_progress=None, run=None):  # noqa: ANN001, ANN201
         import numpy as np
 
         from dna.tts.base import AudioClip, encode_wav

@@ -100,6 +100,8 @@ def show_config() -> None:
         """密钥脱敏，只保留前 7 位 / Mask a secret, keeping the first 7 characters."""
         return f"{value[:7]}…（{len(value)} 字符）" if value else "[dim]未配置[/dim]"
 
+    from dna.tts.supervisor import gui_url as _tts_gui_url
+
     rows = [
         ("LLM provider", f"{s.llm_provider}（备用：{s.llm_fallback_provider or '无'}）"),
         ("DeepSeek key", mask(s.deepseek_api_key)),
@@ -107,7 +109,7 @@ def show_config() -> None:
         ("Ollama", f"{s.ollama_base_url} / {s.ollama_model}"),
         ("Embedding", s.embedding_model),
         ("TTS 服务", f"{s.tts_service_url}（预处理 {'开' if s.tts_preprocess else '关'}）"),
-        ("TTS 界面", s.tts_gui_url),
+        ("TTS 界面", _tts_gui_url(s)),
         ("默认语言", str(s.default_language)),
         ("产物目录", str(s.output_path)),
         ("台账数据库", str(s.db_file)),

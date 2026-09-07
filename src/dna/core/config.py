@@ -91,8 +91,17 @@ class Settings(BaseSettings):
     # 换机器（本机 → 4060 那台）改的就是 TTS_SERVICE_URL 这一行。
     # Synthesis lives in Agent_TTS_Module; this project holds only its address.
     tts_service_url: str = "http://127.0.0.1:8300"
-    # 高级配置要打开的 TTS 图形界面 / the TTS workbench opened by "高级配置"
-    tts_gui_url: str = "http://127.0.0.1:8301"
+
+    # TTS 图形界面的**路径**，不是另一个地址 / the GUI's path on the same service
+    #
+    # 界面挂在 TTS 服务同一个进程、同一个端口上（`agentic_tts.cli serve` 默认如此）。
+    # 先前是两个独立应用（8300 服务 + 8301 界面），实测**各加载一份权重**：
+    # 1.7B 就是两份几 GB，8 GB 卡上直接顶满，而且点「高级配置」要等第二个进程
+    # 冷启动。挂在一起之后只有一份权重，界面秒开。
+    # The GUI used to be a second process with its own copy of the weights.
+    tts_gui_path: str = "/gui"
+    # 只有界面确实单独部署时才填（会跳过上面的拼接）/ only for a standalone GUI
+    tts_gui_url: str = ""
 
     # Agent_TTS_Module 的仓库根目录 / where Agent_TTS_Module lives.
     # 只为**自动拉起**服务而配：服务没在线时从这里 `python -m agentic_tts.cli serve`。
@@ -113,9 +122,17 @@ class Settings(BaseSettings):
     # 这是音频产物唯一的 LLM 调用，很小；不想花这一次就设成 false。
     tts_preprocess: bool = True
 
-    # 服务侧产物（逐段 wav、字幕）拷进文章目录的哪个子目录
-    # Where the service's own artifacts are copied inside the article folder.
+    # 逐段音频与字幕放在文章目录的哪个子目录
+    #
+    # **一篇文章一个文件夹，重做就覆盖**，不按次数/时间戳再分一层：
+    # 分层的话，「这篇的音频到底是哪一份」要靠人比时间戳，而人只会打开最上面那个。
+    # One folder per article, overwritten on redo: timestamped sub-folders leave the
+    # question "which one is current" to whoever is reading the directory.
     tts_artifact_dirname: str = "tts"
+
+    # 默认合成路径是否顺带导出字幕（一段音频一条字幕，SRT）
+    # 剪映/Premiere/DaVinci 都能直接导入 SRT，所以不做 txt 退化。
+    tts_subtitles: bool = True
 
     # 默认怎么发声 / how the default voice is produced:
     #   voice_clone  —— 克隆 TTS_REF_AUDIO 里那把嗓子（**默认**）

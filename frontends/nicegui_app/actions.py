@@ -340,6 +340,7 @@ async def open_tts_workbench(
     *,
     lang: str = DEFAULT_LANGUAGE,
     title: str = "",
+    return_url: str = "",
 ) -> TTSHandoff:
     """
     把这一格的稿子交给 TTS 图形界面 / Hand this cell's script to the TTS workbench.
@@ -349,7 +350,11 @@ async def open_tts_workbench(
         2. 确认 TTS 界面在线（它是另一个进程、另一个端口）
         3. 把稿子切成分段 —— **和自动合成切得一模一样**（同一份 `_build_segments`），
            所以在界面里调完的东西，和这边跑出来的是同一批分段
-        4. POST 交接单，拿回一个直接能打开的 URL
+        4. POST 交接单（带上 `return_url`），拿回一个直接能打开的 URL
+
+    `return_url` 是**本页面的地址**：TTS 界面生成完会自己跳回来（关不掉标签页时
+    才退回跳转）。不带的话人得自己找回原来那个标签页。
+    The caller's own URL, so the TTS workbench can come back when it is done.
 
     抛出 / Raises:
         TTSError: 服务或界面拉不起来；调用方原样显示（那句话里已经写了怎么排查）
@@ -379,6 +384,7 @@ async def open_tts_workbench(
             pieces,
             title=title,
             voice=host.speaker if host.mode == "custom_voice" else None,
+            return_url=return_url,
             meta={"article_id": article_id, "kind": str(kind), "lang": lang},
         )
         # 交接单里的 gui_url 用的是**服务端**配置的界面地址；本项目自己的
@@ -394,19 +400,22 @@ async def open_tts_workbench(
 
 async def collect_tts_handoff(handoff: TTSHandoff) -> dict | None:
     """
-    看看 TTS 界面那边生成完了没 / Has the workbench produced anything yet?
+    看一眼交接单 / Take one look at the hand-off record.
 
-    返回 `None` 表示还没有；返回记录表示 `status=done`，`files` 里是产物清单。
-    轮询而不是等推送：人在界面里可能改半小时，也可能直接关掉页面走了。
+    **不判断完成与否**，原样把记录交出去：里面既有 `status`，也有 TTS 界面写回的
+    `done` / `total` —— 等待动效要靠后两个数字动起来，在这里过滤掉就只剩一个
+    「还在等」，和卡死看起来一样。
+    Returned unfiltered: the progress counts drive the waiting animation.
+
+    返回 `None` 只表示**这次没读到**（服务重启、交接单过期），不是「没完成」。
     """
     def _work() -> dict | None:
-        record = get_tts().client.handoff_state(handoff.token)
-        return record if record.get("status") == "done" and record.get("files") else None
+        return get_tts().client.handoff_state(handoff.token)
 
     try:
         return await run.io_bound(_work)
     except TTSError:
-        return None      # 服务重启/交接单过期都只意味着「这次拿不到」
+        return None
 
 
 async def import_tts_handoff(handoff: TTSHandoff, record: dict) -> ProduceResult:
@@ -432,9 +441,11 @@ async def import_tts_handoff(handoff: TTSHandoff, record: dict) -> ProduceResult
             return ProduceResult(kind=spec(handoff.kind).kind, ok=False,
                                  error="台账里找不到这篇文章")
 
-        run_name = record.get("run") or "tts_gui"
+        # 一篇文章一个文件夹，**同名覆盖**：不按 run 或时间再分层，
+        # 否则「这篇的音频是哪一份」要靠人比时间戳。
+        # One folder per article, overwritten in place.
         target = (settings.output_path / article.store_dir
-                  / (settings.tts_artifact_dirname or "tts") / run_name)
+                  / (settings.tts_artifact_dirname or "tts"))
         client = get_tts(settings).client
 
         saved: list[Path] = []
@@ -453,8 +464,11 @@ async def import_tts_handoff(handoff: TTSHandoff, record: dict) -> ProduceResult
             return ProduceResult(kind=spec(handoff.kind).kind, ok=False,
                                  error="产物里没有 wav")
 
+        # 附件一起交给 import_audio：它会把 .srt 放到音频旁边（同名同目录），
+        # 于是产物形状和流水线合成出来的完全一致。
         return import_audio(handoff.article_id, handoff.kind, merged,
-                            lang=handoff.lang, source="tts_gui", settings=settings)
+                            lang=handoff.lang, extras=saved,
+                            source="tts_gui", settings=settings)
 
     return await run.io_bound(_work)
 
