@@ -293,9 +293,133 @@ def _render_audio_button(
             row, audio_kind, force=has_audio, on_change=on_change, lang=lang
         ),
     ).props("flat dense no-caps").tooltip(
-        f"本地 TTS 合成{LANGUAGE_LABELS[lang]}音频，不产生费用，{hint}"
+        f"默认走 TTS 服务的单段合成（{LANGUAGE_LABELS[lang]}），{hint}"
         + ("（已有音频，会覆盖）" if has_audio else "")
     )
+
+    # 高级配置：把稿子推到 TTS 图形界面里精修 / hand the script to the TTS workbench
+    #
+    # 默认那条路是**一键到底**（自动分段、统一音色、直接落盘）。想换音色、克隆
+    # 某个人的声音、或者只重做第 7 句时，那些控件在 TTS 界面里已经有了 ——
+    # 在这里再画一套是重复实现，而且两套迟早不一致。
+    # The default path is one click. Everything else already exists in the TTS
+    # workbench, and building a second copy of it here would guarantee divergence.
+    switch = ui.switch("高级配置").props("dense").classes("text-xs")
+    switch.tooltip(
+        "打开 TTS 图形界面，稿子会自动填进多段模式的文本框："
+        "可逐段换音色/克隆/音色设计、单句重生成、导出字幕。"
+        "在那边生成完，产物会自动收回到这篇文章的目录里"
+    )
+    switch.on_value_change(
+        lambda event: _open_tts_workbench(row, audio_kind, lang, on_change, switch)
+        if event.value else None
+    )
+
+
+def _open_tts_workbench(
+    row: RowView, kind: ProductionKind, lang: str, on_change, switch
+) -> None:
+    """
+    把稿子交给 TTS 图形界面 / Hand the script over to the TTS workbench.
+
+    开关是**当一次性按钮用的**：点亮之后立刻弹回去。否则它看起来像一个持久
+    生效的模式，而实际上每次点亮只做一次交接。
+    The switch acts as a momentary trigger and springs back, because it does not
+    describe a persistent mode.
+    """
+    switch.set_value(False)
+
+    async def _go() -> None:
+        notification = ui.notification("正在准备 TTS 界面（服务不在线会自动拉起）…",
+                                       spinner=True, timeout=None)
+        try:
+            handoff = await actions.open_tts_workbench(
+                row.article.id, kind, lang=lang, title=row.article.title
+            )
+        except Exception as exc:  # noqa: BLE001 - 原因原样显示给人看
+            ui.notify(f"打不开 TTS 界面：{exc}", type="negative", timeout=12000,
+                      multi_line=True, close_button=True)
+            return
+        finally:
+            notification.dismiss()
+
+        ui.navigate.to(handoff.gui_url, new_tab=True)
+        ui.notify(f"已把 {handoff.segments} 段稿子导入 TTS 界面（新标签页）；"
+                  "在那边生成完，这边会自动收下产物",
+                  type="positive", multi_line=True, close_button=True)
+        _watch_handoff(handoff, kind, on_change)
+
+    ui.timer(0.01, _go, once=True)
+
+
+# 等 TTS 界面出活最多等多久 / how long to keep watching the hand-off
+#
+# 人在界面里调音色、逐句重掷，半小时是常事；但**不能永远挂着**——
+# 页面开一天就会累积一堆定时器。停了也不丢：产物在 TTS 那边还在。
+_WATCH_INTERVAL = 4.0
+_WATCH_LIMIT = int(90 * 60 / _WATCH_INTERVAL)
+
+
+def _watch_handoff(handoff, kind: ProductionKind, on_change) -> None:
+    """
+    盯着交接单，出活了就收下 / Watch the hand-off and adopt the result.
+
+    轮询而不是等 TTS 推过来：那边可能在另一台机器上，也不该知道工作台的地址。
+    Polling, because the service should not need this application's address.
+    """
+    state: dict = {"ticks": 0, "timer": None, "busy": False}
+
+    card = ui.card().style(
+        "position: fixed; right: 18px; bottom: 18px; z-index: 3000; width: 300px;"
+        "background: var(--wb-panel); border: 1px solid var(--wb-line-strong)"
+    ).classes("p-3 gap-1")
+    with card:
+        with ui.row().classes("items-center gap-2 w-full no-wrap"):
+            ui.spinner("dots", size="sm", color="cyan")
+            ui.label("等 TTS 界面出活").classes("text-sm").style("color: var(--wb-new)")
+            ui.space()
+            ui.button(icon="close", on_click=lambda: _stop("已停止等待")) \
+                .props("flat dense round size=sm")
+        ui.label(f"{handoff.segments} 段　token {handoff.token[-6:]}").classes("wb-path")
+        ui.label("在那个标签页里生成/合并完成即可").classes("wb-path").style(
+            "color: var(--wb-faint)"
+        )
+
+    def _stop(message: str = "") -> None:
+        if state["timer"] is not None:
+            state["timer"].deactivate()
+        card.delete()
+        if message:
+            ui.notify(message, type="info")
+
+    async def _poll() -> None:
+        if state["busy"]:
+            return                     # 上一次还没回来，别叠着发
+        state["ticks"] += 1
+        if state["ticks"] > _WATCH_LIMIT:
+            _stop("等了 90 分钟，已停止等待；产物仍在 TTS 那边，可再点一次高级配置取回")
+            return
+
+        state["busy"] = True
+        try:
+            record = await actions.collect_tts_handoff(handoff)
+            if record is None:
+                return
+            result = await actions.import_tts_handoff(handoff, record)
+        finally:
+            state["busy"] = False
+
+        _stop()
+        if result.ok:
+            ui.notify(f"已收下 TTS 界面的产物：{result.seconds or 0:.0f} 秒音频"
+                      f"（{len(record.get('files', []))} 个文件已拷进文章目录）",
+                      type="positive", multi_line=True, close_button=True)
+        else:
+            ui.notify(f"产物收取失败：{result.error}", type="negative",
+                      multi_line=True, close_button=True)
+        on_change()
+
+    state["timer"] = ui.timer(_WATCH_INTERVAL, _poll)
 
 
 def _render_downloads(row: RowView, kind: ProductionKind, lang: str, *, done: bool) -> None:

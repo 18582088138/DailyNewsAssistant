@@ -313,6 +313,151 @@ async def import_links(
 
 
 
+@dataclass
+class TTSHandoff:
+    """
+    一次「交给 TTS 界面精修」/ One hand-off to the TTS workbench.
+
+    界面拿着它做两件事：打开那个 URL，然后**轮询**同一个 token 等产物。
+    不用回调（TTS 那边可能在另一台机器上，也不该知道工作台的地址）。
+    Polled rather than called back: the service may be on another machine and should not
+    need to know this application's address.
+    """
+
+    token: str
+    gui_url: str
+    article_id: str
+    kind: str
+    lang: str
+    segments: int = 0
+
+
+async def open_tts_workbench(
+    article_id: str,
+    kind: ProductionKind | str,
+    *,
+    lang: str = DEFAULT_LANGUAGE,
+    title: str = "",
+) -> TTSHandoff:
+    """
+    把这一格的稿子交给 TTS 图形界面 / Hand this cell's script to the TTS workbench.
+
+    做四件事（都在工作线程里，因为都可能等）/ Four steps, all off the event loop:
+        1. 确认 TTS 服务在线（不在线自动拉起，三次失败报不可用）
+        2. 确认 TTS 界面在线（它是另一个进程、另一个端口）
+        3. 把稿子切成分段 —— **和自动合成切得一模一样**（同一份 `_build_segments`），
+           所以在界面里调完的东西，和这边跑出来的是同一批分段
+        4. POST 交接单，拿回一个直接能打开的 URL
+
+    抛出 / Raises:
+        TTSError: 服务或界面拉不起来；调用方原样显示（那句话里已经写了怎么排查）
+    """
+    from dna.produce.service import speech_segments_for
+    from dna.tts.factory import voice_for_role
+    from dna.tts.supervisor import ensure_gui, ensure_service
+
+    def _work() -> TTSHandoff:
+        settings = get_settings()
+        provider = get_tts(settings)
+        ensure_service(settings, client=provider.client)
+        gui = ensure_gui(settings)
+
+        pieces = [s.text for s in speech_segments_for(article_id, kind, lang=lang)]
+        if not pieces:
+            raise TTSError("这一格还没有可朗读的稿子")
+
+        body = provider.client.handoff(
+            pieces,
+            title=title,
+            voice=voice_for_role("host", settings, lang=lang).speaker,
+            meta={"article_id": article_id, "kind": str(kind), "lang": lang},
+        )
+        # 交接单里的 gui_url 用的是**服务端**配置的界面地址；本项目自己的
+        # TTS_GUI_URL 才是这台机器上打得开的那个，两者不一致时以后者为准。
+        # The record's URL comes from the service's own config; this project's setting is
+        # the one the browser here can actually reach.
+        url = f"{gui.rstrip('/')}/?import={body['token']}"
+        return TTSHandoff(token=body["token"], gui_url=url, article_id=article_id,
+                          kind=str(kind), lang=lang, segments=len(pieces))
+
+    return await run.io_bound(_work)
+
+
+async def collect_tts_handoff(handoff: TTSHandoff) -> dict | None:
+    """
+    看看 TTS 界面那边生成完了没 / Has the workbench produced anything yet?
+
+    返回 `None` 表示还没有；返回记录表示 `status=done`，`files` 里是产物清单。
+    轮询而不是等推送：人在界面里可能改半小时，也可能直接关掉页面走了。
+    """
+    def _work() -> dict | None:
+        record = get_tts().client.handoff_state(handoff.token)
+        return record if record.get("status") == "done" and record.get("files") else None
+
+    try:
+        return await run.io_bound(_work)
+    except TTSError:
+        return None      # 服务重启/交接单过期都只意味着「这次拿不到」
+
+
+async def import_tts_handoff(handoff: TTSHandoff, record: dict) -> ProduceResult:
+    """
+    把 TTS 界面的产物收进本项目 / Adopt what the workbench produced.
+
+    产物**全部**拷进文章目录（逐段 wav、合并音频、字幕），然后把整条音频
+    记进台账 —— 记了那一格才会变成「已生成」，否则界面上刚忙完的活看起来像丢了。
+    Everything is copied next to the article and the merged track is recorded, or the
+    cell would still read empty.
+
+    整条音频认哪一个 / Which file becomes the production:
+        优先 `merged.wav`（多段合并的成品）；没有就取**唯一/最后一个** wav。
+        猜错的代价很直接，所以规则写死，不做"最大文件"这类启发式。
+    """
+    from dna.produce.service import import_audio
+
+    def _work() -> ProduceResult:
+        settings = get_settings()
+        ledger = Ledger(settings.db_file)
+        article = ledger.get(handoff.article_id)
+        if article is None or not article.store_dir:
+            return ProduceResult(kind=spec(handoff.kind).kind, ok=False,
+                                 error="台账里找不到这篇文章")
+
+        run_name = record.get("run") or "tts_gui"
+        target = (settings.output_path / article.store_dir
+                  / (settings.tts_artifact_dirname or "tts") / run_name)
+        client = get_tts(settings).client
+
+        saved: list[Path] = []
+        for relative in record.get("files", []):
+            try:
+                saved.append(client.download(relative, target / Path(relative).name))
+            except TTSError:
+                continue
+        if not saved:
+            return ProduceResult(kind=spec(handoff.kind).kind, ok=False,
+                                 error="产物一个都没取回来（服务可能已重启）")
+
+        wavs = [p for p in saved if p.suffix.lower() == ".wav"]
+        merged = next((p for p in wavs if p.name == "merged.wav"), wavs[-1] if wavs else None)
+        if merged is None:
+            return ProduceResult(kind=spec(handoff.kind).kind, ok=False,
+                                 error="产物里没有 wav")
+
+        return import_audio(handoff.article_id, handoff.kind, merged,
+                            lang=handoff.lang, source="tts_gui", settings=settings)
+
+    return await run.io_bound(_work)
+
+
+def tts_service_label() -> str:
+    """顶栏上的 TTS 服务状态 / The TTS service's state for the header."""
+    settings = get_settings()
+    online = get_tts(settings).client.health()
+    return (f"TTS {'在线' if online else '未运行'}　{settings.tts_service_url}"
+            + ("" if online else "（合成时自动拉起）"))
+
+
 def production_text(
     article_id: str, kind: ProductionKind | str, lang: str = DEFAULT_LANGUAGE
 ) -> str:
@@ -461,6 +606,11 @@ def cache_status() -> str:
 
 __all__ = [
     "RowView",
+    "TTSHandoff",
+    "collect_tts_handoff",
+    "import_tts_handoff",
+    "open_tts_workbench",
+    "tts_service_label",
     "article_directory",
     "audio_estimate_seconds",
     "audio_for",

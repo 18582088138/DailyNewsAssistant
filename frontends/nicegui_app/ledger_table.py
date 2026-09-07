@@ -40,6 +40,7 @@ from dna.produce.tasks import DEFAULT_LANGUAGE
 from dna.store.ledger import ProductionRecord
 from frontends.nicegui_app import actions, detail_panel, theme
 from frontends.nicegui_app.actions import RowView
+from frontends.nicegui_app.audio_progress import AudioProgress
 
 # 抓取状态 → 颜色 / fetch status to colour
 _STATUS_COLOUR = {
@@ -476,27 +477,24 @@ def _run(
     label = task.label if lang == DEFAULT_LANGUAGE else f"{task.label}（EN）"
     is_audio = task.audio_of is not None
 
-    notification = ui.notification(
-        f"{label} 合成中…（本地 TTS，不计费）" if is_audio else f"{label} 生成中…（调用 LLM，请稍候）",
-        spinner=True,
-        timeout=None,
-    )
-
-    # 音频要跑几十分钟，一个不动的转圈无法区分「在跑」和「卡死了」。
-    # 工作线程往这个字典里写进度，界面每秒读一次。
-    # A motionless spinner cannot distinguish work from a hang over half an hour, so the
-    # worker writes progress here and the UI reads it once a second.
+    # 音频与文本的等待完全不是一个量级，提示也不该是同一种。
+    #
+    # 音频：几分钟到几十分钟，用右下角的**进度浮窗**（秒表 + 进度条 + 已产出秒数，
+    #   见 `audio_progress.py`）—— 一个不动的转圈无法区分「在跑」和「卡死了」。
+    # 文本：十几秒，一条带转圈的提示条足够，多摆一个浮窗反而吵。
+    # The two waits differ by orders of magnitude, so the feedback differs too.
+    panel = None
+    notification = None
     progress: dict = {}
-    ticker = None
     if is_audio:
-        def _tick() -> None:
-            done, total = progress.get("done"), progress.get("total")
-            if total:
-                notification.message = (
-                    f"{label} 合成中… {done}/{total} 段"
-                    f"（已产出 {progress.get('seconds', 0):.0f} 秒音频）"
-                )
-        ticker = ui.timer(1.0, _tick)
+        panel = AudioProgress(
+            label,
+            expected_seconds=actions.audio_estimate_seconds(row.article, kind, lang),
+        )
+        progress = panel.progress
+    else:
+        notification = ui.notification(f"{label} 生成中…（调用 LLM，请稍候）",
+                                       spinner=True, timeout=None)
 
     async def _go() -> None:
         try:
@@ -510,9 +508,10 @@ def _run(
                 progress=progress,
             )
         finally:
-            if ticker is not None:
-                ticker.deactivate()
-            notification.dismiss()
+            if panel is not None:
+                panel.close()
+            if notification is not None:
+                notification.dismiss()
 
         if result.ok and result.skipped:
             ui.notify(f"{label}：已存在，未重新生成", type="info")

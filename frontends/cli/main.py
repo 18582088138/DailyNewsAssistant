@@ -106,7 +106,8 @@ def show_config() -> None:
         ("OpenRouter key", mask(s.openrouter_api_key)),
         ("Ollama", f"{s.ollama_base_url} / {s.ollama_model}"),
         ("Embedding", s.embedding_model),
-        ("TTS", f"{s.tts_provider} @ {s.tts_device}"),
+        ("TTS 服务", f"{s.tts_service_url}（预处理 {'开' if s.tts_preprocess else '关'}）"),
+        ("TTS 界面", s.tts_gui_url),
         ("默认语言", str(s.default_language)),
         ("产物目录", str(s.output_path)),
         ("台账数据库", str(s.db_file)),
@@ -503,33 +504,41 @@ def tts(
     voice: str | None = typer.Option(None, "--voice", help="指定音色；默认按 .env"),
 ) -> None:
     """
-    检查语音合成后端 / Check the speech synthesis backend.
+    检查 TTS 服务 / Check the TTS service.
 
-    **不产生任何费用**——TTS 跑在本地。加 --say 会真的合成一句话并写成 wav，
-    用来确认这台机器上「模型能加载 + 设备对 + 声音正常」。
+    **不产生任何费用**（加 --say 时会有一次很小的 LLM 预处理调用，可用
+    TTS_PREPROCESS=false 关掉）。服务不在线时会**自动拉起**，三次失败才报不可用——
+    这条命令同时也是在验「自动拉起这条路通不通」。
 
-    换部署环境后第一件事就该跑它：Intel 机器用 qwen3_ov，
-    NVIDIA 机器把 TTS_PROVIDER 改成 qwen3_torch 再跑一次。
+    加 --say 会真的合成一句话并写成 wav，用来确认「服务在、音色对、声音正常」。
+    换部署环境（本机 → 4060 那台）后第一件事就该跑它：改 TTS_SERVICE_URL 再跑一次。
     """
     import time as _time
     from pathlib import Path
 
     from dna.tts import RTF_ESTIMATE, SpeechSegment, VoiceSpec, get_tts, voice_for_role
     from dna.tts.base import TTSError
+    from dna.tts.supervisor import ensure_service
 
     settings = get_settings()
+    provider = get_tts(settings)
+
+    # 探活与自动拉起放在最前面：后面每一步都依赖服务在线，
+    # 让它们各自失败一次只会给出三条互相矛盾的报错。
     try:
-        provider = get_tts(settings)
+        with console.status(f"检查 TTS 服务 {settings.tts_service_url}…"):
+            status = ensure_service(settings)
     except TTSError as exc:
         console.print(f"[red]{exc}[/red]")
         raise typer.Exit(code=1) from exc
 
-    console.print(f"\n[bold]TTS 后端[/bold]　{provider.info}")
+    console.print(f"\n[green]{status.summary()}[/green]")
+    console.print(f"[bold]引擎[/bold]　{provider.info}")
 
     try:
         speakers = provider.available_speakers()
     except TTSError as exc:
-        console.print(f"[red]加载失败：{exc}[/red]")
+        console.print(f"[red]取音色清单失败：{exc}[/red]")
         raise typer.Exit(code=1) from exc
 
     console.print(f"[dim]可用音色（{len(speakers)}）：{'、'.join(speakers)}[/dim]")
@@ -539,24 +548,32 @@ def tts(
     )
 
     if say is None:
-        console.print("\n[green]后端就绪。[/green][dim]加 --say \"一句话\" 可实际合成试听。[/dim]")
+        console.print("\n[green]服务就绪。[/green][dim]加 --say \"一句话\" 可实际合成试听。[/dim]")
         return
 
     spec_ = VoiceSpec(
         speaker=voice or voice_for_role("host", settings).speaker, language="chinese"
     )
     started = _time.perf_counter()
-    with console.status(f"合成中（约 {len(say) / 4.5 * RTF_ESTIMATE:.0f} 秒）…"):
-        clip = provider.synthesize([SpeechSegment(text=say, voice=spec_)])
+    with console.status(f"合成中（约 {len(say) / 4.5 * RTF_ESTIMATE:.0f} 秒起）…"):
+        try:
+            clip = provider.synthesize([SpeechSegment(text=say, voice=spec_)])
+        except TTSError as exc:
+            console.print(f"[red]合成失败：{exc}[/red]")
+            raise typer.Exit(code=1) from exc
     elapsed = _time.perf_counter() - started
 
     path = Path(out).resolve()
     path.write_bytes(clip.wav)
+    # 耗时与音频时长**分开报**：只给一个数字会被读成"这次跑了多久"，
+    # 而音频时长通常小一个数量级（CPU 上 RTF≈13）。
     console.print(
         f"\n[green]已写入：[/green]{path}\n"
-        f"[dim]{len(say)} 字 → {clip.seconds:.1f} 秒音频，耗时 {elapsed:.1f} 秒"
-        f"（RTF {elapsed / clip.seconds:.2f}）[/dim]"
+        f"[dim]{len(say)} 字　音频 {clip.seconds:.1f}s　耗时 {elapsed:.1f}s"
+        f"　RTF {elapsed / clip.seconds:.2f}[/dim]"
     )
+    if clip.artifacts:
+        console.print(f"[dim]服务端产物：{clip.run}/（{len(clip.artifacts)} 个文件）[/dim]")
 
 
 @app.command()
