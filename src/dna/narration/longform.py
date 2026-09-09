@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field
 
 from dna.core.logging import get_logger
 from dna.core.models import Article
+from dna.core.prompts import load_prompt, render_prompt
 from dna.llm.base import LLMProvider, system, user
 from dna.narration.duration import estimate_seconds, prompt_char_budget
 from dna.narration.script_builder import article_block, instruction_block, rules_for
@@ -71,6 +72,19 @@ MAX_TARGET_SECONDS = 900.0   # 15 分钟：用户给的上限
 # 章节数量范围 / how many sections
 MIN_SECTIONS = 4
 MAX_SECTIONS = 8
+
+# 提示词正文在 `config/prompts/` / The prompt texts live under that directory
+#     longform_outline.md  主块 + `@shape.feature` / `@shape.interview`
+#     longform_section.md  主块 + `@context` / `@role.feature` / `@role.interview`
+#     _shared/language_directive.en.md
+#
+# 任务指令本身保持中文，语言只通过 `{{rules}}` 与 `{{language_directive}}`
+# 两个注入点切换——所以这两个文件不带语言后缀。
+# The task instructions stay Chinese; the output language switches only through those two
+# injection points, so neither file carries a language suffix.
+PROMPT_OUTLINE = "longform_outline"
+PROMPT_SECTION = "longform_section"
+PROMPT_LANGUAGE_DIRECTIVE = "_shared/language_directive.en"
 
 
 class LongformMode(StrEnum):
@@ -183,11 +197,7 @@ def language_directive(lang: str) -> str:
     """
     if lang == "zh":
         return ""
-    return (
-        "\n\n**Write everything in English** — section titles, every line of "
-        "narration, every speaker turn. The source article may be in Chinese: "
-        "translate the facts into English rather than copying Chinese text through."
-    )
+    return "\n\n" + load_prompt(PROMPT_LANGUAGE_DIRECTIVE)
 
 
 def can_build_longform(article: Article) -> tuple[bool, str]:
@@ -351,34 +361,18 @@ def _build_outline(
     Each section carries its own target length. Without one the sections come out wildly
     uneven and the assembled script reads lopsided.
     """
-    shape = (
-        "这是一篇单人讲述的专题稿。"
-        if mode is LongformMode.FEATURE
-        else "这是一期双人访谈：主持人负责提问、追问和转场，嘉宾负责给出技术内容。"
+    shape = load_prompt(PROMPT_OUTLINE, f"shape.{mode.value}")
+
+    prompt = render_prompt(
+        PROMPT_OUTLINE,
+        rules=rules_for(lang),
+        language_directive=language_directive(lang),
+        total_target=total_target,
+        unit=unit_word(lang),
+        shape=shape,
+        min_sections=MIN_SECTIONS,
+        max_sections=MAX_SECTIONS,
     )
-
-    prompt = f"""{rules_for(lang)}{language_directive(lang)}
-
-任务：为下面这篇资讯规划一篇 **{total_target} {unit_word(lang)}**的长文案提纲。{shape}
-
-要求：
-- 分 {MIN_SECTIONS}~{MAX_SECTIONS} 节，各节 target_chars 之和接近 {total_target}
-- **按内容的逻辑分节**（背景问题 → 方法 → 数据 → 局限 → 影响），
-  不要按原文段落顺序切
-- 每节的 points 要具体：写「解释 2TP×4USP 混合并行为什么能降显存」，
-  不要写「介绍技术方案」
-- **提纲要把原文的关键事实分配完**。原文里的每一个重要数字、方法名、对比结论
-  都应该出现在某一节的 points 里。清点一遍，别把内容留在原文里没用上
-- **各节内容必须互斥**：同一个产品、同一项技术、同一批数据只能归给一节。
-  不要出现「智能眼镜」和「其他创新硬件」这样边界模糊的两节——
-  它们会各自把同一批产品讲一遍
-- **不要用「其他」「其余」「补充」命名任何一节**。这类节没有明确边界，
-  写的时候必然去重复前面已经讲过的内容
-- **必须有一节讲局限、代价、前提条件或未解决的问题**。只讲好处的长稿没有
-  可信度，听众听十分钟不是为了听广告。原文没有明说局限时，就讲这批技术/产品
-  共同的短板或尚未解决的问题——但只能基于原文里的事实，不要凭空推测
-- 不要规划「总结回顾」这种把前面重说一遍的节——那是注水
-- 不要规划「背景介绍」占满一节。背景最多一两句带过，长稿的价值在细节不在铺垫"""
     prompt += instruction_block(instructions, lang)
 
     return llm.chat_json(
@@ -420,43 +414,29 @@ def _expand_section(
     """
     section = sections[index - 1]
     total = len(sections)
-    if mode is LongformMode.INTERVIEW:
-        role_rule = """
-- 输出为对话轮次，speaker 只能是 `host`（主持人）或 `guest`（嘉宾）
-- **主持人只提问、追问、转场，不讲技术内容**；技术内容全部由嘉宾说
-- 主持人的问题要具体，追问要针对嘉宾刚说的那句话
-- **不要互相吹捧**。不要写「您说得太好了」「这个问题问得很专业」——
-  这类话占时长、没信息，而且一听就假
-- 本节 2~5 轮对话"""
-    else:
-        role_rule = """
-- 输出为单个轮次，speaker 固定为 `narrator`
-- 连贯成段，不要分小标题"""
 
-    context = f"\n上一节的结尾是：「…{previous_tail}」\n请自然衔接，不要重复上面已经说过的内容。" if previous_tail else ""
+    # 两段片段都以 `\n` 起头拼进主块，与 `@role.*` / `@context` 两个块里
+    # 逐字节对应；空的 previous_tail 不产生 context 段。
+    role_rule = "\n" + load_prompt(PROMPT_SECTION, f"role.{mode.value}")
+    context = (
+        "\n" + render_prompt(PROMPT_SECTION, "context", previous_tail=previous_tail)
+        if previous_tail
+        else ""
+    )
 
-    prompt = f"""{rules_for(lang)}{language_directive(lang)}
-
-任务：写长文案的第 {index}/{total} 节，约 **{section.target_chars} {unit_word(lang)}**。
-
-全文提纲（**只写标着「← 现在写这节」的那一节**）：
-{_outline_map(sections, index)}
-
-本节要点：
-{chr(10).join(f"- {p}" for p in section.points)}
-{context}
-边界要求（**重要**）：
-- 标着「已讲过」的内容**不要再讲**，一个产品名、一个数字都不要重复
-- 标着「留给后面」的内容**不要提前讲**，那几节会自己讲
-- 本节的料不够写满 {section.target_chars} 字时，去原文里找本节主题下更细的数据，
-  **不要去写别节的内容凑长度**
-
-额外要求：{role_rule}
-- **本节要点必须全部讲到，每个要点都要落到原文的具体数字或方法名上**。
-  写不到 {section.target_chars} 字就说明细节没展开够，去原文里找数据，
-  不要用背景铺垫和形容词凑长度
-- 只写本节内容，不要写小标题，不要写「接下来我们看」这种过渡到别节的话
-- 这是要被念出来的，写口语，但**不要白话**"""
+    prompt = render_prompt(
+        PROMPT_SECTION,
+        rules=rules_for(lang),
+        language_directive=language_directive(lang),
+        index=index,
+        total=total,
+        target_chars=section.target_chars,
+        unit=unit_word(lang),
+        outline_map=_outline_map(sections, index),
+        points="\n".join(f"- {p}" for p in section.points),
+        context=context,
+        role_rule=role_rule,
+    )
     prompt += instruction_block(instructions, lang)
 
     out = llm.chat_json(
@@ -506,6 +486,9 @@ __all__ = [
     "MIN_BODY_FOR_LONGFORM",
     "MIN_SECTIONS",
     "MIN_TARGET_SECONDS",
+    "PROMPT_LANGUAGE_DIRECTIVE",
+    "PROMPT_OUTLINE",
+    "PROMPT_SECTION",
     "SPEAKERS",
     "LongformMode",
     "LongformResult",

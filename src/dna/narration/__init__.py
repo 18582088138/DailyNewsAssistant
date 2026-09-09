@@ -11,9 +11,10 @@
 | 口播 | 1~2min | 270~540 | 单 |
 | 长文案 | 10~15min | 2700~4000 | 专题单角色 / 访谈双角色 |
 
-共同的写作约束写在 `script_builder.PROFESSIONALISM` 里，三种文案都套用它：
+共同的写作约束写在 `config/prompts/_shared/professionalism.{zh,en}.md` 里，
+三种文案都通过 `script_builder.rules_for(lang)` 套用它：
 准确的技术术语、数值与原文完全一致、不确定的宁可不写。
-The shared writing rules live in `script_builder.PROFESSIONALISM` and apply to all three.
+The shared writing rules live in that file and reach all three via `rules_for(lang)`.
 
 **时长是硬约束**，因此生成后由 `duration` 量一遍，超区间带着具体差值回炉重写
 （最多 2 次）。长文案不量总时长——它是分节生成的，按节控制字数更可靠。
@@ -31,14 +32,13 @@ from dna.narration.longform import (
     plan_target_chars,
 )
 from dna.narration.script_builder import (
-    PROFESSIONALISM,
     ScriptResult,
     build_narration,
     build_short_video,
+    rules_for,
 )
 
 __all__ = [
-    "PROFESSIONALISM",
     "LongformMode",
     "LongformResult",
     "ScriptResult",
@@ -49,6 +49,7 @@ __all__ = [
     "estimate_seconds",
     "length_feedback",
     "plan_target_chars",
+    "rules_for",
     "target_chars",
     "within",
 ]

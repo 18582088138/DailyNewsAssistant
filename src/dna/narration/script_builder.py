@@ -40,6 +40,7 @@ from pydantic import BaseModel, Field
 
 from dna.core.logging import get_logger
 from dna.core.models import Article
+from dna.core.prompts import load_prompt, render_prompt
 from dna.llm.base import ChatMessage, LLMProvider, assistant, system, user
 from dna.narration.duration import (
     count_units,
@@ -83,7 +84,16 @@ DEFAULT_CTA = "关注我，下期分享 AI 行业最新进展"
 # settled, and further attempts spend money for a handful of characters.
 MAX_REWRITES = 2
 
-# 所有文案共同的专业性要求 / the professionalism rules every script obeys
+# 提示词正文都在 `config/prompts/` / Every prompt text lives under that directory
+#     shortvideo.zh.md · shortvideo.en.md · narration.zh.md · narration.en.md
+#     _shared/professionalism.{zh,en}.md   四种文案共用的写作要求
+#     _shared/instruction_block.{zh,en}.md 额外要求的抬头
+PROMPT_SHORTVIDEO = "shortvideo"
+PROMPT_NARRATION = "narration"
+PROMPT_RULES = "_shared/professionalism"
+PROMPT_INSTRUCTION_BLOCK = "_shared/instruction_block"
+
+# 关于那份共用的写作要求 / About the shared writing rules
 #
 # 第 1 条是最重要的一条 / Rule one carries the most weight:
 #     稿子的成败在**信息密度**。时长是固定的（平台限制 + 发布时还会加速播放），
@@ -93,30 +103,8 @@ MAX_REWRITES = 2
 #     platform, and further by the speed-up applied at publish time — so every second must
 #     carry fact. A sentence with no figure, no proper noun and no conclusion has wasted
 #     its two seconds, and that is how vague copy accumulates: not from inelegant wording.
-PROFESSIONALISM = """
-写作要求（所有文案通用）：
-1. **信息密度优先，这是第一要求**。发布时视频会加速播放，所以在给定的字数里
-   要尽可能多地装进原文的关键事实。**每一句都必须携带至少一个具体信息点**——
-   一个数字、一个专有名词、一项能力、或一个明确结论。
-   写不出信息点的句子直接删掉，不要留着占时长。
-2. **使用准确的技术术语**。不要用「非常厉害」「大幅提升」「效果拔群」「迈上新台阶」
-   这类白话替代具体指标——该说「在 Terminal Bench 2.1 上从 61.8 提升到 82.7」
-   就这么说。
-3. **模型名、版本号、benchmark 名称、数值必须与原文完全一致**，不得改写、
-   不得四舍五入、不得换成近似说法。
-4. 不确定的技术细节**宁可不写**，不要用「据说」「可能」「某种程度上」掩盖。
-5. **禁止出现的内容**：
-   - 「让我们一起来看看」「话不多说」这类填充语
-   - 「这意味着什么」「值得关注的是」这类过渡句自身占一句话
-   - 「我认为」「我最关注的是」这类第一人称主观表达（原文作者的建议要写成
-     「原文建议」「官方推荐」，标明出处）
-   - 用形容词堆出来的结尾，如「让企业级应用不再需要巨额硬件投入」
-6. 面向的是懂技术的听众，不需要解释什么是大模型、什么是开源。
-""".strip()
-
-# 英文稿的同一套要求 / the same rules, for English scripts
 #
-# 为什么是重写而不是翻译这段规则 / Why this is rewritten rather than translated:
+# 为什么英文版是重写而不是翻译 / Why the English rules are rewritten, not translated:
 #     它是**给模型看的指令**，不是产物。指令用目标语言写，模型遵守得明显更好；
 #     而且「白话」「套话」这些词在中文语境里的具体所指，直译过去会变成空泛的
 #     "avoid vague language"，等于把最要紧的那条规则说没了。
@@ -124,31 +112,11 @@ PROFESSIONALISM = """
 #     target language, and a literal translation of the Chinese terms for padding and
 #     filler degrades into a vague "avoid vague language" — losing the rule that matters
 #     most.
-PROFESSIONALISM_EN = """
-Writing rules (all scripts):
-1. **Information density comes first.** The clip is played back sped up, so every
-   second must carry fact. **Every sentence must land at least one concrete item** —
-   a number, a proper noun, a capability, or a definite conclusion.
-   Delete any sentence that carries none; do not leave it occupying airtime.
-2. **Use precise technical terms.** Never substitute "hugely improved" or
-   "a major leap" for the actual figure — say "from 61.8 to 82.7 on Terminal Bench 2.1".
-3. **Model names, version numbers, benchmark names and figures must match the source
-   exactly.** Do not paraphrase, round, or approximate them.
-4. If a technical detail is uncertain, **leave it out** rather than hedging with
-   "reportedly" or "to some extent".
-5. **Never include:**
-   - filler openers such as "let's take a look" or "without further ado"
-   - a whole sentence spent on a transition ("what does this mean?", "notably,")
-   - first-person opinion ("I think", "what I find most interesting") — attribute
-     recommendations to the source: "the authors recommend", "the official guidance is"
-   - a closing line built from adjectives rather than facts
-6. The audience is technical. Do not explain what an LLM or open source is.
-""".strip()
 
 
 def rules_for(lang: str) -> str:
     """该语言的写作要求 / The writing rules for one language."""
-    return PROFESSIONALISM if lang == "zh" else PROFESSIONALISM_EN
+    return load_prompt(f"{PROMPT_RULES}.{'zh' if lang == 'zh' else 'en'}")
 
 
 def instruction_block(instructions: str, lang: str = "zh") -> str:
@@ -169,13 +137,7 @@ def instruction_block(instructions: str, lang: str = "zh") -> str:
     text = (instructions or "").strip()
     if not text:
         return ""
-    if lang == "zh":
-        heading = "**本次的额外要求（优先级高于以上默认要求）**："
-    else:
-        heading = (
-            "**Additional requirements for this run "
-            "(these take precedence over the defaults above)**:"
-        )
+    heading = load_prompt(f"{PROMPT_INSTRUCTION_BLOCK}.{'zh' if lang == 'zh' else 'en'}")
     return f"\n\n{heading}\n{text}"
 
 
@@ -252,27 +214,15 @@ def build_short_video(
         )
 
     lo_chars, hi_chars = prompt_char_budget(low), prompt_char_budget(high)
-    prompt = f"""{PROFESSIONALISM}
-
-任务：为下面这篇资讯写一条 {low:.0f}~{high:.0f} 秒的短视频口播文案。
-
-结构要求：
-- **主标题**：就写事件本身，谁做了什么，≤14 字（例：「DeepSeek V4 Flash 开源」）
-- **副标题**：堆亮点与意义，≤20 字（例：「极限量化，成本骤降，本地部署迈入新时代」）
-- **口播正文**控制在 **{lo_chars}~{hi_chars} 字**
-
-正文写法：
-- **第一句必须是事件本身**：谁、发布/开源了什么、叫什么名字（带完整版本号）。
-  不要用悬念、设问或结论开场——观众得先知道在说什么
-- 之后按「最硬的指标 → 关键参数 → 能力亮点」往下推，**每句换一个新事实**，
-  不要在同一个点上展开第二句。**覆盖文章的主干，不要只挑一个点深挖**
-- 优先选这几类事实：榜单得分与排名、参数规模（总参/激活参）、上下文长度、
-  速度与成本、关键能力对比。原文有几个就尽量都放进去
-- 可以用短句和感叹句制造节奏（「更狠的是」「直接打破天花板」），
-  但**每个短句后面必须紧跟具体数据**，不能只有情绪
-- 最后一句固定收尾：「{cta}」
-
-正文是要被念出来的，写口语，但**不要白话**。""" + instruction_block(instructions)
+    prompt = render_prompt(
+        f"{PROMPT_SHORTVIDEO}.zh",
+        rules=rules_for("zh"),
+        low=f"{low:.0f}",
+        high=f"{high:.0f}",
+        lo_chars=lo_chars,
+        hi_chars=hi_chars,
+        cta=cta,
+    ) + instruction_block(instructions)
 
     return _generate(
         llm,
@@ -304,30 +254,14 @@ def _build_english_short_video(
     """
     lo_words = prompt_char_budget(low, lang="en")
     hi_words = prompt_char_budget(high, lang="en")
-    prompt = f"""{PROFESSIONALISM_EN}
-
-Task: write a {low:.0f}-{high:.0f} second short-video voice-over for the article below.
-
-Structure:
-- **title**: the event itself — who did what, at most 8 words
-  (e.g. "DeepSeek V4 Flash goes open source")
-- **subtitle**: the highlights and why they matter, at most 12 words
-- **script**: **{lo_words}-{hi_words} words**
-
-How to write the script:
-- **The first sentence states the event**: who released or open-sourced what, by its
-  full name and version. No teasers, no rhetorical questions — the viewer needs to know
-  what this is about before anything else
-- Then work down: hardest metric, key parameters, standout capability.
-  **A new fact in every sentence** — never spend a second sentence on the same point.
-  **Cover the trunk of the story rather than drilling into one detail**
-- Prefer these facts: benchmark scores and rankings, parameter counts (total and
-  activated), context length, speed and cost, head-to-head capability results.
-  Fit in as many as the source provides
-- Short punchy sentences are fine for pace, but **every one must be followed
-  immediately by a concrete figure** — never rhythm alone
-
-This is spoken, not read. Write natural spoken English, but never vague English."""
+    prompt = render_prompt(
+        f"{PROMPT_SHORTVIDEO}.en",
+        rules=rules_for("en"),
+        low=f"{low:.0f}",
+        high=f"{high:.0f}",
+        lo_words=lo_words,
+        hi_words=hi_words,
+    )
     prompt += instruction_block(instructions, "en")
 
     return _generate(
@@ -373,28 +307,15 @@ def build_narration(
         )
 
     lo_chars, hi_chars = prompt_char_budget(low), prompt_char_budget(high)
-    prompt = f"""{PROFESSIONALISM}
-
-任务：为下面这篇资讯写一段 {low / 60:.0f}~{high / 60:.0f} 分钟的口播文案。
-
-结构要求：
-- **主标题** ≤14 字（事件本身）、**副标题** ≤20 字（亮点与意义）
-- **正文控制在 {lo_chars}~{hi_chars} 字**
-
-正文写法：
-- 开头两句把事件和最硬的指标说完：谁发布了什么、核心数据是多少
-- 中间是这个格式存在的理由——**必须有技术深度**：说清它用了什么方法、
-  关键数字是多少、这些数字为什么成立。只把结论念一遍是不合格的，
-  那是短视频稿的活
-- **信息要覆盖原文主干**。原文讲了几件事就都要提到，不要只展开其中一件，
-  也不要因为要展开细节而漏掉另一半内容
-- 如果原文提到了局限、代价、前提条件或适用门槛，**必须说**——
-  只讲好处的稿子没有可信度
-- 结尾**落在具体建议或具体数字上**，不要用形容词收束。
-  例：该写「128GB 以下建议直接用 API」，不要写「让部署变得更加轻松」
-- 最后一句固定收尾：「{cta}」
-
-连贯成段，不要分小标题、不要写「第一点第二点」——这是念出来的不是看的。"""
+    prompt = render_prompt(
+        f"{PROMPT_NARRATION}.zh",
+        rules=rules_for("zh"),
+        low_min=f"{low / 60:.0f}",
+        high_min=f"{high / 60:.0f}",
+        lo_chars=lo_chars,
+        hi_chars=hi_chars,
+        cta=cta,
+    )
     prompt += instruction_block(instructions)
 
     return _generate(
@@ -420,28 +341,14 @@ def _build_english_narration(
     """英文版口播稿 / The English voice-over script（原生写，理由同短视频）。"""
     lo_words = prompt_char_budget(low, lang="en")
     hi_words = prompt_char_budget(high, lang="en")
-    prompt = f"""{PROFESSIONALISM_EN}
-
-Task: write a {low / 60:.0f}-{high / 60:.0f} minute voice-over for the article below.
-
-Structure:
-- **title** at most 8 words (the event), **subtitle** at most 12 words (why it matters)
-- **script**: **{lo_words}-{hi_words} words**
-
-How to write the script:
-- The first two sentences settle the event and the hardest number: who shipped what,
-  and the headline figure
-- The middle is the entire reason this format exists — **it must carry technical
-  depth**: the method used, the key figures, and why those figures hold. Restating the
-  conclusion is not acceptable; that is the short-video script's job
-- **Cover the trunk of the source.** Mention every distinct thing it reports rather than
-  expanding one of them at the cost of the rest
-- If the source names limitations, costs, prerequisites or thresholds, **say so** —
-  a script that lists only upsides has no credibility
-- End on a concrete recommendation or figure, never on adjectives.
-  Write "under 128 GB, use the API instead", not "makes deployment easier than ever"
-
-One continuous piece. No headings, no "firstly, secondly" — this is spoken, not read."""
+    prompt = render_prompt(
+        f"{PROMPT_NARRATION}.en",
+        rules=rules_for("en"),
+        low_min=f"{low / 60:.0f}",
+        high_min=f"{high / 60:.0f}",
+        lo_words=lo_words,
+        hi_words=hi_words,
+    )
     prompt += instruction_block(instructions, "en")
 
     return _generate(
@@ -552,10 +459,8 @@ def article_block(article: Article) -> str:
     long-form one had lost the "do not fabricate when the body is empty" clause: two
     copies of the same thing drift, and this one drifted by dropping a safety rule.
 
-    正文截到 3000 字。技术资讯的核心事实与数字几乎总在前半篇，后面多是延伸讨论；
-    全文送进去只是线性增加 input 费用。
-    The body is capped at 3000 characters: in technical news the core facts and figures
-    are almost always in the first half, and sending the rest only scales the input bill.
+    正文截到 `MAX_BODY_CHARS`（6000 字）——上限的取值理由见该常量旁的注释。
+    The body is capped at `MAX_BODY_CHARS`; see that constant for why it sits where it does.
     """
     lines = [f"标题：{article.title}"]
     if article.author:
@@ -572,13 +477,18 @@ def article_block(article: Article) -> str:
 
 __all__ = [
     "DEFAULT_CTA",
-    "article_block",
     "MAX_BODY_CHARS",
     "MAX_REWRITES",
-    "PROFESSIONALISM",
+    "PROMPT_INSTRUCTION_BLOCK",
+    "PROMPT_NARRATION",
+    "PROMPT_RULES",
+    "PROMPT_SHORTVIDEO",
     "NarrationOut",
     "ScriptResult",
     "ShortVideoOut",
+    "article_block",
     "build_narration",
     "build_short_video",
+    "instruction_block",
+    "rules_for",
 ]
