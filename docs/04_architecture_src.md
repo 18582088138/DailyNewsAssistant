@@ -358,7 +358,7 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 
 | 模块 | 调用 | 降级 |
 |---|---|---|
-| `summarize.py` | 每条 1 次，`MAX_BODY_CHARS = 3000` | **失败用标题当摘要**，不抛异常 |
+| `summarize.py` | 每条 1 次（+ 最多 1 次回炉），`MAX_BODY_CHARS = 3000` | **失败用标题当摘要**，不抛异常 |
 | `translate.py` | 每 `BATCH_SIZE = 10` 条 1 次 | 失败返回空字典，中文版照常 |
 | `trend.py` | 每期 1 次，少于 `MIN_ENTRIES_FOR_TREND = 4` 条直接跳过 | 返回 `(None, [])` |
 
@@ -387,14 +387,17 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 
 ### `narration/duration.py`（269 行）
 
-`estimate_seconds()` 量时长，`prompt_char_budget()` 给提示词的字数预算，
-`length_feedback()` 生成回炉反馈。`CHARS_PER_SECOND_ZH = 4.5`、
-`WORDS_PER_SECOND_EN = 2.6`、`MIXED_COPY_CHAR_FACTOR = 1.5`。
+`count_units()` 数长度（中文数字符、英文数词）、`estimate_seconds()` 估时长（参照用）、
+`unit_window()` 把配置的中文字数折算成英文词数、`seconds_for_units()` 反过来估秒数。
+回炉反馈在 `core/length.py::char_feedback`（摘要与文案共用，所以放 core）。
+`CHARS_PER_SECOND_ZH = 4.5`、`WORDS_PER_SECOND_EN = 2.6`、`MIXED_COPY_CHAR_FACTOR = 1.5`。
 
-**改这里要注意**：**长度只用一个单位定义。** 长文案的目标从**时长**推导，
-字数上下限由它换算。按字数推导在中英混排的技术稿上失效——
-`UD-Q8_K_XL` 这类标识符占字符多、占时长少，「4000 字」的稿子实测 7.4 分钟
-而不是 15 分钟（issue 007-C）。
+**改这里要注意**：**长度只用一个单位定义，而那个单位是字数。**
+短视频与口播的字数区间来自 `profile.yaml`（`shortvideo_chars` / `narration_chars`），
+提示词里说的、程序验收的是同一个数（`core/length.py::char_feedback`）。
+`estimate_seconds` 退为参照，不参与验收——同一个字数在中英比例不同的稿子上
+实测差 50%，拿它当验收标准会把合格的稿子反复回炉、让偏短的稿子静静通过。
+长文案仍按**时长**推导目标（它的长度跟原文体量走，不是固定窗口，见 issue 007-C）。
 
 ### `narration/script_builder.py`（584 行）
 

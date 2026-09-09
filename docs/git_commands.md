@@ -1538,3 +1538,97 @@ git status --short          # 预期：空
 
 **没跑** `-m live`，没跑真机 LLM。提示词搬迁靠 38 个变体的逐字节比对验证，
 不需要真机调用。
+
+---
+
+## 长度以字数为准 + 摘要长度检查 + 提示词优化（2026-09-09）
+
+根因：提示词说字数、程序验收看秒数，两个单位之间的换算比例随中英混排程度浮动
+50%（实测 228 字→31.1 秒＝7.3 字/秒，168 字→28.8 秒＝5.8 字/秒，纯中文 4.5）。
+后果双向且都不报错：250 字的稿子中文多时被判超时、带着「删掉 N 字」回炉，
+与提示词的 200 字下限对打（实测一次 312 秒 / 2 次调用）；168 字的稿子秒数落在
+窗口内就静静通过，比下限少 32 字。摘要更彻底——**根本没有长度检查**，
+要求 80~100 字，实测 7 篇产出 107~163 字。
+
+```bash
+# ---- 第 1 步：长度原语（字数验收 + 中英折算）----
+git add src/dna/core/length.py
+git add src/dna/narration/duration.py
+git add tests/narration/test_duration.py
+
+git commit -m "refactor(length): 长度验收从秒数改为字数，秒数退为参照
+
+- 新增 core/length.py::char_feedback：摘要与文案共用，所以放 core
+  （依赖只能从 narration 流向 pipeline，不能反向）
+- duration 新增 unit_window（中文字→英文词，走「字→秒→词」两步换算，
+  一个英文词的口播时长约等于两个半汉字，按字符 1:1 折算英文稿会长一倍）
+  与 seconds_for_units（参照用）
+- 删 length_feedback 与它的密度自校准：单位统一之后差值是减法，
+  observed_chars_per_second 那套换算随之退役"
+
+# ---- 第 2 步：配置项（同生共死，必须同一步）----
+git add src/dna/core/config.py config/profile.yaml
+
+git commit -m "feat(config): 各任务的目标字数区间可配
+
+- Profile 新增 summary_chars / shortvideo_chars / narration_chars
+- 一个数字同时做三件事：写进提示词、写进交稿自查清单、用于程序验收
+- *_duration_seconds 保留，但只用于提示词的开场句与产物记账，不参与验收"
+
+# ---- 第 3 步：文案与摘要改按字数验收 ----
+git add src/dna/narration/script_builder.py src/dna/narration/__init__.py
+git add src/dna/pipeline/summarize.py src/dna/pipeline/flow.py
+git add src/dna/produce/service.py
+
+git commit -m "fix(length): 文案按字数验收；摘要新增长度检查
+
+- build_short_video / build_narration 新增 chars 参数（来自 profile），
+  _generate 改数字数、报秒数；不给 chars 时按秒数推导，保持旧调用可用
+- **摘要先前完全没有长度检查**：max_length=400 之下写多长都通过，
+  实测要求 80~100 字而产出 107~163 字。现在数字数并回炉，
+  但只给 1 次（MAX_REWRITES=1，文案是 2 次）——摘要每条都跑，
+  回炉一次就把整期成本翻倍
+- schema 的 description 里不再写字数：它会随 JSON Schema 注入提示词，
+  等于第二个来源。先前 SummaryOut 写「60~120 字」而提示词说 80~100，
+  主标题写「≤14 字」而提示词说 ≤15，模型两个都不当真"
+
+# ---- 第 4 步：提示词优化 ----
+git add config/prompts/summarize.md config/prompts/shortvideo.zh.md
+
+git commit -m "refactor(prompts): 重排 summary 与 shortvideo，消掉自相矛盾的指令
+
+按「硬性约束 / 怎么写 / 不要写什么 / 交稿自查」四段重排，字数改回占位符。
+消掉的矛盾：
+- 「第一句必须是事件本身」vs「可以用悬念、设问开场」——保留前者（更具体，
+  而且和共用写作要求里的「禁止填充语」一致）
+- 「4~5 句」+ 200~250 字 ＝ 每句 40~60 字，与「可以用短句制造节奏」不可兼得
+  ——保留短句节奏，但要求每个短句后紧跟数据
+- 「严谨大量名词堆叠」语法不成立，按「严禁堆砌名词」实现（与同一行的
+  「口语化表达」一致）；实测模型按反面理解，产出了
+  「用自身评分Token的完整logit概率分布进行验证排序」这种念不出来的句子
+- summary 里「原标题」原本排在信息优先级第一位——标题是已给出的上下文，
+  不是可选信息点，这条的实际效果是让模型复述标题。改为「可以取信息，
+  但不要重述标题」"
+
+# ---- 第 5 步：测试与文档 ----
+git add tests/narration/test_script_builder.py tests/pipeline/test_summarize.py
+git add tests/pipeline/test_flow.py tests/produce/test_service.py
+git add docs/06_prompt_spec.md docs/04_architecture_src.md docs/git_commands.md
+
+git commit -m "test,docs: 假回复长度落进配置窗口；记下从秒数改字数的根因
+
+- 假回复先前是按秒数窗口调的，改成字数验收后会触发回炉、把剧本吃光，
+  测的就不是被测逻辑了。三处夹具跟着配置走并写明原因
+- test_duration 的密度换算用例换成「差值是减法」
+- 新增两条：配置的字数区间原样进提示词并原样验收 · 英文折算成词数不是字符数"
+
+git status --short          # 预期：空
+```
+
+验证（实测跑过）：
+
+```bash
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest -q            # 全量离线，全绿
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m frontends.cli.main doctor   # 0 FAIL
+dna prompt <id> -t shortvideo    # 提示词里出现「200~250 字」，与验收同源
+```
