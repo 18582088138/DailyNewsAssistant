@@ -36,6 +36,7 @@ from pydantic import BaseModel, Field
 
 from dna.core.config import Settings, get_settings
 from dna.core.logging import get_logger
+from dna.core.prompts import load_prompt
 from dna.llm.base import LLMProvider, system, user
 from dna.tts.segment import clean_for_speech
 
@@ -78,28 +79,13 @@ class PreparedSpeech:
     """没用上 LLM 的原因 / why the LLM result was not used（成功时为空）。"""
 
 
-_PROMPT = """你在为语音合成（TTS）准备朗读稿。把给你的文本改写成"念出来自然"的版本。
+# 提示词正文在 `config/prompts/tts_preprocess.md` / The prompt text lives in that file.
+PROMPT_NAME = "tts_preprocess"
 
-必须做的四件事：
-1. **不易读的写法改成读法**：英文缩写、型号、公式、符号、单位，写成中文里念得出来的
-   形式（例：`RTX 4060` → `RTX 四零六零`；`3.5x` → `三点五倍`；`≈` → `约等于`；
-   `P(A|B)` → `在 B 条件下 A 的概率`）。**已经广为人知的英文词保留原样**
-   （GPT、AI、CPU 这类不要翻译）
-2. **多音字换成同音的其他汉字**：只在会读错时才换，且**必须完全同音**
-   （例：容易被念成第二声的「模型」不动；而「重量级」若上下文会读成 chóng，
-   可写成「zhòng 量级」的同音替代字）。**人名、地名、机构名、产品名一律不动**
-3. **合理断句**：按正常朗读的呼吸停顿加逗号、句号；长句拆开。原文的分段保留
-4. **让声音更自然**：需要明显停顿的地方插入 `[pause:400ms]`（毫秒数自己定，
-   200~800 之间），标题与正文之间、列举项之间适合用它
 
-绝对不许做的事：
-- 不许增加、删除、改变任何**事实与信息**（数字、名称、结论都不能动）
-- 不许加开场白、结束语、语气词、评论
-- 不许把段落合并或重新组织
-- 不许输出 Markdown 标记、括号注释、拼音标注（`zhòng` 这种标注也不行，
-  要换字就直接换成汉字）
-
-字数应与原文接近。改完在 notes 里逐条说明改了什么（没改就给空列表）。"""
+def system_prompt() -> str:
+    """朗读友好化的 system prompt / The read-aloud rewriter's system prompt。"""
+    return load_prompt(PROMPT_NAME)
 
 
 def prepare_for_speech(
@@ -132,7 +118,7 @@ def prepare_for_speech(
     try:
         provider = llm or _default_llm()
         result = provider.chat_json(
-            [system(_PROMPT), user(cleaned)],
+            [system(system_prompt()), user(cleaned)],
             SpokenOut,
             temperature=0.2,
             # 输出与输入同量级，给两倍余量就够；不设上限时小模型会自己续写下去
@@ -171,4 +157,4 @@ def _default_llm() -> LLMProvider:
     return get_llm(cache=True)
 
 
-__all__ = ["PreparedSpeech", "SpokenOut", "prepare_for_speech"]
+__all__ = ["PROMPT_NAME", "PreparedSpeech", "SpokenOut", "prepare_for_speech", "system_prompt"]

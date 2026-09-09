@@ -160,18 +160,6 @@ def ensure_gui(settings: Settings | None = None) -> str:
     return gui_url(s)
 
 
-def stop_started(role: str | None = None) -> None:
-    """
-    杀掉本进程拉起来的服务 / Kill the children this process started.
-
-    只在测试与显式收尾时用；正常退出**不调**它（服务是共用的）。
-    """
-    for key in [role] if role else list(_STARTED):
-        process = _STARTED.pop(key, None)
-        if process is not None:
-            _terminate(process)
-
-
 # ---------------------------------------------------------------------------
 # 内部实现 / internals
 # ---------------------------------------------------------------------------
@@ -279,4 +267,4 @@ def _terminate(process: subprocess.Popen) -> None:
             pass
 
 
-__all__ = ["ServiceStatus", "ensure_gui", "ensure_service", "gui_url", "stop_started"]
+__all__ = ["ServiceStatus", "ensure_gui", "ensure_service", "gui_url"]

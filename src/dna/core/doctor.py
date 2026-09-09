@@ -245,6 +245,64 @@ def check_writable_dirs(settings: Settings) -> list[CheckResult]:
     return results
 
 
+def check_prompts() -> CheckResult:
+    """
+    提示词文件是否齐全可解析 / Whether every required prompt file is present and parses.
+
+    **这是花钱之前的一次免费自检。** 提示词缺失不会让请求失败——它会让请求带着
+    一个空的或半截的 system prompt 发出去，照样计费，产出是垃圾。
+    要求的清单写死在这里而不是扫目录：扫目录只能告诉你「有几个文件」，
+    说不出「少了哪一个」。
+    A free pre-flight before anything is billed: a missing prompt does not fail the
+    request, it issues a billed request with an empty system prompt. The list is
+    hard-coded rather than discovered, because scanning a directory can only report how
+    many files exist, never which one is missing.
+    """
+    from dna.core.errors import ConfigError
+    from dna.core.prompts import PROMPTS_DIR, load_prompt
+
+    # (文件名, 必须存在的块) / (file, blocks that must parse)
+    required: tuple[tuple[str, tuple[str, ...]], ...] = (
+        ("summarize", ("main",)),
+        ("translate", ("main",)),
+        ("trend", ("main",)),
+        ("shortvideo.zh", ("main",)),
+        ("shortvideo.en", ("main",)),
+        ("narration.zh", ("main",)),
+        ("narration.en", ("main",)),
+        ("longform_outline", ("main", "shape.feature", "shape.interview")),
+        ("longform_section", ("main", "context", "role.feature", "role.interview")),
+        ("tts_preprocess", ("main",)),
+        ("_shared/professionalism.zh", ("main",)),
+        ("_shared/professionalism.en", ("main",)),
+        ("_shared/instruction_block.zh", ("main",)),
+        ("_shared/instruction_block.en", ("main",)),
+        ("_shared/language_directive.en", ("main",)),
+    )
+
+    problems: list[str] = []
+    for name, blocks in required:
+        for block in blocks:
+            try:
+                if not load_prompt(name, block).strip():
+                    problems.append(f"{name}#{block} 是空的")
+            except ConfigError as exc:
+                problems.append(str(exc).split(" / ")[0])
+
+    if problems:
+        return CheckResult(
+            "提示词",
+            Status.FAIL,
+            f"{len(problems)} 项有问题：" + "；".join(problems[:3]),
+            hint=f"提示词正文放在 {PROMPTS_DIR}，缺文件时不能降级运行",
+        )
+    return CheckResult(
+        "提示词",
+        Status.OK,
+        f"{len(required)} 个文件齐全（{PROMPTS_DIR}）",
+    )
+
+
 def check_inbox(settings: Settings) -> CheckResult:
     """
     远程投递接口状态 / Status of the remote inbox.
@@ -351,6 +409,7 @@ def run_all(
     results.extend(check_packages())
     results.append(check_env_file(env_file))
     results.append(check_llm_config(s))
+    results.append(check_prompts())
     results.append(check_playwright())
     results.append(check_tts_service(s))
     results.extend(check_writable_dirs(s))
@@ -382,6 +441,7 @@ __all__ = [
     "check_llm_config",
     "check_packages",
     "check_playwright",
+    "check_prompts",
     "check_proxy",
     "check_python",
     "check_tts_service",

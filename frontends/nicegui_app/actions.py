@@ -473,14 +473,6 @@ async def import_tts_handoff(handoff: TTSHandoff, record: dict) -> ProduceResult
     return await run.io_bound(_work)
 
 
-def tts_service_label() -> str:
-    """顶栏上的 TTS 服务状态 / The TTS service's state for the header."""
-    settings = get_settings()
-    online = get_tts(settings).client.health()
-    return (f"TTS {'在线' if online else '未运行'}　{settings.tts_service_url}"
-            + ("" if online else "（合成时自动拉起）"))
-
-
 def production_text(
     article_id: str, kind: ProductionKind | str, lang: str = DEFAULT_LANGUAGE
 ) -> str:
@@ -633,7 +625,6 @@ __all__ = [
     "collect_tts_handoff",
     "import_tts_handoff",
     "open_tts_workbench",
-    "tts_service_label",
     "article_directory",
     "audio_estimate_seconds",
     "audio_for",
