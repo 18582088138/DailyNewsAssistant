@@ -22,6 +22,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from dna.core.logging import get_logger
+from dna.core.prompts import load_prompt
 from dna.llm.base import ChatMessage, LLMProvider, system, user
 
 logger = get_logger("pipeline.trend")
@@ -32,17 +33,13 @@ logger = get_logger("pipeline.trend")
 # the headlines.
 MIN_ENTRIES_FOR_TREND = 4
 
-SYSTEM_PROMPT = """你是一位 AI 领域的资深观察者，为每日 AI 日报撰写开篇的主线提炼。
+# 提示词正文在 `config/prompts/trend.md` / The prompt text lives in that file.
+PROMPT_NAME = "trend"
 
-要求：
-1. 通读全部条目，找出**跨条目的共性主线**——今天这批新闻共同指向什么
-2. 150~250 字，2~4 句
-3. 可以有判断和观点，但必须**建立在给出的条目之上**，不引入外部信息
-4. 不要逐条复述——那是下面的条目要做的事；你要说的是「把这些放在一起看，说明了什么」
-5. 如果今天的条目确实各不相关，就如实说明是分散的一天，并点出其中最值得注意的一两条
-6. 不要用「今天」「本期」之类的套话开头，直接进入内容
 
-同时给出 2~5 个当天的关键词，用于标签与检索。"""
+def system_prompt() -> str:
+    """趋势节点的 system prompt / The trend node's system prompt。"""
+    return load_prompt(PROMPT_NAME)
 
 
 class TrendOut(BaseModel):
@@ -75,7 +72,7 @@ def build_messages(entries: list[tuple[str, str]]) -> list[ChatMessage]:
     """
     lines = [f"{index}. {title}\n   {summary}" for index, (title, summary) in enumerate(entries, 1)]
     return [
-        system(SYSTEM_PROMPT),
+        system(system_prompt()),
         user("今日条目（按重要性排序）：\n\n" + "\n\n".join(lines)),
     ]
 
@@ -111,8 +108,9 @@ def build_trend(entries: list[tuple[str, str]], llm: LLMProvider) -> tuple[str |
 
 __all__ = [
     "MIN_ENTRIES_FOR_TREND",
-    "SYSTEM_PROMPT",
+    "PROMPT_NAME",
     "TrendOut",
     "build_messages",
     "build_trend",
+    "system_prompt",
 ]

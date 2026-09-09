@@ -28,6 +28,7 @@ from pydantic import BaseModel, Field
 
 from dna.core.logging import get_logger
 from dna.core.models import Cluster
+from dna.core.prompts import load_prompt
 from dna.llm.base import ChatMessage, LLMProvider, system, user
 
 logger = get_logger("pipeline.summarize")
@@ -36,6 +37,9 @@ logger = get_logger("pipeline.summarize")
 # 3000 字足够写出准确摘要，再多只是线性增加 input token 费用。
 # 3000 characters is plenty for an accurate summary; more only scales the input bill.
 MAX_BODY_CHARS = 3000
+
+# 提示词正文在 `config/prompts/summarize.md` / The prompt text lives in that file.
+PROMPT_NAME = "summarize"
 
 # 为什么要给指标排优先级 / Why the metrics are ranked
 #
@@ -50,23 +54,11 @@ MAX_BODY_CHARS = 3000
 # decides the item's worth sits three paragraphs down. Measured against a hand-written
 # reference, the model chose "167GB of 8-bit weights" where the reference chose "13B
 # activated parameters" — the latter is what tells a reader whether to open it.
-SYSTEM_PROMPT = """你是一位 AI 领域的资讯编辑，为每日 AI 日报撰写条目摘要。
 
-要求：
-1. 用 1~2 句话说清这条资讯的**核心事实**：谁、做了什么、关键数字或结论
-2. **信息要完整**：原文讲了几件事就要都覆盖到。如果原文既讲了模型发布、
-   又讲了第三方的量化/部署方案，两件事各占一句，不要只写前一半
-3. **挑最有价值的指标，不是最先出现的指标**。优先级从高到低：
-   榜单排名与得分 > 架构关键参数（总参数、激活参数、上下文长度）>
-   能力对比结论 > 次要细节（文件体积、依赖版本号、硬件型号）
-   句子放不下就舍弃低优先级的那个
-4. **每句都要带数字或专有名词**，不要出现只有形容词的句子
-5. 只写原文里有的内容，**不做任何推测、评价或补充背景**
-6. 不要用「本文介绍了」「据报道」这类空话开头，直接说事实
-7. 中文输出，60~120 字
-8. 产品名、公司名、版本号、性能数字**原样保留**，不得四舍五入或改写
 
-如果正文信息不足（只有标题），就基于标题写一句话，不要编造细节。"""
+def system_prompt() -> str:
+    """摘要节点的 system prompt / The summariser's system prompt。"""
+    return load_prompt(PROMPT_NAME)
 
 
 class SummaryOut(BaseModel):
@@ -129,7 +121,7 @@ def build_messages(cluster: Cluster, *, instructions: str = "") -> list[ChatMess
 
     from dna.narration.script_builder import instruction_block
 
-    prompt = SYSTEM_PROMPT + instruction_block(instructions)
+    prompt = system_prompt() + instruction_block(instructions)
     return [system(prompt), user("\n".join(lines))]
 
 
@@ -175,10 +167,11 @@ def summarize_all(clusters: list[Cluster], llm: LLMProvider) -> list[SummaryResu
 
 __all__ = [
     "MAX_BODY_CHARS",
-    "SYSTEM_PROMPT",
+    "PROMPT_NAME",
     "SummaryOut",
     "SummaryResult",
     "build_messages",
     "summarize_all",
     "summarize_cluster",
+    "system_prompt",
 ]

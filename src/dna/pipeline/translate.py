@@ -28,6 +28,7 @@ from __future__ import annotations
 from pydantic import BaseModel, Field
 
 from dna.core.logging import get_logger
+from dna.core.prompts import load_prompt
 from dna.llm.base import ChatMessage, LLMProvider, system, user
 
 logger = get_logger("pipeline.translate")
@@ -38,24 +39,13 @@ logger = get_logger("pipeline.translate")
 # the compromise between quality and cost.
 BATCH_SIZE = 10
 
-SYSTEM_PROMPT = """You are a bilingual editor for a daily AI-news digest.
+# 提示词正文在 `config/prompts/translate.md` / The prompt text lives in that file.
+PROMPT_NAME = "translate"
 
-Translate each Chinese entry into natural, publication-ready English.
 
-Rules:
-1. Translate meaning, not words — the result must read as if originally written in English
-2. Keep product names, company names, version numbers and metrics EXACTLY as given
-   (GPT-4o stays GPT-4o; 通义千问 becomes Qwen; 智谱 becomes Zhipu AI)
-3. **Be shorter than the Chinese.** One or two sentences, at most 45 words.
-   English needs more characters than Chinese to say the same thing, so a faithful
-   translation always renders longer — and these summaries sit in a fixed-width
-   column where the overflow is what the reader actually notices.
-   Compress by dropping hedges and connectives, never by dropping a figure:
-   every number, model name and benchmark in the Chinese must survive
-4. Titles stay headline-style: no trailing period, no "The" padding
-5. Do NOT add information the Chinese does not contain, and do NOT omit any
-
-Return one object per input entry, in the same order, keeping each entry's id."""
+def system_prompt() -> str:
+    """翻译节点的 system prompt / The translator's system prompt。"""
+    return load_prompt(PROMPT_NAME)
 
 
 class TranslatedEntry(BaseModel):
@@ -98,7 +88,7 @@ def build_messages(
 
     from dna.narration.script_builder import instruction_block
 
-    prompt = SYSTEM_PROMPT + instruction_block(instructions, "en")
+    prompt = system_prompt() + instruction_block(instructions, "en")
     return [system(prompt), user("\n".join(lines))]
 
 
@@ -180,7 +170,7 @@ def translate_text(text: str, llm: LLMProvider, *, kind: str = "段落") -> str 
         return None
 
     messages = [
-        system(SYSTEM_PROMPT),
+        system(system_prompt()),
         user(f"Translate this {kind} into English. Return only the translation.\n\n{text}"),
     ]
     try:
@@ -192,10 +182,11 @@ def translate_text(text: str, llm: LLMProvider, *, kind: str = "段落") -> str 
 
 __all__ = [
     "BATCH_SIZE",
-    "SYSTEM_PROMPT",
+    "PROMPT_NAME",
     "TranslatedEntry",
     "TranslationOut",
     "build_messages",
+    "system_prompt",
     "translate_all",
     "translate_batch",
     "translate_text",
