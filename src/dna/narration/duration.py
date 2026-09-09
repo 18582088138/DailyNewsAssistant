@@ -5,13 +5,11 @@
 Pure functions with no dependencies or I/O.
 
 为什么需要它 / Why this exists:
-    短视频稿必须落在 25~35 秒，口播稿必须落在 1~2 分钟——**时长是硬约束**，
-    超了在平台上就发不出去或会被截断。但 LLM 不会数秒，只会大致遵守字数提示。
-    因此生成之后必须由程序量一遍，超出区间就带着「你写长了 N 字」回炉重写。
-    Duration is a hard constraint: a script that overruns gets truncated or rejected by
-    the platform. An LLM cannot count seconds and only loosely honours a character hint,
-    so the result must be measured in code and sent back with a concrete delta when it
-    misses the window.
+    平台对时长有硬限制，但**模型不会数秒，只会数字数**。所以长度用字数管，
+    这里负责把字数换算成「大概多少秒」供人参照，以及提供计量用的纯函数。
+    The platform caps duration, but a model cannot count seconds — only characters. Length
+    is therefore governed in characters; this module converts to an approximate duration
+    for human reference and provides the counting primitives.
 
 语速取值 / The speaking rates:
     中文 **4.5 字/秒**、英文 **2.6 词/秒**。这是常规播报语速——太快听不清，
@@ -19,20 +17,24 @@ Pure functions with no dependencies or I/O.
     Normal broadcast pace. TTS can adjust slightly, but the script length must be
     written against these numbers in the first place.
 
-「告诉模型写多少字」和「验收时量多少秒」是两件事 / Budget and acceptance are separate:
-    验收永远按 `estimate_seconds`——它是物理量，不容商量。
-    但提示词里的字数预算走 `prompt_char_budget`，按中英混排的实际密度放大 1.5 倍。
-    两者混用会让稿子**时长达标而信息量不足**：模型照 135 字写完，30 秒的位置
-    只填了三分之二。见 `MIXED_COPY_CHAR_FACTOR` 的实测数据。
-    Acceptance always goes through `estimate_seconds`, which is physical and not
-    negotiable. The budget quoted in prompts goes through `prompt_char_budget`, scaled to
-    the density mixed copy actually has. Conflating the two yields scripts that meet the
-    duration while under-filling it — see the measurements on `MIXED_COPY_CHAR_FACTOR`.
+**验收看字数，不看秒数** / Acceptance is on the character count, not the duration:
+    字数区间来自 `profile.yaml`（`shortvideo_chars` 等），提示词里说的和程序检查的
+    是同一个数——见 `core/length.py::char_feedback`。
+    `estimate_seconds` 退为**参照**：记进产物、显示在界面上，但不参与验收。
+    因为同一个字数在中英比例不同的稿子上实测差 50%（200 字：混排约 27 秒、
+    纯中文约 44 秒），拿它当验收标准会把合格的稿子反复回炉，
+    而偏短的稿子只要秒数恰好落在窗口内就静静通过。
+    The window comes from `profile.yaml`, so the prompt and the check quote one number.
+    `estimate_seconds` is demoted to reference: recorded and displayed, never gating.
+    The same character count measures up to 50% apart depending on how much Latin text a
+    draft carries, so gating on it sends compliant drafts back and lets short ones pass.
 """
 
 from __future__ import annotations
 
 import re
+
+from dna.core.length import char_feedback
 
 # 语速 / speaking rates
 CHARS_PER_SECOND_ZH = 4.5
@@ -186,84 +188,55 @@ def within(seconds: float, low: float, high: float) -> bool:
     return low <= seconds <= high
 
 
-def length_feedback(
-    seconds: float,
-    low: float,
-    high: float,
-    *,
-    lang: str = "zh",
-    chars: int = 0,
-) -> str | None:
+def unit_window(low_chars: int, high_chars: int, *, lang: str = "zh") -> tuple[int, int]:
     """
-    生成回炉重写用的反馈 / Build the feedback for a rewrite.
+    配置里的中文字数区间 → 该语言的验收单位区间 / Config's window in the draft's unit.
 
-    落在区间内返回 None。超出时给出**具体差多少字**，而不是「请缩短」——
-    模糊的指令换来的是模糊的修改，往往一次砍太多或几乎没变。
-    Returns None when inside the window. Otherwise it states the concrete character
-    delta rather than "please shorten": a vague instruction yields a vague edit, usually
-    cutting far too much or barely anything.
+    中文原样返回；英文换成**词数**。折算走「中文字 → 秒 → 英文词」两步，
+    而不是直接乘一个字/词比例：
+        200 字 ÷ 6.75 字/秒 ＝ 29.6 秒 × 2.6 词/秒 ＝ 77 词
+    English goes through duration, not a direct character-to-word ratio.
 
-    参数 / Args:
-        chars: 上一稿的字符数。给了就按**这一稿实测的字符密度**换算差值，
-            不给则退回预设系数。这是自校准的关键：中英混排稿的密度差异很大，
-            用固定的 4.5 字/秒换算，一篇 8 字符/秒的技术稿会被要求「删 45 字」，
-            而实际需要删掉 80 字——于是第二稿仍然超时，白花一次调用。
-            The previous draft's character count. When supplied the delta is converted at
-            that draft's own measured density instead of a preset rate. This is what makes
-            the loop self-correcting: converting at a flat 4.5 characters per second tells
-            a draft running at 8 to cut 45 characters when 80 are needed, so the rewrite
-            still overruns and the call is wasted.
+    为什么不能直接按字数比例折算 / Why a direct ratio is wrong:
+        中文一个字约 0.15 秒，英文一个词约 0.38 秒——一个词顶两个半汉字的时长。
+        按 1:1 或按字符数折算，英文稿会长出一倍多，而时长才是平台的硬约束。
+        A word takes about two and a half times as long to speak as a Chinese
+        character, so any character-count ratio makes English scripts run long.
     """
-    if within(seconds, low, high):
-        return None
-
-    fallback = CHARS_PER_SECOND_ZH if lang == "zh" else WORDS_PER_SECOND_EN
-    rate = observed_chars_per_second(chars, seconds) if chars else fallback
-
-    # 反馈用稿子本身的语言写 / The feedback is written in the draft's own language.
-    #
-    # 给英文稿发中文指令，模型有相当概率**改回中文输出**——这一层的输入输出语言
-    # 应当一致，否则回炉反而把稿子毁了。
-    # A Chinese instruction attached to an English draft stands a real chance of flipping
-    # the output back to Chinese, so the rewrite would damage the draft rather than fix it.
-    if seconds > high:
-        delta = max(1, int((seconds - high) * rate))
-        if lang == "zh":
-            return (
-                f"上一稿约 {seconds:.0f} 秒，超出上限 {high:.0f} 秒。"
-                f"请**删掉约 {delta} 字**——优先删背景铺垫和重复论述，"
-                f"保留具体数字、方法名与结论。"
-            )
-        return (
-            f"The previous draft runs about {seconds:.0f}s, over the {high:.0f}s limit. "
-            f"**Cut roughly {delta} words.** Drop background and repetition first; "
-            f"keep every figure, method name and conclusion."
-        )
-
-    delta = max(1, int((low - seconds) * rate))
     if lang == "zh":
-        return (
-            f"上一稿约 {seconds:.0f} 秒，不足下限 {low:.0f} 秒。"
-            f"请**补充约 {delta} 字**——补技术细节、数据或对比，"
-            f"不要用背景介绍和套话凑长度。"
-        )
-    return (
-        f"The previous draft runs about {seconds:.0f}s, under the {low:.0f}s minimum. "
-        f"**Add roughly {delta} words** of technical detail, data or comparison. "
-        f"Do not pad with background or filler."
-    )
+        return low_chars, high_chars
+    zh_rate = CHARS_PER_SECOND_ZH * MIXED_COPY_CHAR_FACTOR
+    scale = WORDS_PER_SECOND_EN / zh_rate
+    return max(1, int(low_chars * scale)), max(2, int(high_chars * scale))
+
+
+def seconds_for_units(units: int, *, lang: str = "zh") -> float:
+    """
+    字数（或词数）→ 预计口播秒数 / Units to the duration they are expected to speak.
+
+    **只用于参照与记账，不用于验收。** 验收看字数（见 `char_feedback`）：
+    模型能数字数，数不了秒数，而同一个字数在中英混排比例不同的稿子上
+    实测能差出 50%——拿一个浮动 50% 的量当验收标准，产出必然被反复回炉。
+    For reference and bookkeeping only; acceptance is on the unit count. A model can
+    count characters but not seconds, and the same character count measures up to 50%
+    apart depending on how much Latin text a draft carries.
+    """
+    rate = CHARS_PER_SECOND_ZH * MIXED_COPY_CHAR_FACTOR if lang == "zh" else WORDS_PER_SECOND_EN
+    return round(units / rate, 1) if rate else 0.0
 
 
 __all__ = [
     "CHARS_PER_SECOND_ZH",
     "MIXED_COPY_CHAR_FACTOR",
     "WORDS_PER_SECOND_EN",
+    "char_feedback",
     "count_units",
     "estimate_seconds",
-    "length_feedback",
     "observed_chars_per_second",
     "prompt_char_budget",
+    "seconds_for_units",
     "spoken_text",
     "target_chars",
+    "unit_window",
     "within",
 ]
