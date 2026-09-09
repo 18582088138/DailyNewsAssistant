@@ -440,7 +440,22 @@ class Profile(BaseModel):
     max_images_per_article: int = 10
     max_videos_per_article: int = 2
 
-    # 三种文案的时长区间（秒）/ duration windows for the three script kinds
+    # 各任务的目标字数区间（中文字数）/ target length windows, in Chinese characters
+    #
+    # **字数是验收标准，秒数只是参照。** 提示词里要求的单位和程序验收的单位必须
+    # 是同一个，否则两边各说一套：一份 200 字的稿子按中英混排能是 27 秒、
+    # 按纯中文是 44 秒，拿秒数验收就会把一份合格的稿子反复回炉，
+    # 而一份 168 字的稿子因为秒数刚好落在窗口内就静静通过了。（issue 007-C 的续集）
+    # The prompt and the check must speak one unit. The same 200 characters measure
+    # anywhere from 27 to 44 seconds depending on how much Latin text they carry, so
+    # gating on seconds sends compliant drafts back while letting short ones through.
+    #
+    # 英文按语速折算成词数，不按字符（见 `duration.unit_window`）。
+    summary_chars: tuple[int, int] = (80, 100)
+    shortvideo_chars: tuple[int, int] = (200, 250)
+    narration_chars: tuple[int, int] = (400, 800)
+
+    # 时长区间（秒）/ duration windows —— 只用于提示词的开场句与产物记账
     video_duration_seconds: tuple[int, int] = (25, 35)
     narration_duration_seconds: tuple[int, int] = (60, 120)
     # 长文案的下限是**下限而不是目标**：原文短就写短，宁可 6 分钟也不注水凑 15 分钟。
