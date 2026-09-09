@@ -1431,3 +1431,110 @@ git commit -m "perf(tts): 界面挂在服务上（一份权重）；默认导出
 git status --short          # 预期：空
 ```
 
+
+---
+
+## 提示词外置 + 架构文档 + 过时内容清理（2026-09-08）
+
+一步一个功能面，`git add` 与 `git commit` 成对出现。
+`core/prompts.py` 与 `config/prompts/**` 同生共死，必须同一步——
+加载器没有文件读不出东西，文件没有加载器没人读。
+
+```bash
+# ---- 第 1 步：提示词加载器 + 提示词文件 ----
+git add src/dna/core/prompts.py
+git add config/prompts/README.md
+git add config/prompts/summarize.md config/prompts/translate.md config/prompts/trend.md
+git add config/prompts/shortvideo.zh.md config/prompts/shortvideo.en.md
+git add config/prompts/narration.zh.md config/prompts/narration.en.md
+git add config/prompts/longform_outline.md config/prompts/longform_section.md
+git add config/prompts/tts_preprocess.md
+git add config/prompts/_shared/
+
+git commit -m "feat(prompts): 提示词搬到 config/prompts/，一个任务一个文件
+
+- 加载器 core/prompts.py：{{占位符}}（不是 {name}，提示词里有 P(A|B) 这类字面量）、
+  整行 ## @key 分块（长文案的 专题/访谈 不必各存一份完整文件）
+- 缺文件/缺块/缺占位符取值一律 ConfigError，不降级：
+  空 system prompt 照样发请求、照样计费，只是产出是垃圾
+- 缓存键含 mtime，所以 dna gui 这种长驻进程改完提示词立刻生效
+- 提示词正文逐字节搬过来（38 个变体全量比对通过）：
+  LLM 缓存键是完整 messages，动一个空格就是全量 miss"
+
+# ---- 第 2 步：pipeline 三个节点改读文件 ----
+git add src/dna/pipeline/summarize.py src/dna/pipeline/translate.py src/dna/pipeline/trend.py
+
+git commit -m "refactor(pipeline): summarize/translate/trend 的提示词改从 config 读
+
+- SYSTEM_PROMPT 常量 → system_prompt() 函数，正文在 config/prompts/
+- 现有测试断言的是提示词里的中文子串，正好是这次搬迁的回归网"
+
+# ---- 第 3 步：narration 两个模块 ----
+git add src/dna/narration/script_builder.py src/dna/narration/longform.py
+git add src/dna/narration/__init__.py
+
+git commit -m "refactor(narration): 三种文案的提示词改从 config 读
+
+- PROFESSIONALISM / PROFESSIONALISM_EN 常量删除，rules_for(lang) 改读
+  _shared/professionalism.{zh,en}.md —— 改一处而不是六处
+- 长文案的 shape / role_rule / context 走同一文件的 @分块
+- 顺手修一处与常量矛盾的注释：article_block 写「截到 3000 字」，实际 6000"
+
+# ---- 第 4 步：tts 预处理 + doctor 自检 + 死代码 ----
+git add src/dna/tts/preprocess.py src/dna/tts/supervisor.py
+git add src/dna/core/doctor.py
+git add frontends/nicegui_app/actions.py
+
+git commit -m "refactor(tts,doctor): 朗读友好化提示词外置；doctor 增加提示词自检
+
+- doctor 的「提示词」一项：必需文件与分块是否齐全。清单硬编码而不是扫目录——
+  扫目录只能说「有几个文件」，说不出「少了哪一个」。这是花钱之前的免费自检
+- 删两处零引用死代码：supervisor.stop_started、actions.tts_service_label"
+
+# ---- 第 5 步：提示词调试台 ----
+git add src/dna/llm/capture.py
+git add src/dna/produce/prompt_lab.py
+git add src/dna/produce/service.py src/dna/produce/tasks.py
+git add frontends/cli/main.py
+
+git commit -m "feat(prompt-lab): dna prompt —— 看提示词、试提示词
+
+- 默认零调用零费用，只把提示词渲染出来；--run 才真机跑并计费
+- 拦在 provider 边界（_complete）而不是 build_messages：
+  chat_json 会追加一条带完整 JSON Schema 的指令，
+  在上一层看提示词会漏掉它，也漏掉回炉重写那几轮
+- render() 与 run() 都走 service.generate_text()，与 dna produce / GUI 同一个函数，
+  所以「调试台里验证过的提示词在应用里生效」是构造出来的事实而不是纪律；
+  单测 test_render_matches_what_produce_sends 逐字节比对两条路
+- service._generate/_load_article/_as_cluster 改公开，就是为了让调试台调同一个
+- --run 不写文件也不记台账：调试跑十次不该留十份垃圾，也不该搅乱产物历史"
+
+# ---- 第 6 步：文档与测试文档字符串清理 ----
+git add docs/04_architecture_src.md docs/04_architecture_frontends.md
+git add docs/06_prompt_spec.md docs/03_unit_tests.md
+git add README.md
+git add docs/git_commands.md
+
+git commit -m "docs: 补 04 架构文档两份；删测试里硬编码的「N passed」
+
+- 04_architecture_src.md / _frontends.md：每模块「职责·核心函数·关键常量·
+  改这里要注意什么」，末尾一张「症状 → 文件」索引表，供人工查阅与修改
+- 06_prompt_spec 改为只记「为什么这么写」，正文以 config/prompts/ 为准
+- 34 个测试文件 + docs/03 共 70 处硬编码用例数删掉：pytest 自己会报数，
+  写进文件只是每次改动都要重跑再逐个改，不保护任何东西
+  （保留复测命令、耗时、「零 LLM 调用零费用」这些判据）
+- docs/03 的「最近一次全量结果」改成「该阶段收尾时」：它自称最近，
+  实际停在几个阶段之前"
+
+git status --short          # 预期：空
+```
+
+验证（这一轮实际跑过的）：
+
+```bash
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest -q   # 全量离线，全绿
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m frontends.cli.main doctor   # 0 FAIL
+```
+
+**没跑** `-m live`，没跑真机 LLM。提示词搬迁靠 38 个变体的逐字节比对验证，
+不需要真机调用。

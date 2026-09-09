@@ -63,8 +63,15 @@ dna refetch <id>    # 重新抓取
 dna stats           # 台账统计
 dna version
 
+dna prompt --list           # 各任务读哪些提示词文件
+dna prompt <id> -t narration  # 看某个任务真正发出去的提示词（加 --run 才计费）
+
 # 以上命令全部不调用 LLM，不产生费用
 ```
+
+提示词正文在 `config/prompts/`，一个任务一个 Markdown 文件，
+改完用 `dna prompt` 验证——看到的与应用真正发出去的逐字节相同。
+详见 `config/prompts/README.md`。
 
 ---
 

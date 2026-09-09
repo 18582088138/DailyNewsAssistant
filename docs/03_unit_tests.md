@@ -49,7 +49,7 @@ $PY -m pytest --cov=dna          # 覆盖率（需 pytest-cov）
 
 ## P0 脚手架
 
-**最近一次全量结果：95 passed in 0.49s（0 failed）**
+**该阶段收尾时的全量结果：95 passed in 0.49s（0 failed）**
 
 ### `tests/core/test_config.py` — 配置加载
 
@@ -69,7 +69,7 @@ $PY -m pytest tests/core/test_config.py -v
 | `load_profile()` | 字段类型正确（`languages` 转 `Language` 枚举、时长转元组） |
 | 仓库自带配置 | `config/sources.yaml` 与 `profile.yaml` 必须真实可加载（防手写笔误） |
 
-**预期**：20 passed，< 2s，不联网、不碰真实 `outputs/` 与 `data/`。
+**预期**：< 2s，不联网、不碰真实 `outputs/` 与 `data/`。
 
 ---
 
@@ -90,7 +90,7 @@ $PY -m pytest tests/core/test_models.py -v
 | `entry_by_id()` | 命中与未命中——**重做功能的定位依据** |
 | **JSON 往返无损** | `_digest.json` 是可重放事实源，重做功能完全建立在这一点上 |
 
-**预期**：13 passed，< 2s。
+**预期**：< 2s。
 
 ---
 
@@ -111,7 +111,7 @@ $PY -m pytest tests/core/test_naming.py -v
 | `topic_dir_name()` | 两位补零序号 + slug；序号 < 1 报错 |
 | 端到端路径 | 用真实中文标题拼完整相对路径，逐段验证 Windows 可用 |
 
-**预期**：26 passed，< 1s，纯字符串运算无 I/O。
+**预期**：< 1s，纯字符串运算无 I/O。
 
 > 这组测试参数化程度高（37 个用例），因为目录名一旦出错是**运行期**才炸，且在 Windows 上错得很隐蔽。
 
@@ -136,7 +136,7 @@ $PY -m frontends.cli.main doctor -v
 | 目录可写 | 自动创建并写临时文件验证 |
 | 汇总 | `run_all` / `summarize` / `has_failure` |
 
-**预期**：19 passed，< 3s，只在 `tmp_path` 下建目录。
+**预期**：< 3s，只在 `tmp_path` 下建目录。
 
 **人工验证预期输出**（本机 2026-09-01）：
 
@@ -164,13 +164,13 @@ $PY -m pytest tests/frontends/test_cli.py -v
 | `dna sources` | 列出仓库自带订阅源 |
 | 无参数 | 打印帮助而非报错 |
 
-**预期**：7 passed，< 5s。
+**预期**：< 5s。
 
 ---
 
 ## P1 LLM 抽象层
 
-**最近一次全量结果：189 passed in 1.51s（0 failed，2 个 live 用例默认跳过）**
+**该阶段收尾时的全量结果：189 passed in 1.51s（0 failed，2 个 live 用例默认跳过）**
 
 ### `tests/llm/test_parsing.py` — LLM 输出解析
 
@@ -189,7 +189,7 @@ $PY -m pytest tests/llm/test_parsing.py -v
 | 异常 | 空输出 / 无 JSON / 括号未闭合 → `ProviderResponseError`，且报错被截断不灌日志 |
 | 思维链 | `strip_think_tags` 去 `<think>…</think>`，含与 JSON 提取的组合场景 |
 
-**预期**：24 passed，< 1s，纯字符串处理无 I/O。
+**预期**：< 1s，纯字符串处理无 I/O。
 
 ### `tests/llm/test_provider.py` — Provider 实现
 
@@ -212,7 +212,7 @@ $PY -m pytest tests/llm/test_provider.py -m live -v
 | Ollama | base_url 归一化（4 种写法）、标记为本地、复用同一套解析 |
 | health_check | 成功与失败路径 |
 
-**预期**：离线 31 passed；`-m live` 时 DeepSeek 用例真实调用通过，Ollama 未运行则跳过。
+**预期**：`-m live` 时 DeepSeek 用例真实调用通过，Ollama 未运行则跳过。
 
 ### `tests/llm/test_factory.py` — 工厂与容错
 
@@ -231,7 +231,7 @@ $PY -m pytest tests/llm/test_factory.py -v
 | get_llm 组装 | 备用与主相同 / 备用未配置 → 不挂备用（坏备用比没备用更糟） |
 | 类型契约 | `ResilientProvider` 本身是 `LLMProvider`，`chat_json` 可穿透使用 |
 
-**预期**：25 passed，< 2s。
+**预期**：< 2s。
 
 > 降级逻辑测得重是有原因的：OpenRouter 免费层限流已经在 doc_analyzer 上踩过（issue 002）。
 > 一期日报要跑十几次 LLM 调用，中途被限流就整期作废，而这类 bug 表现为「偶尔失败」，极难复现。
@@ -255,7 +255,7 @@ $PY -m pytest tests/llm/test_factory.py -v
 
 ## P2 信息源与抽取层
 
-**最近一次全量结果：316 passed in 2.31s（0 failed）** —— 本阶段**完全不涉及 LLM**，无费用。
+**该阶段收尾时的全量结果：316 passed in 2.31s（0 failed）** —— 本阶段**完全不涉及 LLM**，无费用。
 
 ### `tests/core/test_urls.py` — URL 规范化
 
@@ -274,7 +274,7 @@ $PY -m pytest tests/core/test_urls.py -v
 | `url_hash` | 稳定、跨追踪参数一致、不同文章不同、定长 16 位 |
 | `extract_urls` | 中文文本提取、去重保序、**剥掉结尾中英文标点**（手机转发几乎必带） |
 
-**预期**：41 passed，< 1s。
+**预期**：< 1s。
 
 > 规则太松会让同一篇文章在日报里出现两次；太严会把不同文章合并、丢内容。
 > 两种错误都只在生产数据上才显形，所以这里测得细。
@@ -297,7 +297,7 @@ $PY -m pytest tests/sources/test_rss.py -v
 | RSSHub 路由 | 5 种写法的拼接容错 |
 | **registry 错误隔离** | 一个源抛异常（含未预期类型）不中断整轮；per-source 计数；summary 体现失败数 |
 
-**预期**：25 passed，< 2s，全程离线（用 `tests/fixtures/sample_feed.xml`）。
+**预期**：< 2s，全程离线（用 `tests/fixtures/sample_feed.xml`）。
 
 ### `tests/sources/test_user_link.py` — 用户投递
 
@@ -312,7 +312,7 @@ $PY -m pytest tests/sources/test_user_link.py -v
 | via 标记 | GUI 手动粘贴 vs 飞书投递 |
 | UserLinkSource | 累积、**跨批次去重**、fetch 上限、clear |
 
-**预期**：16 passed，< 1s。
+**预期**：< 1s。
 
 ### `tests/extract/test_extract.py` — 正文与媒体抽取
 
@@ -335,7 +335,7 @@ $PY -m pytest tests/extract/test_extract.py -v
 | 视频 | bilibili iframe 识别为官方视频；广告 iframe 不误判 |
 | **出处可追溯** | 每个资产必带 `source_url` 与 `credit`——发布合规要求，事后补不回来 |
 
-**预期**：26 passed，< 3s，全程离线（用 `tests/fixtures/sample_article.html`）。
+**预期**：< 3s，全程离线（用 `tests/fixtures/sample_article.html`）。
 
 ### P2 真机验证
 
@@ -354,7 +354,7 @@ $PY -m frontends.cli.main fetch --source qbitai --limit 1 --extract   # 含正�
 
 ## P2+ 落盘与台账（应用户要求从 P4 提前）
 
-**最近一次全量结果：402 passed in 4.67s（0 failed）** —— 本阶段**完全不涉及 LLM**，无费用。
+**该阶段收尾时的全量结果：402 passed in 4.67s（0 failed）** —— 本阶段**完全不涉及 LLM**，无费用。
 
 ### `tests/sources/test_filters.py` — 条目过滤
 
@@ -373,7 +373,7 @@ $PY -m pytest tests/sources/test_filters.py -v
 | 快路径 | 无规则时全量保留，不逐条判断 |
 | 丢弃原因统计 | 用户要能知道「今天为什么只有 N 条」 |
 
-**预期**：22 passed，< 1s，纯函数无 I/O。
+**预期**：< 1s，纯函数无 I/O。
 
 ### `tests/store/test_ledger.py` — 文章台账（总表）
 
@@ -391,7 +391,7 @@ $PY -m pytest tests/store/test_ledger.py -v
 | 查询 | 按状态 / 来源 / 关键词筛选，按首次出现时间倒序 |
 | 统计 | count_by_status / count_by_source / total / pending_ids |
 
-**预期**：23 passed，< 2s，只在 tmp_path 下建库。
+**预期**：< 2s，只在 tmp_path 下建库。
 
 ### `tests/store/test_article_store.py` — 文章落盘
 
@@ -411,7 +411,7 @@ $PY -m pytest tests/store/test_article_store.py -v
 | 出处 sidecar | 每张图配同名 .json，图片被单独拷走时信息不丢 |
 | **失败隔离** | 单张图失败不影响正文落盘，原因记入 skipped_images |
 
-**预期**：20 passed，< 2s，图片下载全部 monkeypatch 拦截，不联网。
+**预期**：< 2s，图片下载全部 monkeypatch 拦截，不联网。
 
 ### P2+ 真机验证
 

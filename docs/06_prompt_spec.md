@@ -5,6 +5,45 @@
 
 ---
 
+## 提示词正文不在这份文档里
+
+**唯一来源是 `config/prompts/`**，一个任务一个 Markdown 文件。
+本文只记**为什么这么写**：调优记录、实测对照、踩过的坑。
+下面各节引用的提示词片段是**摘录**，正文以 `config/prompts/` 为准。
+
+```
+config/prompts/
+├── README.md                        改法、{{占位符}} 与 ## @分块 语法
+├── summarize.md · translate.md · trend.md
+├── shortvideo.{zh,en}.md · narration.{zh,en}.md
+├── longform_outline.md · longform_section.md
+├── tts_preprocess.md
+└── _shared/                         被多个任务引用的片段
+    ├── professionalism.{zh,en}.md   三种文案共用的写作要求
+    ├── instruction_block.{zh,en}.md
+    └── language_directive.en.md
+```
+
+调一句话之后的验证顺序（详见 `config/prompts/README.md`）：
+
+```bash
+dna prompt --list                       # 各任务读哪些文件
+dna prompt <id> -t narration            # 看真正发出去的提示词（**零费用**）
+dna prompt <id> -t narration --run      # 真机跑一次看产物（**计费**）
+dna produce <id> -k narration --force   # 满意了再正式生成
+```
+
+`dna prompt` 看到的提示词与 `dna produce` / 工作台点「重做」发出去的**逐字节相同**：
+两条路都走 `dna.produce.service.generate_text()`，只有注入的 provider 不同
+（`src/dna/produce/prompt_lab.py`、`src/dna/llm/capture.py`）。
+所以在调试台里验证过的提示词，在应用里必然生效——这一条有单测护着
+（`tests/produce/test_prompt_lab.py::test_render_matches_what_produce_sends`）。
+
+**改完会 LLM 缓存 miss，这是对的**：缓存键是完整 messages，改一个字就换一个键，
+于是拿不到旧答案。反过来说，没改而重跑一次是免费的。
+
+---
+
 ## 零、通用约束
 
 **所有节点共同遵守：**
@@ -24,7 +63,8 @@
 
 ## 一、summarize —— 条目摘要
 
-**位置**：`src/dna/pipeline/summarize.py`　**调用次数**：每个事件一次
+**提示词**：`config/prompts/summarize.md`　**代码**：`src/dna/pipeline/summarize.py`
+**调用次数**：每个事件一次
 
 ### 输入
 
@@ -92,7 +132,8 @@ class SummaryOut(BaseModel):
 
 ## 二、translate —— 双语翻译
 
-**位置**：`src/dna/pipeline/translate.py`　**调用次数**：每 10 条一次（批量）
+**提示词**：`config/prompts/translate.md`　**代码**：`src/dna/pipeline/translate.py`
+**调用次数**：每 10 条一次（批量）
 
 ### 输入
 
@@ -141,7 +182,8 @@ class SummaryOut(BaseModel):
 
 ## 三、trend —— 当日主线提炼
 
-**位置**：`src/dna/pipeline/trend.py`　**调用次数**：整期一次
+**提示词**：`config/prompts/trend.md`　**代码**：`src/dna/pipeline/trend.py`
+**调用次数**：整期一次
 
 ### 输入
 
@@ -193,7 +235,7 @@ class SummaryOut(BaseModel):
 **同样的秒数里装进多少事实**。「不要白话」不是用词问题——一句没有数字、
 没有专有名词的话，就是白占了那两秒。
 
-共用的约束写在 `narration/script_builder.PROFESSIONALISM`：
+共用的约束写在 `config/prompts/_shared/professionalism.zh.md`（经 `script_builder.rules_for()` 读入）：
 
 > 1. **信息密度优先，这是第一要求**。每一句都必须携带至少一个具体信息点——
 >    一个数字、一个专有名词、一项能力、或一个明确结论。写不出信息点的句子直接删掉
@@ -340,9 +382,14 @@ clean → dedup → score  │  summarize → translate → trend
 
 ## 六、相关
 
+- **怎么改提示词**：`config/prompts/README.md`
+- **提示词调试台**：`dna prompt`（`src/dna/produce/prompt_lab.py`）
+- 加载器：`src/dna/core/prompts.py`（`{{占位符}}` · `## @分块` · 改完自动重载）
 - LLM 纪律：[00_STAGE_SUMMARY.md](00_STAGE_SUMMARY.md) §四bis
 - 缓存实现：`src/dna/llm/cache.py`
-- 单元测试：`tests/pipeline/test_summarize.py` · `test_translate.py` · `test_trend.py`
+- 架构地图：[04_architecture_src.md](04_architecture_src.md)
+- 单元测试：`tests/pipeline/test_summarize.py` · `test_translate.py` · `test_trend.py` ·
+  `tests/core/test_prompts.py` · `tests/produce/test_prompt_lab.py`
 
 ---
 
@@ -350,7 +397,7 @@ clean → dedup → score  │  summarize → translate → trend
 
 ### 英文写作要求是**重写的，不是翻译的**
 
-`script_builder.PROFESSIONALISM_EN` 与中文那份是同一套要求，但逐条用英文重写。
+`config/prompts/_shared/professionalism.en.md` 与中文那份是同一套要求，但逐条用英文重写。
 
 理由：它是**给模型看的指令**，不是产物。指令用目标语言写，模型遵守得明显更好；
 而且「白话」「套话」这些词在中文语境里的具体所指，直译过去会变成空泛的
@@ -393,7 +440,7 @@ clean → dedup → score  │  summarize → translate → trend
 
 ### 英文总结要更短
 
-`translate.SYSTEM_PROMPT` 第 3 条从「与原文长度相当」改成**至多 45 词**，
+`config/prompts/translate.md` 第 3 条从「与原文长度相当」改成**至多 45 词**，
 `TranslatedEntry.summary_en` 的 `max_length` 从 800 收到 400。
 
 上限是这条规则的最后一道防线：提示词是建议，schema 是约束——

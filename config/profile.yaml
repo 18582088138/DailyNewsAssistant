@@ -53,8 +53,8 @@ summary_max_sentences: 2
 # 单篇需要更多时：dna add <链接> --max-images 20
 # 按源单独设置写在 config/sources.yaml 的 max_images / max_videos。
 # ------------------------------------------------------------
-max_images_per_article: 10
-max_videos_per_article: 2
+max_images_per_article: 100
+max_videos_per_article: 10
 
 # ------------------------------------------------------------
 # 三种文案的目标时长区间（秒）/ target duration windows for the three script kinds

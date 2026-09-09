@@ -40,4 +40,4 @@ Thumbs.db
 test_prompt/
 
 # ---- tests 仅本地测试，不入库 ----
-./tests
+tests/
