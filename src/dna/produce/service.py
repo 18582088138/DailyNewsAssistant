@@ -615,7 +615,9 @@ def generate_text(
             from dna.pipeline.summarize import summarize_cluster
 
             cluster = as_cluster(article, article_id)
-            result = summarize_cluster(cluster, llm, instructions=instructions)
+            result = summarize_cluster(
+                cluster, llm, instructions=instructions, chars=profile.summary_chars
+            )
             if result.degraded:
                 raise RuntimeError("摘要调用失败，已退回标题；请重试")
             body = front_matter(article, "总结") + result.summary + "\n"
@@ -645,6 +647,7 @@ def generate_text(
             llm,
             low=low,
             high=high,
+            chars=profile.shortvideo_chars,
             cta=profile.cta_line,
             lang=lang,
             instructions=instructions,
@@ -665,6 +668,7 @@ def generate_text(
             llm,
             low=low,
             high=high,
+            chars=profile.narration_chars,
             cta=profile.cta_line,
             lang=lang,
             instructions=instructions,

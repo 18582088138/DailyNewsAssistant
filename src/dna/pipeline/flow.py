@@ -137,7 +137,7 @@ def run_daily(
 
     # -- 调用 LLM 的后半段 / the billed half ---------------------------------
     clusters = [c for c, _, _ in report.ranked]
-    summary_results = summarize.summarize_all(clusters, llm)
+    summary_results = summarize.summarize_all(clusters, llm, chars=prof.summary_chars)
     report.summaries_degraded = sum(1 for r in summary_results if r.degraded)
 
     digest = _assemble(

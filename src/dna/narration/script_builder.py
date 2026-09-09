@@ -43,10 +43,11 @@ from dna.core.models import Article
 from dna.core.prompts import load_prompt, render_prompt
 from dna.llm.base import ChatMessage, LLMProvider, assistant, system, user
 from dna.narration.duration import (
+    char_feedback,
     count_units,
     estimate_seconds,
-    length_feedback,
     prompt_char_budget,
+    unit_window,
 )
 
 logger = get_logger("narration.script_builder")
@@ -141,6 +142,24 @@ def instruction_block(instructions: str, lang: str = "zh") -> str:
     return f"\n\n{heading}\n{text}"
 
 
+def _window(
+    chars: tuple[int, int] | None, low: float, high: float, lang: str
+) -> tuple[int, int]:
+    """
+    定出这一篇的字数区间 / Resolve this piece's length window.
+
+    `chars` 来自 `profile.yaml`（中文字数），是**验收标准**。
+    没给的话按秒数推导——这条退路只为让不带配置的调用（单测）继续可用，
+    生产路径一律由 profile 提供。
+    `chars` comes from the profile and is what acceptance is measured against. The
+    seconds-derived fallback exists only so calls without config (unit tests) keep
+    working; the production path always supplies it.
+    """
+    if chars is not None:
+        return unit_window(chars[0], chars[1], lang=lang)
+    return prompt_char_budget(low, lang=lang), prompt_char_budget(high, lang=lang)
+
+
 @dataclass
 class ScriptResult:
     """
@@ -167,16 +186,18 @@ class ScriptResult:
 class ShortVideoOut(BaseModel):
     """短视频文案的结构化输出 / Structured output of a short-video script."""
 
-    title: str = Field(max_length=20, description="主标题，≤14 字，有冲击力，不用标点结尾")
-    subtitle: str = Field(max_length=30, description="副标题，≤20 字，补充关键信息或数据")
+    # description 里不写字数上限：那会和提示词里的数字打架，而提示词才是可配的那个。
+    # max_length 只是最后一道防线，比提示词的要求留出余量。
+    title: str = Field(max_length=24, description="主标题，有冲击力，不用标点结尾")
+    subtitle: str = Field(max_length=36, description="副标题，补充关键信息或数据")
     script: str = Field(min_length=40, description="口播正文，不含标题，不含角色名")
 
 
 class NarrationOut(BaseModel):
     """口播文案的结构化输出 / Structured output of a voice-over script."""
 
-    title: str = Field(max_length=20, description="主标题，≤14 字，写事件本身")
-    subtitle: str = Field(max_length=30, description="副标题，≤20 字，堆亮点与意义")
+    title: str = Field(max_length=24, description="主标题，写事件本身")
+    subtitle: str = Field(max_length=36, description="副标题，堆亮点与意义")
     script: str = Field(min_length=120, description="口播正文，连贯成段，不分小标题")
 
 
@@ -186,6 +207,7 @@ def build_short_video(
     *,
     low: float = 25.0,
     high: float = 35.0,
+    chars: tuple[int, int] | None = None,
     cta: str = DEFAULT_CTA,
     lang: str = "zh",
     instructions: str = "",
@@ -210,10 +232,10 @@ def build_short_video(
     """
     if lang != "zh":
         return _build_english_short_video(
-            article, llm, low=low, high=high, instructions=instructions
+            article, llm, low=low, high=high, chars=chars, instructions=instructions
         )
 
-    lo_chars, hi_chars = prompt_char_budget(low), prompt_char_budget(high)
+    lo_chars, hi_chars = _window(chars, low, high, "zh")
     prompt = render_prompt(
         f"{PROMPT_SHORTVIDEO}.zh",
         rules=rules_for("zh"),
@@ -230,8 +252,8 @@ def build_short_video(
         article=article,
         schema=ShortVideoOut,
         extract=lambda out: (out.script, out.title, out.subtitle),
-        low=low,
-        high=high,
+        low_units=lo_chars,
+        high_units=hi_chars,
         label="短视频",
     )
 
@@ -242,6 +264,7 @@ def _build_english_short_video(
     *,
     low: float,
     high: float,
+    chars: tuple[int, int] | None,
     instructions: str,
 ) -> ScriptResult:
     """
@@ -252,8 +275,7 @@ def _build_english_short_video(
     Written natively rather than translated: a thirty-second Chinese script is not a
     thirty-second English one, and duration is what these kinds are accepted on.
     """
-    lo_words = prompt_char_budget(low, lang="en")
-    hi_words = prompt_char_budget(high, lang="en")
+    lo_words, hi_words = _window(chars, low, high, "en")
     prompt = render_prompt(
         f"{PROMPT_SHORTVIDEO}.en",
         rules=rules_for("en"),
@@ -270,8 +292,8 @@ def _build_english_short_video(
         article=article,
         schema=ShortVideoOut,
         extract=lambda out: (out.script, out.title, out.subtitle),
-        low=low,
-        high=high,
+        low_units=lo_words,
+        high_units=hi_words,
         label="short video",
         lang="en",
     )
@@ -283,6 +305,7 @@ def build_narration(
     *,
     low: float = 60.0,
     high: float = 120.0,
+    chars: tuple[int, int] | None = None,
     cta: str = DEFAULT_CTA,
     lang: str = "zh",
     instructions: str = "",
@@ -303,10 +326,10 @@ def build_narration(
     """
     if lang != "zh":
         return _build_english_narration(
-            article, llm, low=low, high=high, instructions=instructions
+            article, llm, low=low, high=high, chars=chars, instructions=instructions
         )
 
-    lo_chars, hi_chars = prompt_char_budget(low), prompt_char_budget(high)
+    lo_chars, hi_chars = _window(chars, low, high, "zh")
     prompt = render_prompt(
         f"{PROMPT_NARRATION}.zh",
         rules=rules_for("zh"),
@@ -324,8 +347,8 @@ def build_narration(
         article=article,
         schema=NarrationOut,
         extract=lambda out: (out.script, out.title, out.subtitle),
-        low=low,
-        high=high,
+        low_units=lo_chars,
+        high_units=hi_chars,
         label="口播",
     )
 
@@ -336,11 +359,11 @@ def _build_english_narration(
     *,
     low: float,
     high: float,
+    chars: tuple[int, int] | None,
     instructions: str,
 ) -> ScriptResult:
     """英文版口播稿 / The English voice-over script（原生写，理由同短视频）。"""
-    lo_words = prompt_char_budget(low, lang="en")
-    hi_words = prompt_char_budget(high, lang="en")
+    lo_words, hi_words = _window(chars, low, high, "en")
     prompt = render_prompt(
         f"{PROMPT_NARRATION}.en",
         rules=rules_for("en"),
@@ -357,8 +380,8 @@ def _build_english_narration(
         article=article,
         schema=NarrationOut,
         extract=lambda out: (out.script, out.title, out.subtitle),
-        low=low,
-        high=high,
+        low_units=lo_words,
+        high_units=hi_words,
         label="voice-over",
         lang="en",
     )
@@ -376,13 +399,20 @@ def _generate(
     article: Article,
     schema: type[BaseModel],
     extract,  # noqa: ANN001 - 各 schema 字段不同，由调用方给取值函数
-    low: float,
-    high: float,
+    low_units: int,
+    high_units: int,
     label: str,
     lang: str = "zh",
 ) -> ScriptResult:
     """
-    生成 + 量时长 + 回炉 / Generate, measure, and rewrite if the duration misses.
+    生成 + 数字数 + 回炉 / Generate, count, and rewrite if the length misses.
+
+    **验收看字数，秒数只记账。** 提示词里要求的单位与这里检查的单位是同一个，
+    所以差值是减法。先前验收看秒数，而提示词说的是字数——同一个字数在中英比例
+    不同的稿子上实测差 50%，于是合格的稿子被反复回炉，偏短的稿子静静通过。
+    Acceptance is on the unit count while the duration is only recorded. The prompt and
+    this check speak one unit, so the delta is a subtraction. Gating on seconds while
+    prompting in characters sent compliant drafts back and let short ones through.
 
     回炉时把**上一稿原文**作为 assistant 消息带回去，再附上具体差值。
     只发一句「太长了」而不给上一稿，模型会从头重写一篇完全不同的稿子，
@@ -400,6 +430,10 @@ def _generate(
         calls += 1
 
         text, title, subtitle = extract(out)
+        # 单位随语言走：中文数字符、英文数词。混用会得出「上一稿 900 字符，
+        # 请删掉 300 words」这种自相矛盾的指令。
+        # The unit follows the language; mixing them yields a self-contradicting delta.
+        units = count_units(text, lang=lang)
         seconds = estimate_seconds(text)
         result = ScriptResult(
             text=text.strip(),
@@ -410,39 +444,29 @@ def _generate(
             subtitle=subtitle.strip(),
         )
 
-        # 带上字符数：差值按**这一稿实测的字符密度**换算，而不是预设的 4.5 字/秒。
-        # 技术稿实测能到 8 字符/秒，按 4.5 算会少要求删掉一半，第二稿仍然超时。
-        # The character count is passed so the delta is converted at this draft's measured
-        # density rather than a preset 4.5/s: technical copy reaches 8, and the preset
-        # under-asks by half, leaving the rewrite still over the limit.
-        # 单位随语言走：中文数字符、英文数词。混用会得出「上一稿 900 字符，
-        # 请删掉 300 words」这种自相矛盾的指令。
-        # The unit follows the language; mixing them yields a self-contradicting delta.
-        feedback = length_feedback(
-            seconds, low, high, lang=lang, chars=count_units(text, lang=lang)
-        )
+        feedback = char_feedback(units, low_units, high_units, lang=lang)
         if feedback is None:
-            logger.info("%s文案完成：%.0f 秒，%d 字，%d 次调用", label, seconds, len(text), calls)
-            return result
-
-        if attempt == MAX_REWRITES:
-            # 试到上限仍不达标：**返回它而不是报错**。一篇 38 秒的稿子仍然可用，
-            # 人手动删两句就行；为此让整篇产物失败是不划算的。
-            # Still off after the last attempt: return it rather than fail. A 38-second
-            # script is still usable with a manual trim, and failing the whole production
-            # over it is a bad trade.
-            result.within_target = False
-            logger.warning(
-                "%s文案 %d 次仍未落入 %.0f~%.0f 秒（实际 %.0f 秒），按现状返回",
-                label,
-                calls,
-                low,
-                high,
-                seconds,
+            logger.info(
+                "%s文案完成：%d 字（目标 %d~%d），约 %.0f 秒，%d 次调用",
+                label, units, low_units, high_units, seconds, calls,
             )
             return result
 
-        logger.debug("%s文案 %.0f 秒，超出 %.0f~%.0f，回炉重写", label, seconds, low, high)
+        if attempt == MAX_REWRITES:
+            # 试到上限仍不达标：**返回它而不是报错**。差十几个字的稿子仍然可用，
+            # 人手动删两句就行；为此让整篇产物失败是不划算的。
+            # Still off after the last attempt: return it rather than fail — a draft a
+            # dozen characters out is usable with a manual trim.
+            result.within_target = False
+            logger.warning(
+                "%s文案 %d 次仍未落入 %d~%d 字（实际 %d 字，约 %.0f 秒），按现状返回",
+                label, calls, low_units, high_units, units, seconds,
+            )
+            return result
+
+        logger.debug(
+            "%s文案 %d 字，超出 %d~%d，回炉重写", label, units, low_units, high_units
+        )
         messages = [*messages, assistant(text), user(feedback)]
 
     return result  # pragma: no cover - 循环必然返回

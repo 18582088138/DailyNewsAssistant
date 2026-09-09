@@ -26,10 +26,11 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
+from dna.core.length import char_feedback
 from dna.core.logging import get_logger
 from dna.core.models import Cluster
-from dna.core.prompts import load_prompt
-from dna.llm.base import ChatMessage, LLMProvider, system, user
+from dna.core.prompts import render_prompt
+from dna.llm.base import ChatMessage, LLMProvider, assistant, system, user
 
 logger = get_logger("pipeline.summarize")
 
@@ -40,6 +41,14 @@ MAX_BODY_CHARS = 3000
 
 # 提示词正文在 `config/prompts/summarize.md` / The prompt text lives in that file.
 PROMPT_NAME = "summarize"
+
+# 摘要的回炉次数上限 / how many rewrites a summary is allowed
+#
+# **只给 1 次，文案给 2 次。** 摘要是**每条都跑**的——一期几十条，回炉一次就把
+# 整期成本翻倍。文案是单篇按需跑的，多试一次只影响那一篇。
+# Summaries run for every entry, so one rewrite already doubles an issue's cost, while a
+# script is produced one article at a time on request.
+MAX_REWRITES = 1
 
 # 为什么要给指标排优先级 / Why the metrics are ranked
 #
@@ -56,9 +65,25 @@ PROMPT_NAME = "summarize"
 # activated parameters" — the latter is what tells a reader whether to open it.
 
 
-def system_prompt() -> str:
-    """摘要节点的 system prompt / The summariser's system prompt。"""
-    return load_prompt(PROMPT_NAME)
+DEFAULT_CHARS = (80, 100)
+"""不传 `chars` 时提示词里写的字数区间 / the window quoted when none is supplied.
+
+生产路径一律由 `profile.summary_chars` 提供；这个默认值只为让不带配置的调用
+（单测、`build_messages` 的纯函数测试）继续可用。
+"""
+
+
+def system_prompt(chars: tuple[int, int] | None = None) -> str:
+    """
+    摘要节点的 system prompt / The summariser's system prompt.
+
+    字数区间**注入提示词**：提示词里说的数字和 `summarize_cluster` 验收的数字
+    必须是同一个，否则又回到「配置说一套、提示词说一套、验收看第三套」。
+    The window is injected so the number quoted to the model and the number checked in
+    code are the same one.
+    """
+    low, high = chars or DEFAULT_CHARS
+    return render_prompt(PROMPT_NAME, lo_chars=low, hi_chars=high)
 
 
 class SummaryOut(BaseModel):
@@ -73,7 +98,10 @@ class SummaryOut(BaseModel):
     summary: str = Field(
         min_length=10,
         max_length=400,
-        description="1~2 句中文摘要，60~120 字，只陈述原文事实",
+        # 不写字数：字数由 profile.summary_chars 定、由提示词说、由程序验收。
+        # 写在这里等于第二个来源——description 会随 JSON Schema 注入提示词，
+        # 模型于是同时看到两个不同的数字，两个都不当真。
+        description="1~2 句中文摘要，只陈述原文事实，长度按提示词的要求",
     )
     tags: list[str] = Field(
         default_factory=list,
@@ -90,9 +118,18 @@ class SummaryResult:
     tags: list[str]
     degraded: bool = False
     """True 表示 LLM 调用失败、退回用标题 / the LLM call failed and the title was used."""
+    calls: int = 0
+    """这条花了几次调用（含回炉）/ how many calls this entry cost, rewrites included."""
+    within_target: bool = True
+    """字数是否落在目标区间 / whether the length landed inside the target window."""
 
 
-def build_messages(cluster: Cluster, *, instructions: str = "") -> list[ChatMessage]:
+def build_messages(
+    cluster: Cluster,
+    *,
+    instructions: str = "",
+    chars: tuple[int, int] | None = None,
+) -> list[ChatMessage]:
     """
     构造提示词 / Build the prompt.
 
@@ -121,32 +158,78 @@ def build_messages(cluster: Cluster, *, instructions: str = "") -> list[ChatMess
 
     from dna.narration.script_builder import instruction_block
 
-    prompt = system_prompt() + instruction_block(instructions)
+    prompt = system_prompt(chars) + instruction_block(instructions)
     return [system(prompt), user("\n".join(lines))]
 
 
 def summarize_cluster(
-    cluster: Cluster, llm: LLMProvider, *, instructions: str = ""
+    cluster: Cluster,
+    llm: LLMProvider,
+    *,
+    instructions: str = "",
+    chars: tuple[int, int] | None = None,
 ) -> SummaryResult:
     """
     为一个事件生成摘要 / Summarise one event.
 
+    参数 / Args:
+        chars: 目标字数区间（来自 `profile.summary_chars`）。给了就**验收字数**：
+            超出区间时带着确切差值回炉重写一次。不给则不检查长度。
+
     失败时降级为标题，**不抛异常**——理由见模块文档。
     Failures degrade to the title rather than raising; see the module docstring.
     """
-    try:
-        out = llm.chat_json(
-            build_messages(cluster, instructions=instructions), SummaryOut, temperature=0.3
-        )
-    except Exception as exc:  # noqa: BLE001 - 单条失败不能毁掉整期日报
-        logger.warning("摘要失败，退回使用标题：%s —— %s", cluster.canonical.title[:40], exc)
-        return SummaryResult(summary=cluster.canonical.title, tags=[], degraded=True)
+    messages = build_messages(cluster, instructions=instructions, chars=chars)
+    calls = 0
+    summary = ""
+    tags: list[str] = []
 
-    summary = out.summary.strip() or cluster.canonical.title
-    return SummaryResult(summary=summary, tags=[t.strip() for t in out.tags if t.strip()])
+    for attempt in range(MAX_REWRITES + 1):
+        try:
+            out = llm.chat_json(messages, SummaryOut, temperature=0.3)
+        except Exception as exc:  # noqa: BLE001 - 单条失败不能毁掉整期日报
+            if calls:
+                # 回炉那一次失败了，但上一稿还在手里：**用上一稿，不要退回标题**。
+                # 长度不达标的摘要仍然是一条真摘要，比标题有信息量得多。
+                # The rewrite failed but the previous draft is still here: a summary that
+                # misses the window still beats falling back to the headline.
+                logger.warning("摘要回炉失败，沿用上一稿：%s", exc)
+                return SummaryResult(summary=summary, tags=tags, calls=calls, within_target=False)
+            logger.warning("摘要失败，退回使用标题：%s —— %s", cluster.canonical.title[:40], exc)
+            return SummaryResult(
+                summary=cluster.canonical.title, tags=[], degraded=True, calls=0
+            )
+
+        calls += 1
+        summary = out.summary.strip() or cluster.canonical.title
+        tags = [t.strip() for t in out.tags if t.strip()]
+
+        if chars is None:
+            return SummaryResult(summary=summary, tags=tags, calls=calls)
+
+        feedback = char_feedback(len(summary), chars[0], chars[1])
+        if feedback is None:
+            return SummaryResult(summary=summary, tags=tags, calls=calls)
+
+        if attempt == MAX_REWRITES:
+            # 差几个字不值得再花一次调用。**返回它并标记**，让调用方知道没达标。
+            logger.info(
+                "摘要 %d 字未落入 %d~%d 字，按现状返回：%s",
+                len(summary), chars[0], chars[1], cluster.canonical.title[:30],
+            )
+            return SummaryResult(summary=summary, tags=tags, calls=calls, within_target=False)
+
+        messages = [*messages, assistant(out.summary), user(feedback)]
+
+    return SummaryResult(summary=summary, tags=tags, calls=calls)  # pragma: no cover
 
 
-def summarize_all(clusters: list[Cluster], llm: LLMProvider) -> list[SummaryResult]:
+def summarize_all(
+    clusters: list[Cluster],
+    llm: LLMProvider,
+    *,
+    chars: tuple[int, int] | None = None,
+) -> list[SummaryResult]:
     """
     批量生成摘要 / Summarise a batch.
 
@@ -156,8 +239,11 @@ def summarize_all(clusters: list[Cluster], llm: LLMProvider) -> list[SummaryResu
     429s and retries rather than speed, while making cost and logs harder to follow. A
     few dozen entries per issue is perfectly acceptable serially.
     """
-    results = [summarize_cluster(c, llm) for c in clusters]
+    results = [summarize_cluster(c, llm, chars=chars) for c in clusters]
     degraded = sum(1 for r in results if r.degraded)
+    off_target = sum(1 for r in results if not r.within_target)
+    if off_target:
+        logger.info("摘要完成：%d 条，其中 %d 条字数未达标", len(results), off_target)
     if degraded:
         logger.warning("摘要完成：%d 条，其中 %d 条降级为标题", len(results), degraded)
     else:
@@ -166,7 +252,9 @@ def summarize_all(clusters: list[Cluster], llm: LLMProvider) -> list[SummaryResu
 
 
 __all__ = [
+    "DEFAULT_CHARS",
     "MAX_BODY_CHARS",
+    "MAX_REWRITES",
     "PROMPT_NAME",
     "SummaryOut",
     "SummaryResult",

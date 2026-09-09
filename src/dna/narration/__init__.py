@@ -23,7 +23,7 @@ delta when it misses the window. The long-form script controls length per sectio
 instead, which is more reliable than measuring the whole.
 """
 
-from dna.narration.duration import estimate_seconds, length_feedback, target_chars, within
+from dna.narration.duration import char_feedback, estimate_seconds, target_chars, within
 from dna.narration.longform import (
     LongformMode,
     LongformResult,
@@ -46,8 +46,8 @@ __all__ = [
     "build_narration",
     "build_short_video",
     "can_build_longform",
+    "char_feedback",
     "estimate_seconds",
-    "length_feedback",
     "plan_target_chars",
     "rules_for",
     "target_chars",
