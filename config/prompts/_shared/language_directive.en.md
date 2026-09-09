@@ -1,0 +1,1 @@
+**Write everything in English** — section titles, every line of narration, every speaker turn. The source article may be in Chinese: translate the facts into English rather than copying Chinese text through.
