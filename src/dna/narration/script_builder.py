@@ -82,7 +82,7 @@ DEFAULT_CTA = "关注我，下期分享 AI 行业最新进展"
 # 判断已经稳定，再试下去是在烧钱换一点点字数。
 # Each rewrite is a billed call. After two the model's sense of length for this piece has
 # settled, and further attempts spend money for a handful of characters.
-MAX_REWRITES = 2
+MAX_REWRITES = 1
 
 # 提示词正文都在 `config/prompts/` / Every prompt text lives under that directory
 #     shortvideo.zh.md · shortvideo.en.md · narration.zh.md · narration.en.md
