@@ -220,7 +220,7 @@ def produce(
             seconds=existing.est_seconds,
         )
 
-    article = _load_article(article_id, s)
+    article = load_article(article_id, s)
     if article is None:
         return ProduceResult(kind=task.kind, ok=False, error="读不到这篇文章的正文")
 
@@ -283,7 +283,7 @@ def produce(
                 on_progress=on_progress, llm=llm, article_id=article_id,
             )
         else:
-            result = _generate(
+            result = generate_text(
                 task,
                 article,
                 provider,
@@ -575,11 +575,19 @@ def import_audio(
 
 
 # ---------------------------------------------------------------------------
-# 内部实现 / internals
+# 生成与取数 / generation and loading
+#
+# `generate_text` / `load_article` / `as_cluster` 曾经是私有的。改成公开是为了让
+# 提示词调试台（`prompt_lab.py`）能调**同一个**分派函数：只要它调的是这一个，
+# 「在 dna prompt 里验证的提示词，在 dna produce / GUI 里必然一致」就成立；
+# 另写一份 if/elif 分派，两边迟早会漂移，而漂移的方向恰好是让调试结论失效。
+# These three were private. They are public so the prompt workbench can call the *same*
+# dispatcher: that is what makes "a prompt verified in `dna prompt` is the prompt the app
+# sends" true by construction rather than by discipline.
 # ---------------------------------------------------------------------------
 
 
-def _generate(
+def generate_text(
     task: TaskSpec,
     article: Article,
     llm: LLMProvider,
@@ -606,7 +614,7 @@ def _generate(
         if lang == "zh":
             from dna.pipeline.summarize import summarize_cluster
 
-            cluster = _as_cluster(article, article_id)
+            cluster = as_cluster(article, article_id)
             result = summarize_cluster(cluster, llm, instructions=instructions)
             if result.degraded:
                 raise RuntimeError("摘要调用失败，已退回标题；请重试")
@@ -701,7 +709,7 @@ def _generate(
     raise ValueError(f"未知的产物类型：{task.kind}")
 
 
-def _as_cluster(article: Article, article_id: str) -> Cluster:
+def as_cluster(article: Article, article_id: str) -> Cluster:
     """
     把单篇文章包成 Cluster / Wrap one article as a single-member cluster.
 
@@ -725,7 +733,7 @@ def _as_cluster(article: Article, article_id: str) -> Cluster:
     return Cluster(id=article_id, members=[item], canonical_url=article.url)
 
 
-def _load_article(article_id: str, settings: Settings) -> Article | None:
+def load_article(article_id: str, settings: Settings) -> Article | None:
     """
     从落盘目录读回完整文章 / Read the full article back from disk.
 
@@ -913,8 +921,11 @@ __all__ = [
     "MANUAL_SOURCES",
     "Generated",
     "ProduceResult",
+    "as_cluster",
+    "generate_text",
     "import_audio",
     "is_new_article",
+    "load_article",
     "produce",
     "produce_all",
     "read_production",

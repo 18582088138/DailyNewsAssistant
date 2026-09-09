@@ -23,9 +23,9 @@ front-end can drift out of sync.
     They were two kinds occupying two columns, though they are two language versions of
     one thing. `(kind, lang)` now identifies a production, and the filename follows.
 
-**不含生成函数**：分派在 `service._generate` 里。放这里会让 tasks 反向依赖
+**不含生成函数**：分派在 `service.generate_text` 里。放这里会让 tasks 反向依赖
 narration 与 pipeline，而 tasks 现在是一张零依赖的纯数据表，两个前端都能安全导入。
-No generator function lives here; dispatch is in `service._generate`. Putting it here
+No generator function lives here; dispatch is in `service.generate_text`. Putting it here
 would make this table depend on `narration` and `pipeline`, whereas it is currently pure
 data that both front-ends can import without pulling in the world.
 
