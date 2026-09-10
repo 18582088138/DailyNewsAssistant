@@ -263,7 +263,7 @@ class SummaryOut(BaseModel):
 的技术稿，被切掉的最后 1069 字里有采样参数和一条关键局限（官方没给 Jinja chat
 template，「能跑」和「跑对」是两回事），而那正是「必须说局限」要用的料。
 
-### 短视频文案（`profile.shortvideo_chars`，默认 200~250 字）
+### 短视频文案（字数窗口 `profile.shortvideo_chars`，以 `config/profile.yaml` 为准）
 
 关键约束：**覆盖文章主干，不是单点深挖**。
 - **第一句必须是事件本身**：谁、发布/开源了什么、叫什么名字（带完整版本号）。

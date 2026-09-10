@@ -381,8 +381,8 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 
 | kind | 时长窗口 | 字数 | 调用次数 |
 |---|---|---|---|
-| shortvideo | 25~35 秒 | 110~160 | 1~3（回炉） |
-| narration | 1~2 分钟 | 270~540 | 1~3（回炉） |
+| shortvideo | 25~35 秒 | 200~260 | 1~3（回炉） |
+| narration | 1~2 分钟 | 370~540 | 1~3（回炉） |
 | longform | 5~15 分钟，专题（1 角色）/ 访谈（2 角色） | 1350~4050 | 5~9 |
 
 ### `narration/duration.py`（269 行）

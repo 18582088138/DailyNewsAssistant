@@ -37,7 +37,7 @@ models/
 Thumbs.db
 
 # ---- 本地 prompt 调试，不入库 ----
-test_prompt/
+verify_test/
 
 # ---- tests 仅本地测试，不入库 ----
 tests/
