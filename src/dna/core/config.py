@@ -13,12 +13,14 @@ Secrets are only ever read from .env; nothing is hard-coded.
 
 from __future__ import annotations
 
+import os
+import sys
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from dna.core.errors import ConfigError
@@ -29,9 +31,32 @@ from dna.core.models import Language, SourceKind
 # `dna.core.logging` depends only on the stdlib and rich, so there is no import cycle.
 _logger = get_logger("core.config")
 
-# 仓库根目录：src/dna/core/config.py -> 上溯三层
-# Repository root: this file is at src/dna/core/config.py, so go up three levels.
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
+def _project_root() -> Path:
+    """
+    找到 `.env`、`config/`、`data/`、`outputs/` 所在的那个目录 / Locate the app root.
+
+    三种情况 / Three cases:
+
+    1. `DNA_HOME` —— 显式指定，优先级最高。给测试用（不打包也能验证下面那条分支），
+       也给「程序放 C 盘、数据放 D 盘」这种部署方式用。
+    2. **打包成 exe 之后**（`sys.frozen`）—— 用 exe 自己所在的目录。
+       不能再靠 `__file__`：PyInstaller 把源码解到一个临时目录里，`__file__` 指向那里，
+       于是配置、数据库、产出全写进临时目录，程序一退出就没了，且没有任何报错。
+       这是打包最容易踩、最难查的一个坑。
+    3. 源码运行 —— 本文件在 `src/dna/core/config.py`，上溯三层就是仓库根。
+
+    Under PyInstaller `__file__` points into a temporary extraction directory, so config,
+    database and outputs would all be written somewhere that vanishes on exit, silently.
+    """
+    override = os.environ.get("DNA_HOME", "").strip()
+    if override:
+        return Path(override).expanduser().resolve()
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[3]
+
+
+PROJECT_ROOT = _project_root()
 DEFAULT_ENV_FILE = PROJECT_ROOT / ".env"
 DEFAULT_CONFIG_DIR = PROJECT_ROOT / "config"
 
@@ -474,6 +499,31 @@ class Profile(BaseModel):
     # with the account, whereas the prompt encodes how to write well. They change at
     # entirely different rates.
     cta_line: str = "关注我，下期分享 AI 行业最新进展"
+
+    @model_validator(mode="after")
+    def _windows_must_not_be_reversed(self) -> Profile:
+        """
+        区间不能写反 / A window's lower bound may not exceed its upper bound.
+
+        `(100, 80)` 能通过类型检查，然后让 `low <= n <= high` **永远为假**——
+        每一篇产物都被标成超长，而配置文件看上去毫无问题。设置面板放开了这些字段之后
+        写反只需要一次手滑，所以在模型上挡住，命令行和界面同时受益。
+        A reversed window type-checks and then makes `low <= n <= high` never true, marking
+        every production over-length while the file looks fine. Rejected at the model so
+        both front-ends benefit.
+        """
+        for name in (
+            "summary_chars",
+            "shortvideo_chars",
+            "narration_chars",
+            "video_duration_seconds",
+            "narration_duration_seconds",
+            "longform_duration_seconds",
+        ):
+            low, high = getattr(self, name)
+            if low > high:
+                raise ValueError(f"{name} 的下限大于上限：({low}, {high})")
+        return self
 
     # 「NEW」标识没有时间窗，也就没有对应的配置项 / the badge has no window and no setting
     #
