@@ -27,6 +27,7 @@ from pathlib import Path
 from nicegui import app, run
 
 from dna.core.config import get_settings
+from dna.core.logging import get_logger
 from dna.core.urls import extract_urls
 from dna.llm.factory import get_llm
 from dna.produce import (
@@ -38,10 +39,12 @@ from dna.produce import (
     spec,
 )
 from dna.produce.tasks import DEFAULT_LANGUAGE, audio_kind, json_sidecar
-from dna.store import FetchStatus, Ledger, ProductionRecord, intake_urls
+from dna.store import FetchStatus, IntakeResult, Ledger, ProductionRecord, intake_urls
 from dna.store.ledger import ArticleRecord
 from dna.tts.base import TTSError
 from dna.tts.factory import get_tts
+
+logger = get_logger("gui.actions")
 
 
 @dataclass
@@ -539,12 +542,193 @@ def media_folders(record: ArticleRecord) -> dict[str, Path]:
     return result
 
 
+def body_file(record: ArticleRecord) -> Path | None:
+    """
+    正文文件 / The stored article body.
+
+    **返回 None 表示没有可打开的东西**——抓取失败的文章目录里根本没有 `article.md`，
+    界面据此不把那一格做成可点的。
+    `None` means there is nothing to open: a failed fetch leaves no `article.md`, and the
+    cell stays unclickable rather than opening onto an error.
+    """
+    directory = article_directory(record)
+    if not directory:
+        return None
+    path = Path(directory) / "article.md"
+    return path if path.is_file() else None
+
+
+def media_target(record: ArticleRecord) -> Path | None:
+    """
+    媒体格该打开哪个目录 / Which directory the media cell opens.
+
+    有图开 `images/`，否则有视频开 `videos/`，都没有返回 None。
+    **配图优先**：绝大多数文章只有配图，视频是少数；而两者都有时人要看的
+    通常是配图（它进图文版），视频还在展开面板里另有入口。
+    Images win when both exist: they are what almost every article has and what the
+    graphic edition uses, while videos keep their own entry in the detail panel.
+    """
+    folders = media_folders(record)
+    return folders.get("配图") or folders.get("视频")
+
+
+def over_target(
+    record: ProductionRecord | None, kind: ProductionKind | str
+) -> bool:
+    """
+    这一格的字数是否落在目标区间之外 / Whether this cell's length misses its window.
+
+    **现算，不从库里读。** 台账里不存「是否合格」这个布尔值：改了 `profile.yaml`
+    的字数窗口，历史产物应当跟着重新判定，而存下来的布尔值不会变——于是界面上
+    显示的合格标准和下一次生成用的标准不是同一个。
+    Computed rather than stored: editing the character window in `profile.yaml` must
+    re-judge existing productions, whereas a stored boolean would not change and the
+    table's notion of "acceptable" would drift from the generator's.
+
+    窗口取自 `char_window()`，和生成时验收用的是同一个函数——否则会出现
+    「生成时报合格、表格里标超长」。
+    """
+    from dna.core.config import safe_profile
+    from dna.produce.tasks import char_window
+
+    if record is None or not record.ok or not record.chars:
+        return False
+    window = char_window(kind, safe_profile())
+    if window is None:
+        return False
+    low, high = window
+    return not (low <= record.chars <= high)
+
+
+def target_window(kind: ProductionKind | str) -> tuple[int, int] | None:
+    """这类产物的字数区间 / The character window for one kind，供提示文案用。"""
+    from dna.core.config import safe_profile
+    from dna.produce.tasks import char_window
+
+    return char_window(kind, safe_profile())
+
+
+async def batch_refetch(
+    article_ids: list[str],
+    *,
+    download_images: bool = True,
+    download_videos: bool = True,
+    on_step=None,
+) -> str:
+    """
+    批量重新抓取 / Re-fetch a batch of articles.
+
+    **逐篇过 `run.io_bound`，不是把整批丢进一个线程。** 一批十篇要跑好几分钟，
+    整批一个线程的话进度条从头到尾不动，和卡死看起来一模一样；逐篇回来才能
+    报「第 3/10 篇」。这也是 `audio_progress.py` 存在的同一个理由。
+    One thread per article rather than one for the batch: a ten-article run takes minutes,
+    and a progress indicator that never moves is indistinguishable from a hang.
+
+    **单篇失败不中断其余。** 抓取失败的原因大多是这一个站点的问题
+    （403、超时、改版），后面九篇没有理由跟着不抓。
+    A single failure never aborts the rest: its cause is almost always specific to that
+    one site.
+
+    参数 / Args:
+        on_step: `(已完成, 总数, 标题)` 回调，界面用它更新提示条
+
+    返回 / Returns:
+        一行汇总。媒体告警单独计数——它**不算失败**（正文已经入库）。
+    """
+    from dna.store import refetch_article
+
+    ok = degraded = failed = 0
+    warnings: list[tuple[str, str]] = []
+
+    for index, article_id in enumerate(article_ids, start=1):
+        detail = IntakeResult()
+
+        def _work(aid: str = article_id, d: IntakeResult = detail) -> ArticleRecord | None:
+            return refetch_article(
+                aid,
+                download_images=download_images,
+                download_videos=download_videos,
+                result=d,
+            )
+
+        try:
+            updated = await run.io_bound(_work)
+        except Exception as exc:  # noqa: BLE001 - 一篇的任何异常都不该中断整批
+            failed += 1
+            logger.warning("重抓失败 %s：%s", article_id[:8], exc)
+            updated = None
+        else:
+            if updated is None:
+                failed += 1
+            elif str(updated.status) == str(FetchStatus.OK):
+                ok += 1
+            else:
+                degraded += 1
+
+        warnings.extend(detail.media_warnings)
+        if on_step is not None:
+            on_step(index, len(article_ids), (updated.title if updated else "") or article_id[:8])
+
+    parts = [f"重抓 {len(article_ids)} 篇"]
+    if ok:
+        parts.append(f"成功 {ok}")
+    if degraded:
+        parts.append(f"降级 {degraded}（正文没抓到，可用 dna sync 手动补）")
+    if failed:
+        parts.append(f"失败 {failed}")
+    if warnings:
+        parts.append(f"媒体未下载 {len(warnings)}（不影响正文）")
+    return "，".join(parts)
+
+
+def plan_batch_delete(article_ids: list[str]):
+    """
+    算出这批会删掉什么 / Work out what a batch delete would remove.
+
+    纯查询，给确认框用。**确认框上的数字必须来自真正要删的那批对象**，
+    不能在界面里另数一遍——「我以为只选了一篇」是删除事故最常见的形态。
+    Read-only, for the confirmation dialog. The numbers must come from the very objects
+    about to go; counting them again in the view is how "I thought I only picked one"
+    happens.
+    """
+    from dna.store import plan_delete
+
+    return plan_delete(article_ids)
+
+
+async def batch_delete(article_ids: list[str], *, remove_files: bool = True) -> str:
+    """
+    批量删除 / Delete a batch of articles.
+
+    磁盘删除会等（几十个文件 + Windows 上的杀软扫描），所以照样走 io_bound。
+    Disk removal blocks long enough to matter, so it goes off the event loop too.
+    """
+    from dna.store import delete_articles
+
+    def _work():
+        return delete_articles(article_ids, remove_files=remove_files)
+
+    plan = await run.io_bound(_work)
+    message = plan.result_summary()
+    if plan.errors:
+        # 失败原因原样带出来：Windows 上「目录被占用」要人去关掉资源管理器，
+        # 概括成「删除失败」的话人不知道该做什么。
+        message += "　·　" + "；".join(f"{i[:8]} {r}" for i, r in plan.errors[:3])
+    return message
+
+
 def open_in_file_manager(path: str | Path) -> str:
     """
-    在系统文件管理器里打开目录 / Reveal a directory in the OS file manager.
+    在系统文件管理器里打开文件或目录 / Reveal a file or directory in the OS file manager.
 
     返回空串表示成功，否则返回给人看的失败原因。
     Returns an empty string on success, or a human-readable reason.
+
+    **接受文件，不只是目录。** Windows 下 `os.startfile` 对 `article.md` 会用默认
+    编辑器打开它——「点正文栏打开对应的文件」要的正是这个行为。先前这里写着
+    `is_dir()`，于是正文格只能开目录、开不了文件。
+    Files are accepted, not only directories: `os.startfile` opens `article.md` in the
+    default editor, which is exactly what clicking the body cell should do.
 
     **只在服务端与浏览器同机时有意义。** 工作台默认绑 127.0.0.1，两者本来就是同一台
     机器；一旦有人把它绑到 0.0.0.0 给别人访问，这个按钮会在**服务器**上弹出窗口，
@@ -555,8 +739,8 @@ def open_in_file_manager(path: str | Path) -> str:
     The bind address is therefore checked explicitly.
     """
     target = Path(path)
-    if not target.is_dir():
-        return f"目录不存在：{target}"
+    if not target.exists():
+        return f"路径不存在：{target}"
 
     if not _server_is_local():
         return "工作台没有绑定在本机，无法打开你这边的文件管理器"
@@ -603,6 +787,232 @@ def longform_estimate(record: ArticleRecord) -> str:
 
 
 
+# ---------------------------------------------------------------------------
+# 订阅采集 / collecting from the configured sources
+# ---------------------------------------------------------------------------
+
+
+def source_options() -> dict[str, str]:
+    """
+    订阅源下拉选项 / The subscription dropdown options.
+
+    从 `load_sources()` 来，**不是** `Ledger.count_by_source()`——后者是台账里出现过的源，
+    里面有已经停用的死源；这里要的是配置里当前启用的源，包括**一次还没抓过的新源**。
+    筛选栏那个下拉正好相反，它问的是「已经抓到的东西里挑哪些看」。
+    From `load_sources()` rather than the ledger: the ledger lists sources that have
+    appeared before, including disabled dead ones, while this needs the currently enabled
+    ones — including a source added today that has never run. The filter bar's dropdown
+    asks the opposite question.
+    """
+    from dna.core.config import load_sources
+
+    try:
+        sources = load_sources()
+    except Exception as exc:  # noqa: BLE001 - sources.yaml 坏了不该让整个对话框打不开
+        logger.warning("读取订阅源失败：%s", exc)
+        return {}
+    return {s.id: (s.name or s.id) for s in sources}
+
+
+async def import_from_sources(
+    source_ids: list[str] | None = None,
+    *,
+    max_age_days: int | None = 3,
+    limit_per_source: int | None = 10,
+    download_images: bool = True,
+    download_videos: bool = True,
+    refetch: bool = False,
+) -> str:
+    """
+    从订阅源采集并入库 / Collect from the sources and ingest.
+
+    **不调用 LLM，不产生费用。** 与 `dna fetch` 调的是同一个 `intake_sources`——
+    命令行抓的和界面抓的必须是同一批东西，否则「昨天命令行抓到了、今天界面抓不到」
+    这类问题永远查不清是配置差异还是代码差异。
+    Calls no LLM. Delegates to the same `intake_sources` as `dna fetch`, so the two
+    front-ends cannot collect differently.
+    """
+    from dna.store import intake_sources
+
+    def _work() -> str:
+        result = intake_sources(
+            source_ids=source_ids or None,
+            limit_per_source=limit_per_source,
+            download_images=download_images,
+            download_videos=download_videos,
+            refetch=refetch,
+            max_age_days=max_age_days,
+        )
+        message = result.summary()
+        # 源级失败单独报：一个 feed 挂了而其余正常时，总数会显得「今天新闻很少」,
+        # 不点出来的话人会以为是天数选窄了。
+        # Reported separately: with one dead feed the totals just look like a slow news
+        # day, and the user would blame the day-count instead.
+        if result.source_failures:
+            names = "、".join(sid for sid, _ in result.source_failures[:3])
+            message += f"　·　{len(result.source_failures)} 个源失败（{names}）"
+        if result.media_warnings:
+            message += f"　·　媒体未下载 {len(result.media_warnings)}（不影响正文）"
+        return message
+
+    return await run.io_bound(_work)
+
+
+# ---------------------------------------------------------------------------
+# 设置面板 / the settings panel
+# ---------------------------------------------------------------------------
+
+
+@dataclass
+class EnvField:
+    """
+    设置面板里的一个 `.env` 项 / One `.env` entry in the settings panel.
+
+    界面画它、`config_edit` 写它，两边都不需要知道另一边。
+    """
+
+    key: str
+    group: str
+    label: str
+    help: str = ""
+    options: tuple[str, ...] = ()
+    """非空时画下拉（仍可自填）/ non-empty renders a dropdown that still accepts free text."""
+
+    boolean: bool = False
+    secret: bool = False
+
+    @property
+    def field(self) -> str:
+        """对应的 `Settings` 字段名 / the matching `Settings` attribute."""
+        return self.key.lower()
+
+
+# 分组与文案。**顺序就是界面上的顺序**，最常改的放最前面。
+# 这张表只描述「怎么画」，能不能写由 `ENV_ALLOWLIST` 说了算——
+# 少写一项这里的测试会报，多写一项 `save_env` 会拒。
+# This table says how to draw; whether a key may be written is `ENV_ALLOWLIST`'s call.
+ENV_FIELDS: tuple[EnvField, ...] = (
+    EnvField("LLM_PROVIDER", "LLM", "主用提供方", options=("deepseek", "openrouter")),
+    EnvField(
+        "DEEPSEEK_MODEL", "LLM", "DeepSeek 模型",
+        # 上一轮排查「GUI 卡住」的根因就是这一行被换成了推理模型，而界面上完全看不出来。
+        # 推理模型每次要先想几百到几千个 token 才开始输出，慢 30~50 倍——
+        # 表现和死循环一模一样。
+        # A past "the GUI is frozen" investigation ended here: a reasoning model had been
+        # selected, which is 30-50x slower and indistinguishable from a hang.
+        help="deepseek-chat 是会话模型（日常用这个）；带 reasoner/thinking 的是推理模型，慢 30~50 倍，界面会像卡死",
+        options=("deepseek-chat", "deepseek-reasoner"),
+    ),
+    EnvField("DEEPSEEK_BASE_URL", "LLM", "DeepSeek 接口地址"),
+    EnvField("LLM_FALLBACK_PROVIDER", "LLM", "备用提供方", options=("", "openrouter", "deepseek")),
+    EnvField("OPENROUTER_MODEL", "LLM", "OpenRouter 模型"),
+    EnvField(
+        "LLM_CACHE_ENABLED", "LLM", "启用响应缓存", boolean=True,
+        help="关掉之后每次生成都真花钱；重做同一篇也不再免费",
+    ),
+    EnvField(
+        "DEEPSEEK_API_KEY", "密钥", "DeepSeek API Key", secret=True,
+        help="留空表示不修改。只显示前 7 位与长度——界面会被截图",
+    ),
+    EnvField("OPENROUTER_API_KEY", "密钥", "OpenRouter API Key", secret=True, help="留空表示不修改"),
+    EnvField("TTS_SERVICE_URL", "TTS", "TTS 服务地址"),
+    EnvField("TTS_PREPROCESS", "TTS", "合成前做文本预处理", boolean=True),
+    EnvField("HTTP_PROXY", "网络", "HTTP 代理"),
+    EnvField("HTTPS_PROXY", "网络", "HTTPS 代理"),
+    EnvField(
+        "NO_PROXY", "网络", "不走代理的地址",
+        # 少了 localhost，本机的 TTS 服务与 RSSHub 会被路由到公司代理然后失败。
+        help="**必须包含 localhost 与 127.0.0.1**，否则本机的 TTS 服务和 RSSHub 会被送进代理",
+    ),
+    EnvField("DEFAULT_LANGUAGE", "运行", "默认语言", options=("zh", "en")),
+    EnvField("MAX_ITEMS_PER_SOURCE", "运行", "每个源最多取几条"),
+    EnvField("LOG_LEVEL", "运行", "日志级别", options=("DEBUG", "INFO", "WARNING", "ERROR")),
+)
+
+
+def env_groups() -> list[tuple[str, list[EnvField]]]:
+    """按分组给出字段，保持 `ENV_FIELDS` 里的顺序 / Grouped, in declaration order."""
+    groups: dict[str, list[EnvField]] = {}
+    for field in ENV_FIELDS:
+        groups.setdefault(field.group, []).append(field)
+    return list(groups.items())
+
+
+def env_display(field: EnvField) -> str:
+    """
+    这一项现在显示什么 / What this field shows right now.
+
+    密钥走 `mask_secret`，其余读 `Settings` 的**生效值**而不是 `.env` 的文本——
+    被系统环境变量盖住时，文件里写的那个值根本不是程序在用的那个。
+    Secrets are masked; everything else shows the *effective* value from `Settings` rather
+    than the file's text, because an OS environment variable may be overriding it.
+    """
+    from dna.core.config_edit import mask_secret
+
+    value = getattr(get_settings(), field.field, "")
+    if value is None:
+        return ""
+    text = str(getattr(value, "value", value))  # Language 这类枚举取 .value
+    return mask_secret(text) if field.secret else text
+
+
+def env_shadowed(field: EnvField) -> bool:
+    """这一项是否被系统环境变量盖住 / Whether an OS variable overrides it."""
+    from dna.core.config_edit import shadowed_by_env
+
+    return shadowed_by_env(field.key)
+
+
+def profile_values() -> dict:
+    """当前的内容偏好 / The current content preferences, as a plain dict."""
+    from dna.core.config import safe_profile
+
+    return safe_profile().model_dump(mode="json")
+
+
+def save_settings(
+    profile_updates: dict | None = None,
+    env_updates: dict[str, str] | None = None,
+) -> str:
+    """
+    保存设置 / Persist the settings.
+
+    抛出 / Raises:
+        ConfigError: 校验失败或配置项不存在。**上层直接把消息显示出来**——
+                     pydantic 的报错已经指明是哪个字段哪里不对，改写一遍只会变模糊。
+
+    返回一句人话，写明改了几项、哪些**需要重启**才生效。
+    Returns a sentence naming what changed and what needs a restart.
+    """
+    from dna.core.config_edit import save_env, save_profile
+
+    parts: list[str] = []
+    if profile_updates:
+        save_profile(profile_updates)
+        parts.append(f"内容偏好 {len(profile_updates)} 项")
+
+    written: list[str] = []
+    if env_updates:
+        written = save_env(env_updates)
+        if written:
+            parts.append(f"运行设置 {len(written)} 项")
+
+    if not parts:
+        return "没有改动"
+
+    message = "已保存：" + "、".join(parts)
+    # 代理与日志级别在进程启动时就被读走了，改完这次会话不会变——
+    # 不说清楚的话人会以为没保存成功，然后反复点保存。
+    # Proxies and the log level are read at process start; without saying so the user
+    # assumes the save failed and clicks again.
+    restart = [k for k in written if k in {"HTTP_PROXY", "HTTPS_PROXY", "NO_PROXY", "LOG_LEVEL"}]
+    if restart:
+        message += f"　·　{'、'.join(restart)} 要重启 dna gui 才生效"
+    if profile_updates:
+        message += "　·　字数窗口即时生效，表格里的超长标记会跟着重判"
+    return message
+
+
 def cache_status() -> str:
     """
     LLM 缓存命中情况 / The LLM cache hit rate.
@@ -620,17 +1030,32 @@ def cache_status() -> str:
 
 
 __all__ = [
+    "ENV_FIELDS",
+    "EnvField",
     "RowView",
     "TTSHandoff",
+    "env_display",
+    "env_groups",
+    "env_shadowed",
+    "import_from_sources",
+    "profile_values",
+    "save_settings",
+    "source_options",
     "collect_tts_handoff",
     "import_tts_handoff",
     "open_tts_workbench",
     "article_directory",
     "audio_estimate_seconds",
     "audio_for",
+    "batch_delete",
+    "batch_refetch",
+    "body_file",
     "last_instructions",
     "cache_status",
     "import_links",
+    "media_target",
+    "over_target",
+    "plan_batch_delete",
     "preview_links",
     "load_rows",
     "longform_estimate",
@@ -640,4 +1065,5 @@ __all__ = [
     "production_sidecar",
     "production_text",
     "run_production",
+    "target_window",
 ]
