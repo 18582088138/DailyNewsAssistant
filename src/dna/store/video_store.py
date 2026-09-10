@@ -40,6 +40,13 @@ DEFAULT_MAX_VIDEOS = 2
 MAX_VIDEO_BYTES = 300 * 1024 * 1024  # 300MB，单条资讯视频远小于此
 MIN_VIDEO_BYTES = 16 * 1024  # 小于 16KB 的不可能是真视频，多半是错误页
 
+# 整次重试的次数 / whole-attempt retries.
+# 注意 `_download_with_ytdlp` 里的 `"retries": 2` 是 yt-dlp **分片级**的重试，
+# 解析播放器失败时它一次都不会重来——这个常量管的是那一层。
+# 重试之间不 sleep：视频失败的主因是地域限制、会员墙、封禁下载，等多久都一样；
+# 重试针对的是网络抖动和临时 5xx。
+DOWNLOAD_ATTEMPTS = 3
+
 # 直链视频扩展名 / extensions that indicate a directly downloadable file
 _DIRECT_SUFFIXES = (".mp4", ".m4v", ".webm", ".mov", ".mkv")
 
@@ -69,9 +76,15 @@ def download_videos(
     *,
     max_videos: int = DEFAULT_MAX_VIDEOS,
     timeout: float = 180.0,
+    attempts: int = DOWNLOAD_ATTEMPTS,
 ) -> tuple[list[Path], list[tuple[str, str]]]:
     """
     下载视频 / Download the videos.
+
+    每条视频最多尝试 `attempts` 次，**全部失败也不抛异常**，只把最后一次的原因
+    记进 `skipped`（前几次记 debug 日志）。上层据此提醒，而不是中断整篇文章。
+    Each video is attempted up to `attempts` times and still never raises: only the last
+    reason is recorded so the caller can warn rather than abort the article.
 
     返回 / Returns:
         (已下载的文件路径, [(url, 失败原因), …])
@@ -86,23 +99,63 @@ def download_videos(
 
     for index, asset in enumerate(assets[:max_videos], start=1):
         stem = f"{index:02d}_{_safe_host(asset.url)}"
-        try:
-            if is_direct_video_url(asset.url):
-                path = _download_direct(asset, directory, stem, timeout=timeout)
-            else:
-                path = _download_with_ytdlp(asset, directory, stem, timeout=timeout)
-        except Exception as exc:  # noqa: BLE001 - 单条视频失败不影响其余内容
-            skipped.append((asset.url, _short(exc)))
-            continue
+        path, reason = _download_one(asset, directory, stem, timeout=timeout, attempts=attempts)
 
         if path is None:
-            skipped.append((asset.url, "未能取得视频文件"))
+            skipped.append((asset.url, reason or "未能取得视频文件"))
             continue
 
         saved.append(path)
         _write_sidecar(path, asset)
 
     return saved, skipped
+
+
+def _download_one(
+    asset: MediaAsset,
+    directory: Path,
+    stem: str,
+    *,
+    timeout: float,
+    attempts: int,
+) -> tuple[Path | None, str]:
+    """
+    下载一条视频，失败重试 / Fetch one video, retrying on failure.
+
+    每次重试前清掉上一次留下的同名残片：yt-dlp 中途失败可能留下 `.part` 或
+    分轨文件，下一次的 glob 会把它当成产物捡回来，于是「成功」拿到一个放不了的文件。
+    Leftovers from a failed attempt are removed first: yt-dlp can leave `.part` or
+    per-track files behind, and the next attempt's glob would happily return one.
+    """
+    reason = ""
+    for attempt in range(1, max(1, attempts) + 1):
+        _clear_leftovers(directory, stem)
+        try:
+            if is_direct_video_url(asset.url):
+                path = _download_direct(asset, directory, stem, timeout=timeout)
+            else:
+                path = _download_with_ytdlp(asset, directory, stem, timeout=timeout)
+        except Exception as exc:  # noqa: BLE001 - 单条视频失败不影响其余内容
+            reason = _short(exc)
+            path = None
+        else:
+            if path is not None:
+                return path, ""
+            reason = "未能取得视频文件"
+
+        if attempt < attempts:
+            logger.debug("视频下载第 %d/%d 次失败，重试：%s（%s）", attempt, attempts, asset.url, reason)
+
+    return None, reason
+
+
+def _clear_leftovers(directory: Path, stem: str) -> None:
+    """清掉上一次尝试留下的残片 / Drop partial files from a previous attempt."""
+    for path in directory.glob(f"{stem}.*"):
+        try:
+            path.unlink()
+        except OSError:  # pragma: no cover - 文件被占用时留着即可，下一步会覆盖
+            pass
 
 
 # ---------------------------------------------------------------------------
@@ -239,6 +292,7 @@ def _short(exc: Exception) -> str:
 
 __all__ = [
     "DEFAULT_MAX_VIDEOS",
+    "DOWNLOAD_ATTEMPTS",
     "MAX_VIDEO_BYTES",
     "MIN_VIDEO_BYTES",
     "download_videos",

@@ -18,6 +18,7 @@ from dna.store.article_store import (
     save_article,
 )
 from dna.store.db import SCHEMA_VERSION, connect, open_db
+from dna.store.delete import DeletePlan, delete_articles, plan_delete
 from dna.store.intake import (
     IntakeResult,
     intake_sources,
@@ -45,6 +46,7 @@ from dna.store.video_store import download_videos, is_direct_video_url
 __all__ = [
     "ArticleRecord",
     "DIGEST_FILENAME",
+    "DeletePlan",
     "EntryLink",
     "FetchStatus",
     "IntakeResult",
@@ -59,6 +61,7 @@ __all__ = [
     "SavedIssue",
     "article_dir",
     "connect",
+    "delete_articles",
     "download_videos",
     "intake_sources",
     "intake_urls",
@@ -68,6 +71,7 @@ __all__ = [
     "load_issue",
     "migrate",
     "open_db",
+    "plan_delete",
     "plan_migration",
     "read_body",
     "read_title",

@@ -473,6 +473,33 @@ class Ledger:
                 "UPDATE articles SET store_dir = ? WHERE id = ?", (store_dir, article_id)
             )
 
+    def delete(self, article_id: str) -> int:
+        """
+        删除一篇文章及其全部产物记录 / Delete an article row and all its productions.
+
+        返回删掉的产物条数 / Returns how many production rows went with it.
+
+        **先删产物再删文章**：两张表之间没有外键约束（schema v1 起就没有），
+        顺序反过来而中途失败的话，产物行会永远指向一个不存在的文章 id，
+        既不显示也删不掉。
+        Productions go first: there is no foreign key between the two tables, so the
+        other order would leave orphan rows pointing at a vanished article — invisible
+        in every view and impossible to remove.
+        """
+        with open_db(self.db_path) as conn:
+            cursor = conn.execute("DELETE FROM productions WHERE article_id = ?", (article_id,))
+            removed = cursor.rowcount if cursor.rowcount and cursor.rowcount > 0 else 0
+            conn.execute("DELETE FROM articles WHERE id = ?", (article_id,))
+        return removed
+
+    def count_productions(self, article_id: str) -> int:
+        """这篇文章有多少条产物记录 / How many production rows this article has."""
+        with open_db(self.db_path) as conn:
+            row = conn.execute(
+                "SELECT COUNT(*) FROM productions WHERE article_id = ?", (article_id,)
+            ).fetchone()
+        return int(row[0]) if row else 0
+
     # -- 产物台账 / production ledger -----------------------------------------
 
     def record_production(
