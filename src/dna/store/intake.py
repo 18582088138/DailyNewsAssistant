@@ -61,6 +61,16 @@ class IntakeResult:
     article_ids: list[str] = field(default_factory=list)
     filter_reasons: dict[str, int] = field(default_factory=dict)
     source_failures: list[tuple[str, str]] = field(default_factory=list)
+    media_warnings: list[tuple[str, str]] = field(default_factory=list)
+    """
+    抓不下来的媒体文件 /media that could not be downloaded：`(article_id, 一行原因)`。
+
+    **不算失败**：正文已经入库，少一个视频不影响这篇文章可用。单独拎出来是因为
+    它以前只写进了 `references.md`，界面上完全看不见——人无从知道该去手工补哪一个。
+    Not counted as a failure: the article is in and usable without the clip. It is
+    surfaced separately because it previously only reached `references.md`, leaving the
+    user no way to know which one needs fetching by hand.
+    """
 
     @property
     def processed(self) -> int:
@@ -79,6 +89,8 @@ class IntakeResult:
             parts.append(f"（其中降级 {self.fetched_degraded}）")
         if self.failed:
             parts.append(f"失败 {self.failed}")
+        if self.media_warnings:
+            parts.append(f"媒体未下载 {len(self.media_warnings)}")
         return "，".join(parts)
 
 
@@ -93,6 +105,7 @@ def intake_sources(
     max_images: int | None = None,
     download_videos: bool = True,
     refetch: bool = False,
+    max_age_days: int | None = None,
 ) -> IntakeResult:
     """
     从订阅源采集并入库 / Collect from the configured sources and ingest.
@@ -105,6 +118,14 @@ def intake_sources(
                          （源级 max_images > profile.max_images_per_article）
         download_videos: 是否下载官方视频（比图片慢得多）
         refetch:         已抓过的文章是否重抓
+        max_age_days:    只要最近这几天的条目，**覆盖每个源在 `sources.yaml` 里的设置**。
+                         覆盖而不是改配置文件：YAML 里那一份是长期偏好，
+                         这个参数是「这一次我只想要最近三天」的临时意图。
+                         注意没有发布时间的条目**不受此限制**（见 `filters.should_keep`），
+                         大量 feed 不给 pubDate，按「未知即旧」丢弃会误杀整个源。
+                         Overrides each source's own setting for this run only. Items with
+                         no published date are unaffected: many feeds omit it, and
+                         treating unknown as old would silently drop whole sources.
     """
     s = settings or get_settings()
     prof = profile or safe_profile()
@@ -127,6 +148,8 @@ def intake_sources(
     for source_id, items in grouped.items():
         config = by_source.get(source_id)
         rules = build_filter(config, prof) if config else build_filter(_dummy_config(source_id), prof)
+        if max_age_days is not None:
+            rules = rules.model_copy(update={"max_age_days": max_age_days})
         outcome: FilterOutcome = apply_filters(items, rules)
 
         kept.extend(outcome.kept)
@@ -207,12 +230,19 @@ def refetch_article(
     download_images: bool = True,
     max_images: int | None = None,
     download_videos: bool = True,
+    result: IntakeResult | None = None,
 ) -> ArticleRecord | None:
     """
     重新抓取一篇已在台账里的文章 / Re-fetch an article already in the ledger.
 
     用于抓取失败后重试，或站点内容更新后刷新。
     For retrying after a failure, or refreshing when the site has updated the article.
+
+    参数 / Args:
+        result: 传一个 `IntakeResult` 进来就能拿到这一篇的明细（媒体告警、成功/降级）。
+            返回值仍是台账记录，绝大多数调用方只关心这个。
+            Pass one in to receive the per-item detail (media warnings, ok/degraded);
+            the return value stays the ledger record, which is all most callers want.
     """
     s = settings or get_settings()
     ledger = Ledger(s.db_file)
@@ -232,12 +262,13 @@ def refetch_article(
         url=record.url,
         title=record.feed_title or record.title,
     )
-    result = IntakeResult()
+    outcome = result if result is not None else IntakeResult()
+    outcome.collected += 1
     _ingest_items(
         [item],
         ledger,
         s,
-        result,
+        outcome,
         extract=True,
         download_images=download_images,
         max_images=max_images,
@@ -366,6 +397,11 @@ def _ingest_items(
             ledger.record_failure(article_id, f"落盘失败：{exc}")
             result.failed += 1
             continue
+
+        # 视频抓不下来只提醒，不算失败——正文已经入库，这篇文章照样能用
+        # A missing clip is a warning, not a failure: the article is in and usable.
+        for url, reason in saved.skipped_videos:
+            result.media_warnings.append((article_id, f"视频未下载（{url}）：{reason}"))
 
         status = ledger.record_fetch(
             article_id,
