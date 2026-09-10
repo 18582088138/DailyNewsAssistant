@@ -22,7 +22,14 @@ from nicegui import ui
 from dna.core.config import get_settings
 from dna.produce import DISPLAY_ORDER
 from dna.store import Ledger
-from frontends.nicegui_app import actions, import_dialog, ledger_table, theme
+from frontends.nicegui_app import (
+    actions,
+    import_dialog,
+    ledger_table,
+    settings_dialog,
+    source_dialog,
+    theme,
+)
 
 PAGE_TITLE = "DailyNewsAssistant · 文章台账"
 
@@ -64,6 +71,15 @@ def _render_page() -> None:
     # would also put the table above the filters, since NiceGUI lays out in creation order.
     table_container = ui.column().classes("w-full px-4 pb-4 gap-0")
 
+    def refresh_batch_bar() -> None:
+        """
+        只重画批量操作条 / Redraw the batch bar alone.
+
+        勾一下复选框只是让一个数字变了，没有理由重建整张表（几百个元素）。
+        A tick changes one number; rebuilding hundreds of elements for it is waste.
+        """
+        ledger_table.render_batch_bar(batch_container, on_done=refresh)
+
     def refresh() -> None:
         """重新读数据并重建表格 / Reload and rebuild."""
         rows = actions.load_rows(
@@ -74,7 +90,10 @@ def _render_page() -> None:
             only_gaps=state["only_gaps"],
             only_new=state["only_new"],
         )
-        ledger_table.render_table(table_container, rows, on_change=refresh)
+        ledger_table.render_table(
+            table_container, rows, on_change=refresh, on_select=refresh_batch_bar
+        )
+        refresh_batch_bar()
 
         # 新导入的条数单独报：粘完一批链接之后，这个数字就是「还有几条没动过」
         # Reported separately: right after pasting a batch this number is the backlog.
@@ -131,16 +150,33 @@ def _render_page() -> None:
         ).props("no-caps unelevated dense").style(
             "background: var(--wb-accent); color: #06231a; font-weight:600"
         ).tooltip("粘贴一段带链接的文字，自动认出全部链接并抓取（不产生费用）")
+        # 订阅导入放在导入链接旁边而不是塞进菜单：这两个是同一件事的两种来源，
+        # 一个是手动投递、一个是订阅源，谁也不比谁次要。
+        # Beside it rather than in a menu: the two are the same act from different sources.
+        ui.button(
+            "从订阅导入", icon="rss_feed",
+            on_click=lambda: source_dialog.open_dialog(on_done=refresh),
+        ).props("no-caps unelevated dense outline").style(
+            "color: var(--wb-accent)"
+        ).tooltip("把配置里启用的订阅源最近几天的新文章批量抓下来（不产生费用）")
         ui.button(icon="refresh", on_click=refresh).props("flat dense round").tooltip("刷新")
+        # 设置改完字数窗口，表格里的超长标记要跟着重判——所以回调是 refresh
+        ui.button(
+            icon="settings",
+            on_click=lambda: settings_dialog.open_dialog(on_saved=refresh),
+        ).props("flat dense round").tooltip("设置：内容偏好与运行配置")
 
-    # 图例：格子只有四种状态，写在表上方比让人猜快得多
-    # A legend: four cell states, faster to state than to infer.
+    # 图例 + 批量操作条同占一行：批量条只在有勾选时出现，平时这一行就是纯图例。
+    # 放在这里而不是表格上方另起一行，是为了不让表格在勾选时上下跳。
+    # They share the row so the table does not jump when a selection appears.
     with ui.row().classes("w-full items-center gap-4 px-4 py-2 no-wrap"):
+        batch_container = ui.row().classes("items-center gap-2 no-wrap")
         with ui.row().classes("items-center gap-1 no-wrap"):
             ui.label("NEW").classes("wb-new-badge")
             ui.label("刚导入，未调用 LLM").classes("wb-path")
         for glyph, text, tone in (
             ("●", "已生成", "wb-ok"),
+            ("●", "超出字数区间", "wb-over"),
             ("○", "未生成", "wb-empty"),
             ("▲", "失败", "wb-fail"),
             ("—", "本篇不适用", "wb-na"),
