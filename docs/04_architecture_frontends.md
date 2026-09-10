@@ -98,13 +98,15 @@
 
 | 文件 | 行数 | 职责 |
 |---|---|---|
-| `main.py` | 192 | 装配页面：顶栏 + 筛选 + 表格；`run()` 启服务 |
-| `ledger_table.py` | 552 | 表格：表头、行、产物格、格子状态与配色、发起生成 |
+| `main.py` | 228 | 装配页面：顶栏 + 筛选 + 表格；`run()` 启服务 |
+| `ledger_table.py` | 969 | 表格：勾选列、表头、行、产物格、格子状态与配色、批量条、发起生成 |
 | `detail_panel.py` | 542 | 展开面板：语言开关、这一版的元信息、修改指令、下载/合成/重做 |
-| `actions.py` | 652 | **界面动作**：读数据、跑生成、TTS 交接、打开目录 |
+| `actions.py` | 1069 | **界面动作**：读数据、跑生成、批量重抓/删除、配置读写、TTS 交接、打开文件 |
 | `import_dialog.py` | 139 | 链接导入对话框 |
+| `source_dialog.py` | 156 | **从订阅导入**：选源 + 最近几天 + 每源上限，不调 LLM |
+| `settings_dialog.py` | 336 | **设置面板**：内容偏好（profile.yaml 全开）+ 运行设置（`.env` 白名单） |
 | `audio_progress.py` | 129 | 音频合成的进度浮窗 |
-| `theme.py` | 303 | 主题与列宽；`short_title()` 截断过长标题 |
+| `theme.py` | 410 | 主题与列宽；`short_title()` / `short_url()` 截断 |
 
 ### `actions.py` —— 界面与后端之间的唯一一层
 
@@ -119,7 +121,14 @@
 | `preview_links()` / `import_links()` | 粘贴一段文本 → 认出链接 → 入库 |
 | `open_tts_workbench()` / `collect_tts_handoff()` / `import_tts_handoff()` | 把稿子交给 TTS 图形界面精修，出活了收回来 |
 | `production_text()` / `production_file()` / `production_sidecar()` | 读回产物供预览与下载 |
-| `article_directory()` / `media_folders()` / `open_in_file_manager()` | 打开素材目录 |
+| `article_directory()` / `media_folders()` / `open_in_file_manager()` | 打开素材目录**或文件**（`article.md` 用默认编辑器打开） |
+| `body_file()` / `media_target()` | 表格里正文格 / 媒体格点开的目标；没东西可开时返回 `None` |
+| `batch_refetch()` | 逐篇重抓，**每篇一次 `io_bound`**，进度回调报 `i/N` |
+| `plan_batch_delete()` / `batch_delete()` | 先算再删：确认框显示的数字就是 `plan_delete()` 算出来的 |
+| `target_window()` / `over_target()` | 字数窗口 · **渲染时现算**是否超长（改了 profile，历史产物跟着重判） |
+| `source_options()` / `import_from_sources()` | 从 `load_sources()` 取启用的源 · 采集（不调 LLM） |
+| `profile_values()` / `save_settings()` | 设置面板的读与写；写走 `core/config_edit.py` |
+| `ENV_FIELDS` / `env_groups()` / `env_display()` / `env_shadowed()` | `.env` 白名单的呈现：分组、打码、环境变量遮盖判定 |
 | `longform_estimate()` / `cache_status()` | 长文案时长预估 · LLM 缓存命中率 |
 
 `RowView` 是表格一行的视图模型：`article` + `productions[(kind, lang)]` + `is_new`。
@@ -128,6 +137,9 @@
 - **每一次 LLM / TTS 调用都要 `run.io_bound`。** 同步调用冻住整个页面十几秒。
 - `open_in_file_manager()` 先看 `_server_is_local()`：服务端不在本机时打开的是
   服务器上的目录，不是用户的——那不是用户要的。
+- **`ENV_FIELDS` 只描述「怎么画」，能不能写由 `core/config_edit.ENV_ALLOWLIST` 说了算。**
+  两边错开是静默的：少一项 → 界面上根本改不了，而白名单声称可写；多一项 → `save_env`
+  只记一条日志就把它丢掉，界面显示「已保存」。所以有一条双向相等的测试锁着。
 
 ### `ledger_table.py` —— 花钱的按钮都在这里
 
@@ -139,12 +151,20 @@
 | `_launch()` / `_run()` | 发起一次生成并把结果告诉用户 |
 | `_ask_audio()` | 超过 `AUDIO_CONFIRM_SECONDS = 300` 的合成先确认耗时 |
 | `_ask_longform()` | **长文案的形式选择与费用确认** |
+| `_SELECTED` / `selected_ids()` / `clear_selection()` | 勾选状态**跨刷新保留**（与 `_OPEN` 同一个做法）；`dict[str, None]` 当有序集合用，确认框里的标题顺序就是勾的顺序 |
+| `render_batch_bar()` / `_ask_batch_refetch()` / `_ask_batch_delete()` | 选中 > 0 时出现的批量条与两个确认框 |
+| `_render_body_cell()` / `_render_media_cell()` / `_reveal()` | 正文格开 `article.md`，媒体格开 `images/`（没有则 `videos/`） |
 
 **改这里要注意**：
 - **失败的格子要看得出是失败，不是「未生成」。** 显示「未生成」的话人会以为
   没跑过，再点一次再失败一次，每次都付钱。
 - `_ask_longform()` 是长文案唯一的费用闸门（一篇 5~9 次调用）。
 - 长音频要 `_ask_audio()`：不花钱但要跑几十分钟，没有确认人会以为界面挂了。
+- **勾选框与标题下的原文链接都要 `click.stop`**（`js_handler`，浏览器端拦住，不走一趟服务端）。
+  漏了就是勾一下顺带把行展开、点链接开新标签页的同时也展开——这一行的注释曾经描述过
+  这个行为，但代码把 click 挂在整个标题格上，实现从来没有对上过。
+- **批量重抓是逐篇 `io_bound`，不是丢一个批量函数进线程**：进度要真的在动，
+  一个不动的转圈和卡死看起来一样（`audio_progress.py` 存在的同一个理由）。
 
 ### `detail_panel.py` —— 单格详情与重做
 
@@ -155,6 +175,26 @@
 
 **改这里要注意**：`_render_language_toggle()` 的中/英是**同一产物的两个版本**
 （schema v4：语言是产物的一个维度，不是新的 kind），切换语言不是切换产物类型。
+
+### 三个对话框
+
+| 文件 | 入口 | 花不花钱 |
+|---|---|---|
+| `import_dialog.py` | 顶栏「导入链接」 | 不调 LLM |
+| `source_dialog.py` | 顶栏「从订阅导入」 | 不调 LLM，与 `dna fetch` 是同一个 `intake_sources` |
+| `settings_dialog.py` | 顶栏齿轮 | 只写配置文件 |
+
+**改这里要注意**：
+
+- 对话框只管画，**批量循环、配置落盘、采集一律在 `actions.py` / `src/dna/` 里**——
+  判据是「这段代码换到另一个前端里要不要重写」。
+- `source_dialog` 的「最近几天」是**这一次的意图**，不写回 `sources.yaml`
+  （那里的按源配置是长期偏好）。一个源都没有时只画一句说明，不画那些开关：
+  点了也没东西可抓，摆着只会让人以为程序坏了。
+- `settings_dialog` **不逐项即时保存**：一个窗口是一对数，改到一半上下限是反的。
+  另外只提交**改过**的 profile 项——`patch_yaml_values` 会重写它收到的每一个 key，
+  全量提交会把 `git diff config/profile.yaml` 塞满没变的行，而那个文件是靠读 diff 审的。
+- 被环境变量遮盖的字段**禁用且不提交**，否则 `.env` 里会多出一个与实际行为矛盾的值。
 
 ---
 
@@ -167,6 +207,11 @@
 | 格子显示「未生成」但确实跑过 | `ledger_table.py::_cell_state` + 后端要记失败行 |
 | 长文案点一下就扣了一大笔 | `ledger_table.py::_ask_longform` 的确认没生效 |
 | 「打开文件夹」打开的不是我的目录 | `actions.py::_server_is_local` |
+| 点标题下的原文链接，连带把这一行展开了 | `ledger_table.py::_render_title_cell` 的 `click.stop`（`js_handler`） |
+| 勾选丢了 / 重线跑到「媒体」列左边 | `theme.py` 的 `COL_PICK` 与 `.wb-grid > div:nth-child(5)`——加列时这两处要一起改 |
+| 改了 `.env` 完全没反应 | 被系统环境变量遮盖了，看 `config_edit.py::shadowed_by_env`（设置面板会标红并禁用） |
+| 设置里改了字数窗口，超长标记没变 | `actions.py::over_target` 是渲染时现算的，回调必须是 `refresh` 而不是关掉对话框了事 |
+| 选了「最近 3 天」却抓回一堆旧文章 | `sources/filters.py::should_keep`——`published_at is None` 的条目不受天数限制，这是有意的 |
 | 中/英切换像是切换了产物类型 | `detail_panel.py::_render_language_toggle` |
 | TTS 精修的产物收不回来 | `actions.py::collect_tts_handoff` + `_watch_handoff` 的轮询上限 |
 | 标题在表格里被截断 | `theme.py::short_title` / `TITLE_MAX_CHARS` |

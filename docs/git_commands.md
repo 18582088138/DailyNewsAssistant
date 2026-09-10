@@ -2,6 +2,10 @@
 
 > 约定：AI **不执行** `git commit` / `git push`，只在每阶段末尾在此汇总命令，由你审阅后手动执行。
 > 注意：`git add -A` 有误提交 `.env` 和 `outputs/` 的风险，一律用**显式路径**添加，或先 `git status` 确认。
+>
+> **`tests/` 不入库**（2026-09-10 用户决定，`.gitignore` 第 43 行）。本文件里所有
+> `git add tests/…` 已删除——它们执行时会以「paths are ignored」**中止整条命令**，
+> 连同那一步的其余路径一起。测试照跑，只是不提交。
 
 ---
 
@@ -141,7 +145,6 @@ git add pyproject.toml README.md
 git add src/dna/__init__.py src/dna/core/
 git add frontends/
 git add config/sources.yaml config/profile.yaml
-git add tests/
 git add docs/00_STAGE_SUMMARY.md docs/03_unit_tests.md docs/git_commands.md
 
 git commit -m "feat(P0): 项目脚手架 —— 配置/数据模型/命名规则/日志/环境自检/CLI
@@ -188,7 +191,6 @@ git status --short                   # 确认没有 .env / outputs/ / data/
 
 ```bash
 git add src/dna/llm/ src/dna/core/errors.py
-git add tests/llm/ tests/__init__.py tests/core/__init__.py tests/frontends/__init__.py
 git add docs/03_unit_tests.md docs/00_STAGE_SUMMARY.md docs/git_commands.md
 git add docs/issues/001-ollama-reasoning-token-budget.md
 git add docs/issues/002-small-model-echoes-json-schema.md
@@ -243,7 +245,6 @@ git status --short                               # 确认没有 .env / outputs/ 
 ```bash
 git add src/dna/core/urls.py src/dna/sources/ src/dna/extract/
 git add frontends/cli/main.py config/sources.yaml README.md
-git add tests/core/test_urls.py tests/sources/ tests/extract/ tests/fixtures/
 git add docs/03_unit_tests.md docs/00_STAGE_SUMMARY.md docs/git_commands.md
 git add docs/02_development_plan.md docs/10_sources_guide.md
 # 注意：docs/issues/ 已被 .gitignore 忽略，不要 git add，否则会报错
@@ -311,7 +312,6 @@ git status --short                             # 确认没有 .env / outputs/ / 
 git add src/dna/store/ src/dna/sources/filters.py src/dna/sources/http.py
 git add src/dna/core/config.py src/dna/extract/article.py
 git add frontends/cli/main.py config/sources.yaml README.md
-git add tests/store/ tests/sources/test_filters.py tests/extract/test_extract.py
 git add docs/00_STAGE_SUMMARY.md docs/02_development_plan.md docs/03_unit_tests.md
 git add docs/10_sources_guide.md docs/11_article_store_guide.md docs/git_commands.md
 
@@ -350,7 +350,7 @@ CLI: dna add（抓指定链接）/ list（总表）/ show（核对结果）/ ref
 > `docs/issues/` 已在 .gitignore 里，issue 005 的文件不要 `git add`。
 
 ```bash
-git add src/dna/store/video_store.py         src/dna/store/article_store.py         src/dna/store/intake.py         src/dna/store/ledger.py         src/dna/store/__init__.py         src/dna/extract/media.py         src/dna/extract/article.py         src/dna/core/urls.py         frontends/cli/main.py         tests/store/test_video_store.py         tests/store/test_article_store.py         tests/store/test_ledger.py         tests/core/test_urls.py         tests/extract/test_extract.py         pyproject.toml         docs/00_STAGE_SUMMARY.md         docs/03_unit_tests.md         docs/11_article_store_guide.md         docs/git_commands.md
+git add src/dna/store/video_store.py         src/dna/store/article_store.py         src/dna/store/intake.py         src/dna/store/ledger.py         src/dna/store/__init__.py         src/dna/extract/media.py         src/dna/extract/article.py         src/dna/core/urls.py         frontends/cli/main.py         pyproject.toml         docs/00_STAGE_SUMMARY.md         docs/03_unit_tests.md         docs/11_article_store_guide.md         docs/git_commands.md
 
 git commit -m "feat(store): 视频落盘、配图上限提至 10、人工补正文回写链路
 
@@ -396,7 +396,7 @@ store/article_store: 重抓前清空 images/ videos/
 > `data/llm_cache/` 与 `outputs/` 同样不入库。
 
 ```bash
-git add src/dna/pipeline/         src/dna/llm/cache.py         src/dna/llm/factory.py         src/dna/core/config.py         frontends/cli/main.py         tests/pipeline/         tests/llm/test_cache.py         tests/llm/fakes.py         tests/llm/test_factory.py         tests/core/test_config.py         pyproject.toml         docs/00_STAGE_SUMMARY.md         docs/03_unit_tests.md         docs/06_prompt_spec.md         docs/12_digest_guide.md         docs/git_commands.md
+git add src/dna/pipeline/         src/dna/llm/cache.py         src/dna/llm/factory.py         src/dna/core/config.py         frontends/cli/main.py         pyproject.toml         docs/00_STAGE_SUMMARY.md         docs/03_unit_tests.md         docs/06_prompt_spec.md         docs/12_digest_guide.md         docs/git_commands.md
 
 git commit -m "feat(pipeline): P3 流水线核心 —— 清洗/去重/打分/摘要/双语/趋势 + LLM 响应缓存
 
@@ -456,7 +456,7 @@ CLI: 新增 dna digest（--dry-run / --limit / --bilingual / -a 指定文章 / -
 > `docs/issues/` 在 .gitignore 里，issue 007 不要 `git add`。
 
 ```bash
-git add src/dna/produce/         src/dna/narration/         src/dna/store/migrate_layout.py         src/dna/store/db.py         src/dna/store/ledger.py         src/dna/store/__init__.py         src/dna/store/article_store.py         src/dna/store/intake.py         src/dna/core/config.py         src/dna/extract/media.py         src/dna/pipeline/source.py         frontends/nicegui_app/         frontends/cli/main.py         tests/narration/         tests/produce/         tests/store/test_migrate_layout.py         tests/store/test_ledger.py         tests/extract/test_extract.py         tests/pipeline/test_source.py         config/profile.yaml         pyproject.toml         docs/00_STAGE_SUMMARY.md         docs/03_unit_tests.md         docs/06_prompt_spec.md         docs/07_db_schema.md         docs/13_workbench_guide.md         docs/git_commands.md
+git add src/dna/produce/         src/dna/narration/         src/dna/store/migrate_layout.py         src/dna/store/db.py         src/dna/store/ledger.py         src/dna/store/__init__.py         src/dna/store/article_store.py         src/dna/store/intake.py         src/dna/core/config.py         src/dna/extract/media.py         src/dna/pipeline/source.py         frontends/nicegui_app/         frontends/cli/main.py         config/profile.yaml         pyproject.toml         docs/00_STAGE_SUMMARY.md         docs/03_unit_tests.md         docs/06_prompt_spec.md         docs/07_db_schema.md         docs/13_workbench_guide.md         docs/git_commands.md
 
 git commit -m "feat(workbench): P3.5 台账工作台 —— GUI 产出矩阵 + 单篇五种产物
 
@@ -622,7 +622,7 @@ longform: 每节提示词放完整提纲并标注已讲过/现在写这节/留�
 > `docs/issues/` 在 .gitignore 里，issue 008 不要 `git add`。
 
 ```bash
-git add frontends/nicegui_app/         src/dna/produce/tasks.py         tests/frontends/test_workbench.py         docs/13_workbench_guide.md         docs/03_unit_tests.md         docs/git_commands.md
+git add frontends/nicegui_app/         src/dna/produce/tasks.py         docs/13_workbench_guide.md         docs/03_unit_tests.md         docs/git_commands.md
 
 git commit -m "feat(gui): 工作台改版 —— 修布局重叠、冻结表头、重做移出格子、链接导入
 
@@ -738,7 +738,7 @@ git status --short
 ```
 
 ```bash
-git add .gitignore         src/dna/produce/__init__.py         src/dna/narration/__init__.py         src/dna/store/migrate_layout.py         src/dna/store/__init__.py         src/dna/store/db.py         src/dna/store/ledger.py         src/dna/store/article_store.py         src/dna/store/intake.py         src/dna/extract/media.py         src/dna/pipeline/source.py         frontends/cli/main.py         tests/produce/__init__.py         tests/store/test_migrate_layout.py         tests/store/test_ledger.py         tests/extract/test_extract.py         tests/pipeline/test_source.py         docs/07_db_schema.md         docs/00_STAGE_SUMMARY.md         docs/02_development_plan.md         docs/git_commands.md
+git add .gitignore         src/dna/produce/__init__.py         src/dna/narration/__init__.py         src/dna/store/migrate_layout.py         src/dna/store/__init__.py         src/dna/store/db.py         src/dna/store/ledger.py         src/dna/store/article_store.py         src/dna/store/intake.py         src/dna/extract/media.py         src/dna/pipeline/source.py         frontends/cli/main.py         docs/07_db_schema.md         docs/00_STAGE_SUMMARY.md         docs/02_development_plan.md         docs/git_commands.md
 
 git commit -m "fix(repo): 补齐 P3.5 漏提交的文件 —— HEAD 此前无法 import
 
@@ -813,7 +813,7 @@ git status --short
 ```
 
 ```bash
-git add src/dna/core/config.py         src/dna/core/doctor.py         src/dna/narration/script_builder.py         src/dna/narration/longform.py         src/dna/pipeline/flow.py         src/dna/produce/__init__.py         src/dna/produce/service.py         src/dna/produce/tasks.py         src/dna/store/intake.py         frontends/nicegui_app/actions.py         tests/core/test_doctor.py         docs/03_unit_tests.md         docs/git_commands.md
+git add src/dna/core/config.py         src/dna/core/doctor.py         src/dna/narration/script_builder.py         src/dna/narration/longform.py         src/dna/pipeline/flow.py         src/dna/produce/__init__.py         src/dna/produce/service.py         src/dna/produce/tasks.py         src/dna/store/intake.py         frontends/nicegui_app/actions.py         docs/03_unit_tests.md         docs/git_commands.md
 
 git commit -m "refactor: 修干净检出跑不过的测试，去掉四处冗余
 
@@ -889,9 +889,6 @@ git add src/dna/store/__init__.py
 git add src/dna/core/naming.py
 git add src/dna/core/__init__.py
 git add src/dna/extract/media.py
-git add tests/store/test_issue_store.py
-git add tests/core/test_naming.py
-git add tests/extract/test_extract.py
 git add docs/05_output_spec.md
 git add docs/12_digest_guide.md
 
@@ -906,9 +903,6 @@ git add frontends/cli/main.py
 git add frontends/nicegui_app/actions.py
 git add frontends/nicegui_app/detail_panel.py
 git add frontends/nicegui_app/ledger_table.py
-git add tests/tts/
-git add tests/produce/test_service.py
-git add tests/core/test_doctor.py
 git add pyproject.toml
 git add .env.example
 git add docs/14_tts_guide.md
@@ -1069,12 +1063,8 @@ git add frontends/nicegui_app/ledger_table.py
 git add frontends/nicegui_app/detail_panel.py
 git add frontends/nicegui_app/theme.py
 
-# --- 配置与测试 ---
+# --- 配置 ---
 git add config/profile.yaml
-git add tests/produce/test_service.py
-git add tests/narration/test_duration.py
-git add tests/store/test_ledger.py
-git add tests/frontends/test_workbench.py
 
 # --- 文档 ---
 git add docs/00_STAGE_SUMMARY.md
@@ -1321,15 +1311,11 @@ git commit -m "feat(frontends): 音频进度浮窗 + 高级配置跳转 TTS 界�
 - 轮询而不是回调：TTS 可能在另一台机器上，不该知道工作台的地址
 - dna tts 先探活再列音色；合成结果把 音频/耗时/RTF 分开报"
 
-# --- 步骤 7/7 · 配置、体检、文档与测试 ---
+# --- 步骤 7/7 · 配置、体检与文档 ---
 git add src/dna/core/config.py
 git add src/dna/core/doctor.py
 git add .env.example
 git add pyproject.toml
-git add tests/conftest.py
-git add tests/tts/test_tts.py
-git add tests/core/test_doctor.py
-git add tests/produce/test_service.py
 git add docs/14_tts_guide.md
 git add README.md
 git add docs/git_commands.md
@@ -1407,7 +1393,6 @@ git add frontends/nicegui_app/actions.py
 git add frontends/nicegui_app/detail_panel.py
 git add frontends/cli/main.py
 git add .env.example
-git add tests/tts/test_tts.py tests/produce/test_service.py
 git add docs/14_tts_guide.md docs/git_commands.md
 
 git commit -m "perf(tts): 界面挂在服务上（一份权重）；默认导出字幕；一篇一个文件夹
@@ -1509,7 +1494,7 @@ git commit -m "feat(prompt-lab): dna prompt —— 看提示词、试提示词
 - service._generate/_load_article/_as_cluster 改公开，就是为了让调试台调同一个
 - --run 不写文件也不记台账：调试跑十次不该留十份垃圾，也不该搅乱产物历史"
 
-# ---- 第 6 步：文档与测试文档字符串清理 ----
+# ---- 第 6 步：文档 ----
 git add docs/04_architecture_src.md docs/04_architecture_frontends.md
 git add docs/06_prompt_spec.md docs/03_unit_tests.md
 git add README.md
@@ -1554,7 +1539,6 @@ git status --short          # 预期：空
 # ---- 第 1 步：长度原语（字数验收 + 中英折算）----
 git add src/dna/core/length.py
 git add src/dna/narration/duration.py
-git add tests/narration/test_duration.py
 
 git commit -m "refactor(length): 长度验收从秒数改为字数，秒数退为参照
 
@@ -1610,9 +1594,7 @@ git commit -m "refactor(prompts): 重排 summary 与 shortvideo，消掉自相�
   不是可选信息点，这条的实际效果是让模型复述标题。改为「可以取信息，
   但不要重述标题」"
 
-# ---- 第 5 步：测试与文档 ----
-git add tests/narration/test_script_builder.py tests/pipeline/test_summarize.py
-git add tests/pipeline/test_flow.py tests/produce/test_service.py
+# ---- 第 5 步：文档 ----
 git add docs/06_prompt_spec.md docs/04_architecture_src.md docs/git_commands.md
 
 git commit -m "test,docs: 假回复长度落进配置窗口；记下从秒数改字数的根因
@@ -1632,3 +1614,322 @@ git status --short          # 预期：空
 /c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m frontends.cli.main doctor   # 0 FAIL
 dna prompt <id> -t shortvideo    # 提示词里出现「200~250 字」，与验收同源
 ```
+
+---
+
+## GUI 使用体验优化 · 批次 1（后端能力，无界面改动）
+
+对应需求 10 项里的第 5、10、7、6、9、2 项的后端部分。界面改动在批次 2/3。
+
+```bash
+# ---- 第 1 步：视频重试 + 删除 ----
+git add src/dna/store/video_store.py src/dna/store/delete.py
+git add src/dna/store/ledger.py src/dna/store/__init__.py
+
+git commit -m "feat(store): 视频下载整次重试三次；新增文章删除
+
+- download_videos 每个视频整次重试 3 次。原有的 yt-dlp retries=2 是分片级的，
+  解析播放器失败时它一次都不重来。重试之间不 sleep：地域限制和会员墙等多久都一样
+- 每次重试前清 stem.* 残片，否则第二次的 glob 会把上一次的半个文件当成品
+- 新增 store/delete.py：先算再删（plan_delete 是纯查询），确认框上的数字
+  就来自要删的那批对象；目录必须在 outputs 之下才删，一个手工改坏的
+  store_dir 不该变成 rmtree 别处
+- 先删文件再删台账行：中途失败时行还在，重跑能接着来；反过来行没了就找不回目录
+- ledger.delete 先删 productions 再删 articles——两表没有外键约束"
+
+# ---- 第 2 步：采集参数与媒体告警 ----
+git add src/dna/store/intake.py
+
+git commit -m "feat(store): intake 支持 max_age_days 覆盖；媒体失败只提醒
+
+- max_age_days 覆盖每个源在 sources.yaml 里的设置，只作用于这一次。
+  YAML 那份是长期偏好，参数是「这次只要最近三天」的临时意图
+- IntakeResult.media_warnings：视频抓不下来不算失败，正文已入库照样能发。
+  skipped_videos 先前存在但没人读，前端没东西可提醒
+- refetch_article 加可选的 result 出参，批量重抓才能把告警带回界面"
+
+# ---- 第 3 步：字数窗口收口 ----
+git add src/dna/produce/tasks.py src/dna/produce/service.py
+
+git commit -m "fix(produce): 摘要的超长提醒此前永远不显示
+
+- char_window() 收口三条 kind→字数字段的映射。service.py 原来各写一遍，
+  界面判定超长用的窗口必须和生成时是同一个
+- 摘要分支丢了 within_target、还把 calls 写死成 1：超长的摘要一路显示成合格，
+  回炉那几次也不计数
+- ProduceResult.summary() 的超长提醒挂在 seconds 上，而摘要没有秒数——
+  最容易写超的那一种恰好永远不提醒"
+
+# ---- 第 4 步：仓库根定位 + 配置回写（同生共死，必须同一步）----
+git add src/dna/core/config.py src/dna/core/config_edit.py
+
+git commit -m "feat(core): 仓库根支持 DNA_HOME 与打包后定位；新增配置回写
+
+- PROJECT_ROOT 改为 DNA_HOME > sys.frozen 时用 exe 所在目录 > 源码上溯三层。
+  PyInstaller 下 __file__ 在临时解包目录里，config/.env/data/outputs 会全指到那儿,
+  每次启动都是一个空库且不报错。DNA_HOME 主要是为了能测这一分支
+- config_edit 按行替换 YAML 的值，不用 safe_dump：profile.yaml 三分之二是
+  「为什么」注释，dump 一次全抹还会按字母重排 key
+- YAML 找不到 key 报错不追加（重复 key 会让程序读后者、人看前者）；
+  .env 找不到就追加（dotenv 本来就取最后一个）
+- 落盘前先 Profile(**merged) 校验，不过就一个字节都不写
+- 密钥打码且留空/仍是打码值时不覆盖；白名单外的 key 拒写"
+
+# ---- 第 5 步：CLI 同步（两个前端调同一个函数）----
+git add frontends/cli/main.py
+
+git commit -m "feat(cli): 新增 dna delete；fetch 加 --days；入库结果显示媒体告警
+
+- dna delete <id...>：先列出将删什么再确认，--keep-files 只清台账、素材留着
+- dna fetch --days N 透传 max_age_days
+- _render_intake 与 refetch 末尾列出媒体告警，最多 10 条"
+
+# ---- 第 6 步：记录 ----
+git add docs/git_commands.md
+
+git commit -m "docs: 记录批次 1 的提交步骤
+
+测试覆盖（文件在本地，不入库）：
+- 视频：第三次成功不记 skipped；三次全失败不抛异常；重试间残片被清掉
+- 删除：plan 的数字与实删一致；--keep-files；store_dir 逃出 outputs 时拒删目录但照删行
+- 天数：覆盖源级设置；**没有发布时间的条目不受限制**
+- 配置回写：改一个值其余行逐字节不变；未知 key 报错；校验失败不落盘"
+
+git status --short          # 预期：空
+```
+
+验证（实测跑过）：
+
+```bash
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest -q            # 全量离线，全绿
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m frontends.cli.main doctor   # 0 FAIL
+```
+
+---
+
+## GUI 使用体验优化 · 批次 2（表格界面）
+
+对应需求第 2 项（批量重抓 + 勾选）、第 3 项（原文链接）、第 4 项（点开正文/媒体）、
+第 6 项（超长看得出来）的界面部分。后端能力在批次 1，对话框在批次 3。
+
+```bash
+# ---- 第 1 步：网格几何（后面每一处表格改动都依赖它）----
+git add frontends/nicegui_app/theme.py
+
+git commit -m "style(gui): 网格加勾选列；补 short_url 与 min_table_width
+
+- 最前面插 40px 勾选列，最小宽度改由 min_table_width() 算——单独成函数是为了
+  能被测到：这个和数不上，表头就整体错开一格
+- 那道重线跟着挪到 nth-child(5)。产物列的第一格在勾选列加进来之后是第 5 格,
+  改漏就跑到「媒体」左边去了
+- 表头居中规则从 `div + div` 换成 `> div` + `nth-child(2)` 例外。勾选列插到最前面
+  之后，`div + div` 选中的第一个就是标题列，标题会被居中、整张表读起来变形
+- short_url 从中间截并剥掉协议头：同一个域名下的几条从右边截看起来一模一样
+- .wb-pick 加 overflow:hidden——Quasar 复选框的水波纹会溢出 40px 的格子"
+
+# ---- 第 2 步：批量与打开动作 ----
+git add frontends/nicegui_app/actions.py
+
+git commit -m "feat(gui): 批量重抓/批量删除动作；正文与媒体的打开目标
+
+- batch_refetch 逐篇过 run.io_bound，不是把整批丢进一个线程：进度条要真的在动,
+  一个不动的转圈和卡死看起来一样。单篇任何异常都只记一条 warning，不中断其余
+- batch_delete / plan_batch_delete 分开：确认框上的数字必须来自真正要删的那批对象
+- body_file / media_target 缺文件时返回 None，格子据此不可点——不给出一个点开是空的按钮
+- over_target 现算不入库：改了 profile.yaml 的窗口，历史产物应当跟着重新判定,
+  存进库的布尔值不会
+- open_in_file_manager 放宽到接受文件。Windows 上 os.startfile 对 .md 会用
+  默认编辑器打开，这正是「点开正文」要的"
+
+# ---- 第 3 步：表格与页面装配 ----
+git add frontends/nicegui_app/ledger_table.py frontends/nicegui_app/main.py
+
+git commit -m "feat(gui): 勾选列与批量操作条；标题下显示原文链接；正文/媒体格可点
+
+- 勾选用 dict 当有序集合跨刷新保留：确认框里列出的标题顺序要和人勾的顺序一致,
+  而 set 的迭代顺序是哈希序，每次刷新都可能不同
+- 表头三态（本页全选/部分/未选），中间那一态不能省——省了就看不出本页已勾了几篇。
+  用受控的 ui.icon 而不是 Quasar 三态复选框：ui.checkbox 是 bool 类型的
+- 勾一下只改一个数字，所以 on_select 只重画批量条，不重建整张表
+- 修一个一直存在的 bug：注释写着点链接不该连带展开这一行，可处理器挂在整个标题格上。
+  用 js_handler 在浏览器里就地拦下冒泡，比注册一个空回调好——后者每次点击都要跑一趟服务端
+- theme.py 里定义好却全仓没人用的 wb-over 接上了：格子仍是 ●（它确实生成了、也能发)
+  只换颜色，换成 ▲ 会和「生成失败」混在一起而两者要做的事完全不同
+- 生成完的提示从「超出目标时长区间」改成报确切字数与目标区间：
+  验收标准是字数，而摘要根本没有时长这个维度"
+
+# ---- 第 4 步：记录 ----
+git add docs/git_commands.md
+
+git commit -m "docs: 记录批次 2 的提交步骤与测试覆盖
+
+- 重线的列序号与标题列不居中都单独锁住：这两处改漏不会报错，只会让表格错开一格
+- min_table_width 由 theme 提供并断言总值。原来的测试在本地抄了一份宽度公式
+  又只断言差值，早就不再保护任何东西了
+- over_target 两端都判（闭区间）、跟 profile 走而不是跟库里的数走、
+  不按字数验收的产物永远不标超长
+- 有一条测试直接读 ledger_table 源码断言 wb-over 出现过，防它再退回「定义了没人用」"
+
+git status --short          # 预期：空
+```
+
+验证（实测跑过）：
+
+```bash
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest tests/frontends -q   # 54 项
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest -q                   # 932 项全绿
+```
+
+界面 E2E 由用户自行验证（`dna gui`）。
+
+---
+
+## GUI 使用体验优化 · 批次 3（订阅导入与设置面板）
+
+对应需求第 7 项（从订阅导入的入口）与第 8 项（后台设置）。
+配置回写那一层在批次 1 就写好了，这一批是把它接到界面上。
+
+```bash
+# ---- 第 1 步：区间写反的护栏（config.py 与 profile.yaml 同生共死）----
+git add src/dna/core/config.py
+
+git commit -m "fix(core): Profile 的六个区间写反时报错
+
+- (100, 80) 是合法的 tuple[int, int]，然后让 low <= n <= high 永远为假：
+  每一篇产物都被标成超长，而配置文件看上去毫无问题
+- save_profile 的文档一直写着「写反的区间会被挡下」，但模型上并没有这条校验
+- 设置面板把这六项全放开了，写反只需要一次手滑，所以判定放在模型上——
+  命令行和界面同时受益。上下限相等仍然合法"
+
+# ---- 第 2 步：界面动作（订阅采集 + 设置字段表）----
+git add frontends/nicegui_app/actions.py
+
+git commit -m "feat(gui): 订阅采集动作；设置面板的字段表与保存
+
+- import_from_sources 调的是 dna fetch 用的同一个 intake_sources。源级失败单独报：
+  一个 feed 挂了而其余正常时，总数只是显得「今天新闻少」，人会去怪天数选窄了
+- source_options 来自 load_sources()，不是 Ledger.count_by_source()。台账里是
+  出现过的源（含已停用的死源），这里要的是配置里启用的源，包括一次还没抓过的新源
+- ENV_FIELDS 只描述怎么画，能不能写由 config_edit.ENV_ALLOWLIST 说了算,
+  两边双向对齐有测试锁住：少一项那项永远改不到，多一项 save_env 会静默拒写
+- env_display 读 Settings 的生效值而不是 .env 的文本：被系统环境变量盖住时,
+  文件里那个值根本不是程序在用的那个
+- save_settings 说清哪些要重启：代理和日志级别在进程启动时就读走了,
+  不说的话人会以为没保存成功然后反复点"
+
+# ---- 第 3 步：两个对话框 + 顶栏入口 ----
+git add frontends/nicegui_app/source_dialog.py
+git add frontends/nicegui_app/settings_dialog.py
+git add frontends/nicegui_app/main.py
+
+git commit -m "feat(gui): 新增从订阅导入与设置两个对话框
+
+- 天数是对话框上的当次选择，不写回 sources.yaml：那里那份是长期偏好,
+  今天补一批旧的不该让所有源永久变宽
+- 订阅对话框上写明「没有发布时间的条目不受天数限制」——很多 feed 不给发布时间,
+  程序选择保留它们，但选了「最近 3 天」却抓回旧文章的人会当成 bug
+- 一个源都没启用时不画那些开关，只说去哪儿改：摆着只会让人以为程序坏了
+- 设置面板统一按保存提交，不逐项即时存：字数窗口是成对的，改完下限还没改上限时
+  中间那一刻是个写反的区间
+- 只提交真的改了的 key。全量提交会让 profile.yaml 的 diff 出现一堆值没变的行,
+  而这个文件是要靠人读 diff 来确认改对了的
+- 被系统环境变量盖住的项标红并禁用，且不提交：写进 .env 也不生效,
+  只会在文件里留下一个与实际行为不符的值
+- 模型下拉里写明推理模型慢 30~50 倍——上一轮「GUI 卡住」的根因就是这一项"
+
+# ---- 第 4 步：记录 ----
+git add docs/git_commands.md
+
+git commit -m "docs: 记录批次 3 的提交步骤与测试覆盖
+
+- 六个区间逐个验证写反报错；上下限相等仍合法
+- ENV_ALLOWLIST 与 ENV_FIELDS 双向相等；标 secret 的正好是 SECRET_KEYS
+- 设置面板覆盖 Profile 的每一个字段：往模型加字段而忘了加控件时会失败,
+  而设置面板恰恰是「以为改了其实没改」最容易发生的地方
+- 订阅选项来自配置而不是台账；sources.yaml 坏了对话框仍能打开"
+
+git status --short          # 预期：空
+```
+
+验证（实测跑过）：
+
+```bash
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest -q     # 951 项全绿
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m frontends.cli.main doctor   # 0 FAIL
+```
+
+界面 E2E 由用户自行验证（`dna gui` → 从订阅导入 / 齿轮）。
+
+---
+
+## GUI 使用体验优化 · 批次 4（一键启动与打包前置）
+
+对应需求第 9 项。**这一批只出启动器与打包配置，exe 的实际构建与调试是独立一步**
+（与用户确认过）。`.bat` 那条路当场可用，exe 那条路等构建。
+
+```bash
+# ---- 第 1 步：一键启动（当场可用的那条路）----
+git add start.bat
+git add create_shortcut.ps1
+
+git commit -m "feat: 一键启动脚本与桌面快捷方式
+
+- 直接指到 ov_env_py312 的 python.exe，不用 conda activate：后者在 cmd.exe 里
+  要先 conda init 过，没 init 的机器报的是「'conda' 不是内部或外部命令」,
+  看起来像 conda 根本没装。仍留了 conda run 作为换过安装位置时的兜底
+- 用 -m frontends.cli.main 而不是 dna：没 pip install -e . 过的机器上没有 dna 命令
+- 快捷方式必须设工作目录。不设的话双击后程序在 System32 里找配置,
+  然后用一个空库正常跑起来——不报错，只是什么都没有"
+
+# ---- 第 2 步：打包配置（配置做对，不实际构建）----
+git add packaging/entry_gui.py
+git add packaging/dna_gui.spec
+git add packaging/build.ps1
+
+git commit -m "build: PyInstaller 打包配置（未实际构建）
+
+- 入口单独写一个脚本：cli/main.py 是 Typer 应用，打包它会得到一个双击就打印
+  用法然后退出的 exe
+- freeze_support() 必须在第一行：Windows 上子进程是重新启动 exe 来创建的,
+  不调这句会无限套娃开界面
+- collect_data_files(\"nicegui\") 漏了不会报导入错误：服务起得来，浏览器打开
+  是一片空白——最容易误判成端口问题
+- yt_dlp 用 collect_submodules：提取器按平台动态加载，收不全的表现是
+  「这个网站的视频抓不了」而其他网站正常，比整体失败难查得多
+- onedir 不是 onefile；config/.env/data/outputs 放在 exe 旁边不打进包——
+  提示词外置的整个前提就是人能改它
+- 排除 openvino/torch/transformers：本地 LLM 方向已冻结，打进来是几个 GB
+- 保留控制台：藏掉之后「双击没反应」是用户唯一能提供的现象"
+
+# ---- 第 3 步：文档 ----
+#
+# .gitignore 不动：build/ 与 dist/ 本来就在第 19~20 行。
+# （`git check-ignore build dist` 什么都不返回，是因为这两个目录还不存在,
+#  目录型规则匹配不上一个不存在的路径；`git check-ignore build/foo.txt` 就能看到。）
+git add docs/09_packaging.md
+git add docs/04_architecture_frontends.md
+git add docs/13_workbench_guide.md
+git add docs/git_commands.md
+
+git commit -m "docs: 启动与打包说明；工作台新功能的用法
+
+- 09_packaging 新建：两条路的状态、PROJECT_ROOT 的三种定位、六个已知坑
+- 04_architecture_frontends：两个新对话框与批次 2/3 的新动作入表,
+  「症状 → 文件」加 6 行（点链接连带展开 / 勾选丢失 / .env 改了没反应 /
+  字数窗口改了标记没变 / 选了 3 天却抓回旧文章）
+- 13_workbench_guide：勾选与批量重抓、删除、从订阅导入、设置面板的用法"
+
+git status --short          # 预期：只剩用户自己改的 .gitignore 与 04_architecture_src.md
+```
+
+验证（实测跑过，**没有构建 exe**）：
+
+```bash
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m frontends.cli.main gui --help
+/c/Users/test/miniforge3/envs/ov_env_py312/python.exe -c "import ast,pathlib; [ast.parse(pathlib.Path(p).read_text(encoding='utf-8')) for p in ['packaging/entry_gui.py','packaging/dna_gui.spec']]"
+git check-ignore -v build/foo.txt dist/foo.txt        # .gitignore:19 / :20
+```
+
+> 2026-09-10：本文件里**所有** `git add tests/…` 已经删除（用户决定测试不入库）。
+> 只加测试的那几步整步删掉，混在其它路径里的只摘掉 `tests/` 那几个 token，
+> 其余路径与 commit message 原样保留——那些是已经执行过的历史记录。
