@@ -28,10 +28,17 @@ from nicegui import ui
 
 # 表格列宽（px）——表头与每一行共用同一套，才能对齐
 # Column widths shared by the header and every row so the two stay aligned.
+COL_PICK = 40
 COL_TITLE_MIN = 260
 COL_BODY = 78
 COL_MEDIA = 88
 COL_KIND = 108
+
+# 原文链接最多显示多少个字符 / how many characters of a source URL are shown
+# 比标题短：它是第二行的小字，长了会把「来源 + 状态」那一行挤到换行。
+# Shorter than the title: it is small print on the second line, and an over-long URL
+# would wrap the source-and-status row.
+URL_MAX_CHARS = 60
 
 # 标题最多显示多少个字符 / how many characters of a title are shown
 # 超长标题会把整行挤变形。CSS 的 truncate 已经能兜住，但**显式截断更可控**：
@@ -101,7 +108,8 @@ body::before {
 .wb-grid {
   display: grid;
   grid-template-columns:
-    minmax(COL_TITLE_MINpx, 1fr) COL_BODYpx COL_MEDIApx repeat(KIND_COUNT, COL_KINDpx);
+    COL_PICKpx minmax(COL_TITLE_MINpx, 1fr) COL_BODYpx COL_MEDIApx
+    repeat(KIND_COUNT, COL_KINDpx);
   align-items: stretch;
 }
 
@@ -119,15 +127,51 @@ body::before {
   font-size: 13px; font-weight: 700; letter-spacing: .10em; text-transform: uppercase;
   color: var(--wb-text);
 }
-.wb-head > div { padding: 12px 8px; display: flex; align-items: center; }
-.wb-head > div + div { justify-content: center; }
+/* 除标题列外都居中。**用 nth-child 而不是 `div + div`**：勾选列插到最前面之后，
+   `div + div` 选中的第一个就是标题列，标题会被居中，整张表读起来完全变形。
+   Positional rather than sibling-based: with the pick column inserted first, a
+   `div + div` rule would centre the title column and deform the whole table. */
+.wb-head > div {
+  padding: 12px 8px; display: flex; align-items: center; justify-content: center;
+}
+.wb-head > div:nth-child(2) { justify-content: flex-start; }
 
 /* 列分隔线：文章多的时候，没有竖线根本对不上哪一列是哪个功能
    Column rules: with many rows there is no other way to tell which column is which. */
 .wb-grid > div + div { border-left: 1px solid var(--wb-line); }
-/* 抓取信息与产物之间加一道重线，把两组分开
-   A heavier rule separates the fetch columns from the production columns. */
-.wb-grid > div:nth-child(4) { border-left: 1px solid var(--wb-line-strong); }
+/* 抓取信息与产物之间加一道重线，把两组分开。序号是**第 5 列**（勾选/标题/正文/媒体
+   之后的第一格产物）——勾选列加进来时改漏这一处，重线会跑到「媒体」左边。
+   A heavier rule separates the fetch columns from the production columns; the index
+   counts the pick column, and missing that puts the rule one column too far left. */
+.wb-grid > div:nth-child(5) { border-left: 1px solid var(--wb-line-strong); }
+
+/* ---- 勾选列 / the pick column ----
+   `overflow: hidden` 是必需的：Quasar 的复选框自带一圈涟漪，40px 的格子里
+   涟漪会溢出到相邻列上去。
+   Quasar's ripple overflows a 40 px cell and bleeds into the neighbouring column. */
+.wb-pick {
+  display: flex; align-items: center; justify-content: center;
+  overflow: hidden;
+}
+/* 选中的行整行标出来：只有一个 40px 的勾很难扫，批量删除前必须一眼看清选了哪几行
+   The whole row is marked: a 40 px tick is hard to scan, and before a batch delete the
+   selection must be unmistakable. */
+.wb-rowwrap.is-picked { border-left: 2px solid var(--wb-new); }
+.wb-rowwrap.is-picked .wb-row { background: rgba(34, 211, 238, .07); }
+
+/* ---- 批量操作条 / the batch action bar ----
+   选中数为 0 时整条不渲染（不是隐藏）——一条常驻的灰色禁用按钮条只是噪音。
+   Not rendered at all when nothing is selected; a permanently disabled bar is noise. */
+.wb-batch {
+  background: rgba(34, 211, 238, .08);
+  border: 1px solid var(--wb-new);
+  border-radius: 8px;
+  padding: 4px 10px;
+}
+.wb-batch .count {
+  font-family: var(--wb-mono); font-weight: 700; color: var(--wb-new);
+  font-variant-numeric: tabular-nums;
+}
 
 /* 语言标记：格子上那个小小的 EN
    收起状态下语言开关看不见（它在展开面板里），没有这个标记就无从知道哪几篇
@@ -198,11 +242,30 @@ body::before {
 }
 .wb-cell-meta { font-size: 10.5px; color: var(--wb-faint); font-family: var(--wb-mono); }
 
+/* 标题下面那一行原文链接 / the source link under the title
+   显示的是**地址本身**而不是「原文」二字：域名就是可信度的一半，
+   而且一眼能看出这条是公众号、arXiv 还是某个转载站。
+   The address itself, not the word "source": the domain carries half the credibility and
+   tells at a glance whether this is a WeChat repost, arXiv, or an aggregator. */
+.wb-cell-title .lnk {
+  font-size: 10.5px; font-family: var(--wb-mono); color: var(--wb-dim);
+  text-decoration: none;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+  min-width: 0;
+}
+.wb-cell-title .lnk:hover { color: var(--wb-new); text-decoration: underline; }
+
 .wb-num {
   display: flex; align-items: center; justify-content: center;
   font-family: var(--wb-mono); font-size: 12px; color: var(--wb-dim);
   font-variant-numeric: tabular-nums;
 }
+/* 有东西可打开的正文/媒体格才可点。**没东西时不加这个类**——
+   一个点开是空的按钮比没有按钮更让人困惑（和 `media_folders` 同一条规矩）。
+   Only cells with something behind them become clickable; a button that opens onto
+   nothing is worse than no button. */
+.wb-num.clickable { cursor: pointer; transition: background .12s ease; }
+.wb-num.clickable:hover { background: rgba(125,165,205,.07); color: var(--wb-text); }
 
 /* ---- 产物格 / production cells ----
    整格可点，点开的是内容；**重做按钮不在这里**——它在展开面板里。
@@ -253,7 +316,7 @@ body::before {
 
 /* 减少动效偏好 / respect reduced motion */
 @media (prefers-reduced-motion: reduce) {
-  .wb-row, .wb-kind { transition: none; }
+  .wb-row, .wb-kind, .wb-num.clickable { transition: none; }
   /* 关掉呼吸动画，但**保留颜色与文字**——标识本身不能因为关动效而消失
      The pulse stops but the badge stays: the marker itself must not depend on motion. */
   .wb-new-badge { animation: none; }
@@ -271,9 +334,10 @@ def apply(kind_count: int) -> None:
     hard-coded rule would need editing in two places, with a misaligned header as the
     reward for missing one.
     """
-    min_width = COL_TITLE_MIN + COL_BODY + COL_MEDIA + COL_KIND * kind_count
+    min_width = min_table_width(kind_count)
     css = (
         _CSS.replace("MIN_TABLE_WIDTH", str(min_width))
+        .replace("COL_PICK", str(COL_PICK))
         .replace("COL_TITLE_MIN", str(COL_TITLE_MIN))
         .replace("COL_BODY", str(COL_BODY))
         .replace("COL_MEDIA", str(COL_MEDIA))
@@ -282,6 +346,40 @@ def apply(kind_count: int) -> None:
     )
     ui.add_css(css)
     ui.dark_mode().enable()
+
+
+def min_table_width(kind_count: int) -> int:
+    """
+    表格的最小宽度 / The table's minimum width.
+
+    单独一个函数是为了**能被测到**：这个和数不上，表头就会和数据列错开一格，
+    而错开一格不会报错，只会让人读错数据。
+    Extracted so it can be asserted: a wrong total silently offsets the header from the
+    data columns, which raises nothing and merely makes the table lie.
+    """
+    return COL_PICK + COL_TITLE_MIN + COL_BODY + COL_MEDIA + COL_KIND * kind_count
+
+
+def short_url(url: str, limit: int = URL_MAX_CHARS) -> str:
+    """
+    截短原文链接 / Clip a source URL for display.
+
+    **从中间截，两头都留。** 协议头剥掉（`https://` 占 8 个字符却不携带信息），
+    域名必须完整——它是判断来源可信度的依据；尾巴留一截，因为同一个站点下
+    多篇文章往往只有路径末尾不同。从右边一刀切会让同源的几行看起来一模一样。
+    Clipped in the middle, keeping both ends: the scheme carries no information, the host
+    decides credibility, and the tail is often the only difference between two rows from
+    the same site — a plain right-hand truncation would make them look identical.
+    """
+    text = (url or "").strip()
+    for prefix in ("https://", "http://"):
+        if text.startswith(prefix):
+            text = text[len(prefix) :]
+            break
+    if len(text) <= limit:
+        return text
+    head = limit - 1 - limit // 3
+    return f"{text[:head]}…{text[-(limit // 3) :]}"
 
 
 def short_title(title: str, limit: int = TITLE_MAX_CHARS) -> str:
@@ -300,4 +398,13 @@ def short_title(title: str, limit: int = TITLE_MAX_CHARS) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
-__all__ = ["COL_KIND", "TITLE_MAX_CHARS", "apply", "short_title"]
+__all__ = [
+    "COL_KIND",
+    "COL_PICK",
+    "TITLE_MAX_CHARS",
+    "URL_MAX_CHARS",
+    "apply",
+    "min_table_width",
+    "short_title",
+    "short_url",
+]
