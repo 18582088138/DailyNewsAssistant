@@ -68,6 +68,7 @@ from dna.produce.tasks import (
     ProductionKind,
     TaskSpec,
     batch_kinds,
+    char_window,
     json_sidecar,
     normalize_lang,
     prerequisite,
@@ -122,8 +123,12 @@ class ProduceResult:
         parts = [f"{self.chars} 字"]
         if self.seconds is not None:
             parts.append(f"约 {self.seconds:.0f} 秒")
-            if not self.within_target:
-                parts.append("⚠️ 超出目标区间")
+        # 超长提醒不能挂在 seconds 上：**总结没有秒数**，挂进去就永远不显示，
+        # 而总结正是最容易写超的一种。字数才是验收标准（见 `core/length.py`）。
+        # The warning cannot hang off `seconds`: a summary has none, so it would never
+        # appear — and the summary is the kind that most often overruns.
+        if not self.within_target:
+            parts.append("⚠️ 超出目标字数区间")
         # 音频不调 LLM，报「0 次调用」只会让人以为出了问题
         # Audio makes no LLM calls; reporting zero of them would read as a fault.
         if self.calls:
@@ -616,12 +621,25 @@ def generate_text(
 
             cluster = as_cluster(article, article_id)
             result = summarize_cluster(
-                cluster, llm, instructions=instructions, chars=profile.summary_chars
+                cluster,
+                llm,
+                instructions=instructions,
+                chars=char_window(task.kind, profile),
             )
             if result.degraded:
                 raise RuntimeError("摘要调用失败，已退回标题；请重试")
             body = front_matter(article, "总结") + result.summary + "\n"
-            return Generated(text=body, chars=len(result.summary), calls=1)
+            # calls 与 within_target 必须原样带出来：写死 calls=1 会漏掉回炉那几次，
+            # 丢掉 within_target 则让写超字数的摘要一路显示成「合格」——
+            # 摘要的长度检查就白做了。
+            # Both must survive: a hard-coded 1 hides the rewrite calls, and dropping the
+            # flag reports an over-length summary as fine, voiding its length check.
+            return Generated(
+                text=body,
+                chars=len(result.summary),
+                calls=result.calls,
+                within_target=result.within_target,
+            )
 
         # 英文总结**翻译已写好的中文**，不重写一遍：便宜，而且中英两版保证说的是
         # 同一件事。见 `tasks.TaskSpec.translated_from`。
@@ -647,7 +665,7 @@ def generate_text(
             llm,
             low=low,
             high=high,
-            chars=profile.shortvideo_chars,
+            chars=char_window(task.kind, profile),
             cta=profile.cta_line,
             lang=lang,
             instructions=instructions,
@@ -668,7 +686,7 @@ def generate_text(
             llm,
             low=low,
             high=high,
-            chars=profile.narration_chars,
+            chars=char_window(task.kind, profile),
             cta=profile.cta_line,
             lang=lang,
             instructions=instructions,

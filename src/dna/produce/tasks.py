@@ -51,8 +51,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import TYPE_CHECKING
 
 from dna.core.naming import lang_suffix_name
+
+if TYPE_CHECKING:  # 只为类型标注，运行期不引入 config / typing only, no runtime import
+    from dna.core.config import Profile
 
 # 支持的输出语言 / the output languages every kind supports
 #
@@ -298,6 +302,39 @@ def spec(kind: ProductionKind | str) -> TaskSpec:
     return TASKS[ProductionKind(kind)]
 
 
+# 产物 → profile 里的字数窗口字段 / kind to the profile field holding its window
+#
+# **这张表是唯一的一份。** 生成时按它取窗口，界面判断「这一格超长了吗」也按它取，
+# 所以两边不可能对不上——以前这三条映射在 `service.py` 里各写了一遍，
+# 改了配置字段名就得记得三处都改。
+# One table, read both when generating and when deciding whether a cell is over length,
+# so the two cannot disagree. The mapping used to be spelled out three times in
+# `service.py`.
+_CHAR_WINDOW_FIELDS: dict[ProductionKind, str] = {
+    ProductionKind.SUMMARY: "summary_chars",
+    ProductionKind.SHORTVIDEO: "shortvideo_chars",
+    ProductionKind.NARRATION: "narration_chars",
+}
+
+
+def char_window(kind: ProductionKind | str, profile: "Profile") -> tuple[int, int] | None:
+    """
+    这种产物的字数区间 / The character window this kind is accepted against.
+
+    返回 None 表示**不按字数验收**：长文案的目标是时长（字数由时长推算，见
+    `narration/longform.py`），音频根本不是文本。对这些返回一个假窗口，
+    界面就会把正常的长文案标成「超长」。
+    None means the kind is not judged on characters: long-form derives its bounds from a
+    duration target, and audio is not text at all. Returning a made-up window for them
+    would paint every healthy long-form cell as over length.
+    """
+    field_name = _CHAR_WINDOW_FIELDS.get(ProductionKind(kind))
+    if field_name is None:
+        return None
+    low, high = getattr(profile, field_name)
+    return int(low), int(high)
+
+
 def batch_kinds() -> tuple[ProductionKind, ...]:
     """`--all` 会跑哪几种 / Which kinds `--all` covers."""
     return tuple(k for k in BATCH_ORDER if TASKS[k].in_batch)
@@ -344,6 +381,7 @@ __all__ = [
     "ProductionKind",
     "TaskSpec",
     "batch_kinds",
+    "char_window",
     "estimate_calls",
     "json_sidecar",
     "spec",
