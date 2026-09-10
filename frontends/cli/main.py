@@ -153,6 +153,9 @@ def fetch(
     ),
     no_videos: bool = typer.Option(False, "--no-videos", help="不下载官方视频（视频较大较慢）"),
     refetch: bool = typer.Option(False, "--refetch", help="已抓过的文章也重抓"),
+    days: int | None = typer.Option(
+        None, "--days", "-d", help="只要最近几天的（覆盖 sources.yaml 里的按源设置）"
+    ),
 ) -> None:
     """
     采集入库 / Collect from feeds and ingest.
@@ -161,6 +164,9 @@ def fetch(
     **不调用 LLM，不产生费用**，可放心重复执行。
 
     加 --dry-run 只看采集到什么，不写任何文件。
+
+    --days 只作用于这一次，不改 sources.yaml。**没有发布时间的条目不受它限制**，
+    会照常入库——大量 feed 不给 pubDate，按「无日期即过期」处理会整源丢空。
     """
     from dna.store import intake_sources
 
@@ -176,6 +182,7 @@ def fetch(
             max_images=max_images,
             download_videos=not no_videos,
             refetch=refetch,
+            max_age_days=days,
         )
 
     _render_intake(result)
@@ -379,15 +386,17 @@ def refetch(
     no_videos: bool = typer.Option(False, "--no-videos", help="不下载官方视频"),
 ) -> None:
     """重新抓取一篇文章 / Re-fetch one article."""
-    from dna.store import refetch_article
+    from dna.store import IntakeResult, refetch_article
 
     record = _resolve_article(article_id)
+    detail = IntakeResult()  # 收媒体告警，`refetch_article` 的返回值里带不出来
     with console.status(f"重新抓取 {record.url} …"):
         updated = refetch_article(
             record.id,
             download_images=not no_images,
             max_images=max_images,
             download_videos=not no_videos,
+            result=detail,
         )
 
     if updated is None:
@@ -401,6 +410,58 @@ def refetch(
     )
     if updated.error:
         console.print(f"[red]{updated.error}[/red]")
+    for _, reason in detail.media_warnings:
+        console.print(f"[yellow]⚠[/yellow] [dim]{reason}[/dim]")
+
+
+@app.command()
+def delete(
+    article_ids: list[str] = typer.Argument(..., help="一个或多个文章 id，前 8 位即可"),
+    keep_files: bool = typer.Option(
+        False, "--keep-files", help="只删台账行，磁盘上的正文与媒体留着"
+    ),
+    yes: bool = typer.Option(False, "--yes", "-y", help="跳过确认（脚本里用）"),
+) -> None:
+    """
+    删除文章 / Delete articles.
+
+    删台账行 + 它的所有产物行 + 磁盘目录。**先列出将删什么再确认**——
+    删除是这套工具里唯一不可撤销的操作，重抓也拿不回已经下线的图和视频。
+
+    --keep-files 只清台账：用于「这篇不想在总表里看见，但素材还想留着」。
+    """
+    from dna.store import delete_articles, plan_delete
+
+    records = [_resolve_article(prefix) for prefix in article_ids]
+    ids = list(dict.fromkeys(r.id for r in records))  # 同一篇被点两次只算一次
+
+    plan = plan_delete(ids)
+    if not plan.has_work:
+        console.print("[yellow]没有可删的文章[/yellow]")
+        raise typer.Exit(code=1)
+
+    console.print(f"\n[bold]将删除 {plan.summary()}[/bold]")
+    for title in plan.titles[:10]:
+        console.print(f"  · {title}")
+    if len(plan.titles) > 10:
+        console.print(f"  [dim]…… 另有 {len(plan.titles) - 10} 篇[/dim]")
+
+    if keep_files:
+        console.print("\n[dim]--keep-files：磁盘文件保留，只删台账行[/dim]")
+    else:
+        for directory in plan.directories[:10]:
+            console.print(f"[dim]  {directory}[/dim]")
+    for article_id, reason in plan.unsafe_dirs:
+        console.print(f"[yellow]⚠ {article_id[:8]} 的目录不会删：{reason}[/yellow]")
+
+    if not yes and not typer.confirm("\n确认删除？此操作不可撤销", default=False):
+        console.print("[dim]已取消[/dim]")
+        return
+
+    done = delete_articles(ids, remove_files=not keep_files)
+    console.print(f"[green]✓[/green] {done.result_summary()}")
+    for article_id, reason in done.errors:
+        console.print(f"[red]✗ {article_id[:8]}[/red]：{reason}[dim]（台账行已保留）[/dim]")
 
 
 @app.command()
@@ -600,7 +661,7 @@ def gui(
     """
     启动台账工作台 / Launch the article workbench.
 
-    一张大表：每篇文章一行，总结 / 英文总结 / 短视频 / 口播 / 长文案各一列，
+    一张大表：每篇文章一行，总结 / 短视频 / 口播 / 长文案各一列，
     每格都能单独重做。**打开界面本身不产生费用**，只有点生成按钮才会调用 LLM。
     """
     from frontends.nicegui_app.main import run
@@ -945,6 +1006,17 @@ def _render_intake(result: object) -> None:
             f"[yellow]{result.fetched_degraded} 篇正文抽取降级[/yellow]"  # type: ignore[attr-defined]
             "（仅标题+链接，站点可能需登录或有反爬）"
         )
+
+    # 媒体没抓下来只提醒。视频失败的常态是地域限制、会员墙、平台禁下载，
+    # 这些重试也没用；正文已经入库，这篇文章照样能发。
+    warnings = getattr(result, "media_warnings", [])
+    if warnings:
+        console.print(f"\n[yellow]{len(warnings)} 个媒体文件未下载[/yellow][dim]（不影响正文）[/dim]")
+        for article_id, reason in warnings[:10]:
+            console.print(f"[dim]  {article_id[:8]}　{reason}[/dim]")
+        if len(warnings) > 10:
+            console.print(f"[dim]  …… 另有 {len(warnings) - 10} 条[/dim]")
+
     console.print("\n[dim]查看总表：dna list[/dim]")
 
 
