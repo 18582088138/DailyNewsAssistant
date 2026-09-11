@@ -27,6 +27,7 @@ from __future__ import annotations
 from nicegui import ui
 
 from frontends.nicegui_app import actions
+from frontends.nicegui_app.intake_progress import IntakeProgress
 
 
 def open_dialog(*, on_done) -> None:
@@ -36,7 +37,7 @@ def open_dialog(*, on_done) -> None:
     参数 / Args:
         on_done: 导入结束后的回调，用来刷新表格
     """
-    with ui.dialog() as dialog, ui.card().classes("w-[640px]").style(
+    with ui.dialog() as dialog, ui.card().classes("w-[640px] wb-dialog").style(
         "background: var(--wb-panel); border: 1px solid var(--wb-line-strong)"
     ):
         ui.label("导入链接").classes("text-lg font-medium").style(
@@ -113,11 +114,7 @@ def _run(dialog, text: str, *, images: bool, videos: bool, refetch: bool, on_don
         return
 
     dialog.close()
-    notification = ui.notification(
-        f"抓取 {len(urls)} 条链接中…（下载正文与媒体，不调用 LLM）",
-        spinner=True,
-        timeout=None,
-    )
+    notice = IntakeProgress(f"抓取 {len(urls)} 条链接（不调用 LLM）")
 
     async def _go() -> None:
         try:
@@ -126,9 +123,10 @@ def _run(dialog, text: str, *, images: bool, videos: bool, refetch: bool, on_don
                 download_images=images,
                 download_videos=videos,
                 refetch=refetch,
+                progress=notice.progress,
             )
         finally:
-            notification.dismiss()
+            notice.close()
 
         ui.notify(f"导入完成：{summary}", type="positive", timeout=8000)
         on_done()

@@ -19,6 +19,7 @@ from __future__ import annotations
 from nicegui import ui
 
 from frontends.nicegui_app import actions
+from frontends.nicegui_app.intake_progress import IntakeProgress
 
 
 def open_dialog(*, on_done) -> None:
@@ -30,7 +31,7 @@ def open_dialog(*, on_done) -> None:
     """
     options = actions.source_options()
 
-    with ui.dialog() as dialog, ui.card().classes("w-[640px]").style(
+    with ui.dialog() as dialog, ui.card().classes("w-[640px] wb-dialog").style(
         "background: var(--wb-panel); border: 1px solid var(--wb-line-strong)"
     ):
         ui.label("从订阅导入").classes("text-lg font-medium").style(
@@ -125,10 +126,8 @@ def _run(
     """执行采集 / Perform the collection."""
     dialog.close()
     count = len(source_ids) or total
-    notification = ui.notification(
-        f"从 {count} 个源采集最近 {days} 天…（下载正文与媒体，不调用 LLM）",
-        spinner=True,
-        timeout=None,
+    notice = IntakeProgress(
+        f"从 {count} 个源采集最近 {days} 天（不调用 LLM）"
     )
 
     async def _go() -> None:
@@ -140,12 +139,13 @@ def _run(
                 download_images=images,
                 download_videos=videos,
                 refetch=refetch,
+                progress=notice.progress,
             )
         except Exception as exc:  # noqa: BLE001 - 转成提示，不让转圈永远停在那里
             ui.notify(f"采集失败：{exc}", type="negative", timeout=10000)
             return
         finally:
-            notification.dismiss()
+            notice.close()
 
         ui.notify(f"采集完成：{summary}", type="positive", timeout=10000)
         on_done()

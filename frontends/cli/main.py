@@ -21,6 +21,7 @@ from dna import __version__
 from dna.core.config import get_settings, load_profile, load_sources
 from dna.core.doctor import Status, has_failure, run_all, summarize
 from dna.core.errors import DNAError
+from dna.core.logging import setup_logging
 
 app = typer.Typer(
     name="dna",
@@ -37,6 +38,20 @@ _STYLE: dict[Status, tuple[str, str]] = {
     Status.FAIL: ("[red]FAIL[/red]", "red"),
     Status.SKIP: ("[dim]SKIP[/dim]", "dim"),
 }
+
+
+@app.callback()
+def _before_any_command() -> None:
+    # 每条子命令跑之前把日志接到文件上。放 callback 而不是模块顶层：
+    # 顶层会在 `--help` 和被测试导入时也建目录写文件。
+    #
+    # 级别是 WARNING 而不是 INFO：命令行的输出是给人读的（表格、进度、颜色），
+    # 掺进 INFO 会把它冲烂。而真正需要事后排查的东西——比如逐段合成失败的原因
+    # ——本来就是 WARNING，一条不少。
+    # WARNING, not INFO: the CLI's own output is meant to be read, and the lines that
+    # matter after the fact are warnings anyway.
+    setup_logging(level="WARNING", log_dir=get_settings().data_path / "logs",
+                  log_file="dna.log")
 
 
 @app.command()
@@ -174,7 +189,7 @@ def fetch(
         _preview_collection(source, limit)
         return
 
-    with console.status("采集入库中（抓正文较慢，请稍候）…"):
+    with console.status("采集入库中（抓正文较慢，请稍候）…") as status:
         result = intake_sources(
             source_ids=[source] if source else None,
             limit_per_source=limit,
@@ -183,6 +198,7 @@ def fetch(
             download_videos=not no_videos,
             refetch=refetch,
             max_age_days=days,
+            on_progress=_intake_status(status, "采集"),
         )
 
     _render_intake(result)
@@ -207,13 +223,14 @@ def add(
     """
     from dna.store import intake_urls
 
-    with console.status("抓取中…"):
+    with console.status("抓取中…") as status:
         result = intake_urls(
             list(urls),
             download_images=not no_images,
             max_images=max_images,
             download_videos=not no_videos,
             refetch=refetch,
+            on_progress=_intake_status(status, "抓取"),
         )
 
     if result.collected == 0:
@@ -987,6 +1004,24 @@ def _resolve_article(prefix: str):  # noqa: ANN201 - 返回 ArticleRecord
         console.print(f"[red]id 前缀 {prefix} 匹配到 {len(matches)} 篇，请提供更长的前缀[/red]")
         raise typer.Exit(code=1)
     return matches[0]
+
+
+def _intake_status(status: object, verb: str):
+    """
+    把采集进度接到 rich 的转圈行上 / Feed intake progress into the rich spinner.
+
+    转圈行原本从头到尾一句话不变，一批十几篇跑好几分钟，
+    「在跑」和「卡住了」看起来一模一样。
+    """
+
+    def _write(done: int, total: int, title: str) -> None:
+        # 标题只留前几个字：转圈行是单行的，整条标题会把进度数字挤走
+        head = (title or "").strip().replace("\n", " ")
+        if len(head) > 24:
+            head = head[:24] + "…"
+        status.update(f"{verb} {done}/{total} · {head}")  # type: ignore[attr-defined]
+
+    return _write
 
 
 def _render_intake(result: object) -> None:
