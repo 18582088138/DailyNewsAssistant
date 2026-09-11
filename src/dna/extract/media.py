@@ -100,6 +100,34 @@ _VIDEO_HOSTS = (
     "v.qq.com", "youku.com", "ixigua.com", "douyin.com",
 )
 
+# 微信公众号的视频 / WeChat article videos
+#
+# 微信不给 og:video，也没有 `<video>`：播放器是
+# `<iframe class="video_iframe" data-mpvid="wxv_…">`，而**真正的 mp4 直链藏在页面里的
+# 一段 JS 里**（`mpvideo.qpic.cn/….f10002.mp4?dis_k=…&auth_info=…`，带签名）。
+# 那个 iframe 的 `data-src` 指向 `mp.weixin.qq.com/mp/readtemplate`，yt-dlp 解析不了，
+# 所以只认 iframe 的话结果永远是 0 个视频 —— 实测就是这样：正文和配图都抓到了，
+# 视频一个没有，而且「一个都没识别到」和「站点没有视频」在界面上长得一模一样。
+# WeChat exposes neither og:video nor <video>; the signed mp4 lives in an inline script,
+# and the iframe's data-src is a template page yt-dlp cannot resolve.
+_WX_VIDEO_RE = re.compile(
+    r"https?://mpvideo\.qpic\.cn/(?P<id>[0-9a-z]+)\.(?P<format>f\d+)\.mp4[^\s\"'<>\\]*",
+    re.IGNORECASE,
+)
+
+MAX_VIDEO_CANDIDATES = 10
+"""抽取阶段最多记几条视频 / how many video candidates extraction banks.
+
+**抽取记候选，下载量由 `store` 那边的 `max_videos` 决定**（配置项
+`max_videos_per_article`）。这里从前写死 3，于是把配置里调大的值悄悄压回 3——
+和图片那边 `DEFAULT_MAX_IMAGES = 10` 是同一个道理：候选不花钱，下载才花时间。
+"""
+
+# 同一条视频会给出好几种码率，按这个顺序挑一条 / one pick per clip, in this order.
+# f10002/f10004 是 H.264，f101xx 是 HEVC —— **优先 H.264**：HEVC 在剪辑软件和
+# 浏览器里的支持远不如它，而这些素材是要拿去剪片子的。
+_WX_FORMAT_ORDER = ("f10004", "f10002", "f10104", "f10102")
+
 _IMAGE_EXT_RE = re.compile(r"\.(jpe?g|png|webp|gif|avif)(\?|$)", re.IGNORECASE)
 
 
@@ -126,7 +154,7 @@ def extract_media(
         [*_social_images(page, url), *_content_images(page, url)],
         limit=max_images,
     )
-    videos = _dedupe(_videos(page, url), limit=3)
+    videos = _dedupe(_videos(page, url, html=html), limit=MAX_VIDEO_CANDIDATES)
 
     return [*images, *videos]
 
@@ -306,16 +334,17 @@ def _image_asset(src: str, page_url: str, caption: str | None = None) -> MediaAs
 # ---------------------------------------------------------------------------
 
 
-def _videos(soup: BeautifulSoup, page_url: str) -> list[MediaAsset]:
+def _videos(soup: BeautifulSoup, page_url: str, *, html: str = "") -> list[MediaAsset]:
     """
     取官方视频 / Official video clips.
 
-    只收三类可靠来源，不去猜 / Only three reliable sources are collected:
+    只收四类可靠来源，不去猜 / Only four reliable sources are collected:
         1. og:video —— 站点声明的视频
         2. <video><source> —— 页面内嵌的视频文件
         3. 指向已知视频站的 <iframe> —— 官方嵌入的播放器
+        4. 微信公众号页面里的 `mpvideo.qpic.cn` 直链（见 `_WX_VIDEO_RE`）
     """
-    assets: list[MediaAsset] = []
+    assets: list[MediaAsset] = _wechat_videos(html or str(soup), page_url)
 
     for prop in ("og:video", "og:video:url", "og:video:secure_url"):
         for tag in soup.find_all("meta", attrs={"property": prop}):
@@ -338,6 +367,42 @@ def _videos(soup: BeautifulSoup, page_url: str) -> list[MediaAsset]:
             assets.append(_video_asset(src, page_url))
 
     return [a for a in assets if a is not None]  # type: ignore[misc]
+
+
+def _wechat_videos(blob: str, page_url: str) -> list[MediaAsset]:
+    """
+    取微信公众号文章里的视频 / Collect the videos of a WeChat article.
+
+    直链藏在一段 JS 里，`&` 被转义成 `\\x26amp;`，所以**先反转义再匹配**——
+    不反转义的话正则会在那个反斜杠处截断，拿到一条丢了 `auth_info` 的 URL，
+    下载回来是一个错误页（幸好 `video_store` 会按文件头拦下来，
+    但那时表现成「视频下载失败」，根因完全看不出来）。
+    The ampersands are escaped inside the script, so the blob is unescaped first;
+    matching the escaped form yields a URL missing its signature.
+
+    同一条视频有多种码率，按 `_WX_FORMAT_ORDER` 每条只留一个。
+    """
+    if "mpvideo.qpic.cn" not in blob:
+        return []
+    plain = (
+        blob.replace("\\x26amp;", "&").replace("\\x26", "&").replace("&amp;", "&")
+    )
+    best: dict[str, tuple[int, str]] = {}
+    for match in _WX_VIDEO_RE.finditer(plain):
+        clip = match.group("id").lower()
+        fmt = match.group("format").lower()
+        rank = (
+            _WX_FORMAT_ORDER.index(fmt) if fmt in _WX_FORMAT_ORDER
+            else len(_WX_FORMAT_ORDER)
+        )
+        current = best.get(clip)
+        if current is None or rank < current[0]:
+            best[clip] = (rank, match.group(0))
+    # 按页面里出现的顺序还原：视频在正文里是有次序的，而 dict 的插入序就是它
+    return [
+        asset for _, url in best.values()
+        if (asset := _video_asset(url, page_url)) is not None
+    ]
 
 
 def _video_asset(src: str, page_url: str) -> MediaAsset | None:
