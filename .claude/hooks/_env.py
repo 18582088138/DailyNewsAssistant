@@ -39,7 +39,12 @@ def project_python() -> str:
         line = pin.read_text(encoding="utf-8").strip()
         if line and Path(line).exists():
             return line
-    return shutil.which("python") or sys.executable
+    # 静默 fallback 会把开头那段注释描述的坑原样重新引入：换机器后测试以「import 失败」
+    # 的面目报错，看起来像代码坏了。宁可吵一句。
+    fallback = shutil.which("python") or sys.executable
+    print(f"⚠️ 没有 .claude/hooks/python-path.txt，改用 PATH 上的 {fallback}；"
+          "若它不是 ov_env_py312，下面的失败多半是解释器不对而非代码问题。", file=sys.stderr)
+    return fallback
 
 
 def read_event() -> dict:
@@ -50,11 +55,23 @@ def read_event() -> dict:
         return {}
 
 
+def relative_to_repo(path: str) -> str:
+    """
+    转成相对仓库根的路径 —— ruff 的 `per-file-ignores` 按相对路径匹配，
+    喂绝对路径会让 `tests/**/*.py = ["S101"]` 这类豁免整条失效，把测试里的 assert 报成红灯。
+    """
+    try:
+        return str(Path(path).resolve().relative_to(repo_root()))
+    except (ValueError, OSError):
+        return path
+
+
 def package_for(path: str) -> str | None:
     """
     改了这个文件，该跑哪个测试包 / Which test package covers this file.
 
     `src/dna/tts/*` → `tests/tts`；`frontends/*` → `tests/frontends`；
+    `.claude/hooks/*` → `tests/hooks`（护栏改坏了最没人发现，它自己也要有回归测试）；
     对不上任何测试目录就返回 None（例如 `tools/`、`docs/`）。
     """
     try:
@@ -70,6 +87,8 @@ def package_for(path: str) -> str | None:
         candidate = f"tests/{parts[2]}"
     elif parts[0] == "frontends":
         candidate = "tests/frontends"
+    elif parts[:2] == (".claude", "hooks"):
+        candidate = "tests/hooks"
     else:
         return None
     return candidate if (repo_root() / candidate).is_dir() else None

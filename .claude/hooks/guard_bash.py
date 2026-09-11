@@ -17,8 +17,21 @@ import sys
 
 from _env import read_event
 
-COMMIT = re.compile(r"\bgit\s+(?:-\S+\s+)*(commit|push)\b")
-ADD_ALL = re.compile(r"\bgit\s+add\s+(?:-A\b|--all\b|\.(?:\s|$))")
+# git 的全局 flag 分两种：自封闭的（`--no-pager`）和**值是独立 token** 的（`-c x=y`、
+# `-C /path`）。只写 `(?:-\S+\s+)*` 会在后者处断链 —— `git -C /path commit` 就溜过去了，
+# 而铁律的整个可信度就挂在这条正则上。带值的必须显式列出来，且要排在通用分支前面。
+_GLOBAL_FLAG = (
+    r"(?:"
+    r"-[cC]\s+\S+"
+    r"|--(?:git-dir|work-tree|namespace|super-prefix|config-env|exec-path)[ =]\S+"
+    r"|-\S+"
+    r")\s+"
+)
+COMMIT = re.compile(rf"\bgit\s+(?:{_GLOBAL_FLAG})*(commit|push)\b")
+# `(?:-\S+\s+)*?` 非贪婪：允许 `git add -v -A`，但不跨过路径参数去够后面命令里的点号。
+ADD_ALL = re.compile(
+    rf"\bgit\s+(?:{_GLOBAL_FLAG})*add\s+(?:-\S+\s+)*?(?:-A\b|--all\b|\.(?:\s|$))"
+)
 DASH_M = re.compile(r"-m\s*(?:'([^']*)'|\"([^\"]*)\"|(\S+))")
 
 
