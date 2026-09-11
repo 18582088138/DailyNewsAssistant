@@ -208,7 +208,13 @@ def check_tts_service(settings: Settings) -> CheckResult:
         return CheckResult(name, Status.WARN, "未配置 TTS_SERVICE_URL")
 
     if TTSServiceClient(url).health():
-        return CheckResult(name, Status.OK, f"在线 @ {url}")
+        # **「在线」只等于那个进程活着。**服务端的 `/health` 只回一个 ok，从不碰引擎，
+        # 而引擎要到第一次合成才加载模型——实测踩过一次：环境里 torchaudio 与 torch
+        # 的 ABI 不匹配，doctor 全绿、合成每段必失败。这里不真合成（模型冷启动几分钟，
+        # doctor 必须是秒级的），只把唯一有效的探针指出来。
+        # "Online" means the process answers; the engine loads on first synthesis.
+        return CheckResult(name, Status.OK, f"在线 @ {url}",
+                           hint="只探到进程；引擎能不能出声要跑 dna tts --say")
 
     if not settings.tts_autostart:
         return CheckResult(name, Status.WARN, f"不在线 @ {url}，且已关闭自动拉起",
