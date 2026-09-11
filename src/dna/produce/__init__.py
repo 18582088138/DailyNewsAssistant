@@ -33,6 +33,7 @@ from dna.produce.service import (
     produce,
     produce_all,
     read_production,
+    save_script_text,
     speech_segments_for,
 )
 from dna.produce.tasks import (
@@ -58,6 +59,7 @@ __all__ = [
     "produce",
     "produce_all",
     "read_production",
+    "save_script_text",
     "spec",
     "speech_segments_for",
 ]

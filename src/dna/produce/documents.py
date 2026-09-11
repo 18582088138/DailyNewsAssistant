@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 
 from dna.core.models import Article
+from dna.narration.duration import count_units, estimate_seconds
 from dna.narration.script_builder import ScriptResult
 
 # 口播正文的起始标记 / where the spoken body begins
@@ -85,6 +86,44 @@ def spoken_text(markdown: str) -> str:
     return "\n".join(kept).strip()
 
 
+def replace_spoken(markdown: str, text: str, *, lang: str = "zh") -> str:
+    """
+    换掉稿子文件里要念的那段 / Swap the spoken body of a script file，`spoken_text` 的反手。
+
+    给 TTS 操作台里的人工校对用：校对过的文本必须回到稿子文件里，否则音频念的和
+    台账里记的稿子不是一回事，而台账是「这一版到底念了什么」的唯一答案。
+    Used when a person proof-reads in the TTS console: the edited text has to go back into
+    the script file, or the audio and the recorded script part ways.
+
+    **抬头逐字节保留**（标题、来源 URL、主副标题行），只有标记之后的正文被换掉。
+    标记那一行里的「约 N 秒 · M 字」按新文本重算 —— 不重算的话文件会一直声称
+    自己是 200 字，而正文已经 250 字了，这种谎话比没有那行更坏。
+    The header is preserved byte for byte; the marker's own duration and character counts
+    are recomputed, because a stale count is worse than none.
+
+    原文没有标记时（旧产物，或被手工编辑过的文件）只留元信息行并**补上标记**，
+    于是下一次 `spoken_text()` 是精确定位，而不是退回「剔掉元信息行」那条模糊路径。
+    """
+    spoken = text.strip()
+    lines = markdown.splitlines()
+
+    header: list[str] = []
+    for line in lines:
+        if line.startswith(SPOKEN_MARKER):
+            break
+        header.append(line)
+    else:
+        header = [ln for ln in lines if ln.startswith(_METADATA_PREFIXES)]
+        if header:
+            header.append("")
+
+    marker = (
+        f"{SPOKEN_MARKER}约 {estimate_seconds(spoken, lang=lang):.0f} 秒 · "
+        f"{count_units(spoken, lang=lang)} 字）：**"
+    )
+    return "\n".join([*header, marker, "", spoken, ""])
+
+
 def longform_turns(sidecar: Path) -> list[tuple[str, str]]:
     """
     从长文案的 JSON 附件读回角色轮次 / Read the speaker turns back from the sidecar.
@@ -121,6 +160,7 @@ __all__ = [
     "SPOKEN_MARKER",
     "front_matter",
     "longform_turns",
+    "replace_spoken",
     "script_block",
     "spoken_text",
     "strip_front_matter",
