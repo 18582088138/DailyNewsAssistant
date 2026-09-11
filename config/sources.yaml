@@ -147,42 +147,5 @@ sources:
     max_items: 10
     enabled: false
 
-  # ---- 已实测失效，保留记录以免重复踩坑 / verified broken, kept as a record ----
-  # 复核日期 2026-09-01，详见 docs/issues/003-dead-feed-urls.md
-
-  - id: jiqizhixin
-    name: 机器之心
-    kind: rss
-    url: https://www.jiqizhixin.com/rss
-    lang: zh
-    tags: [ai, cn]
-    enabled: false   # 该地址已返回 HTML 页面而非 feed，站点疑似改版
-
-  - id: 36kr
-    name: 36氪
-    kind: rss
-    url: https://36kr.com/feed
-    lang: zh
-    tags: [startup, cn]
-    enabled: false   # 同上，返回 HTML
-
-  - id: techcrunch-ai
-    name: TechCrunch AI
-    kind: rss
-    url: https://techcrunch.com/category/artificial-intelligence/feed/
-    lang: en
-    tags: [ai, en]
-    enabled: false   # 公司网络下不可达（代理返回 504），非证书配置问题
-
-  # 以下在公司网络下被代理阻断（SSL / 超时），换个网络环境可能可用：
-  # huxiu(超时) · feedburner/阮一峰 · MIT Tech Review · Google Research · HuggingFace Blog
-
-  # ---- 平台源（需自建 RSSHub，P10 接入）/ platform sources via self-hosted RSSHub ----
-  # url 填 RSSHub 路由，基址取 .env 的 RSSHUB_BASE_URL
-  - id: zhihu-hot
-    name: 知乎热榜
-    kind: rsshub
-    url: /zhihu/hotlist
-    lang: zh
-    tags: [social, cn]
-    enabled: false   # 待 P10 自建 RSSHub 后启用
+  # 已实测失效/反爬的源见 docs/issues/003-p2-live-verification-findings.md，不要再加回来
+  # Feeds verified dead or bot-blocked are listed there; do not add them back.
