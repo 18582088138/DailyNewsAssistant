@@ -18,6 +18,7 @@ and miss a step.
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -39,6 +40,13 @@ from dna.store.ledger import ArticleRecord, FetchStatus, Ledger
 from dna.store.video_store import DEFAULT_MAX_VIDEOS
 
 logger = get_logger("store.intake")
+
+# 采集进度回调 `(第几篇, 共几篇, 这一篇的标题)` / progress callback
+#
+# 一批抓下来要几分钟，而界面上原来只有一个不动的转圈——「在跑」和「卡死了」
+# 长得一模一样。回调在**每篇抓取之前**触发，报的是正在处理的那一篇。
+# A batch takes minutes and a static spinner cannot distinguish running from hung.
+IntakeProgressFn = Callable[[int, int, str], None]
 
 
 @dataclass
@@ -106,6 +114,7 @@ def intake_sources(
     download_videos: bool = True,
     refetch: bool = False,
     max_age_days: int | None = None,
+    on_progress: IntakeProgressFn | None = None,
 ) -> IntakeResult:
     """
     从订阅源采集并入库 / Collect from the configured sources and ingest.
@@ -126,6 +135,7 @@ def intake_sources(
                          Overrides each source's own setting for this run only. Items with
                          no published date are unaffected: many feeds omit it, and
                          treating unknown as old would silently drop whole sources.
+        on_progress:     采集进度回调 `(第几篇, 共几篇, 标题)`，在每篇抓取**之前**触发
     """
     s = settings or get_settings()
     prof = profile or safe_profile()
@@ -169,6 +179,7 @@ def intake_sources(
         refetch=refetch,
         by_source=by_source,
         profile=prof,
+        on_progress=on_progress,
     )
 
     logger.info("入库完成：%s", result.summary())
@@ -185,6 +196,7 @@ def intake_urls(
     max_images: int | None = None,
     download_videos: bool = True,
     refetch: bool = False,
+    on_progress: IntakeProgressFn | None = None,
 ) -> IntakeResult:
     """
     直接入库指定的链接 / Ingest specific URLs directly.
@@ -198,6 +210,9 @@ def intake_urls(
     再拿关键词去筛会很违反直觉。
     Source filtering is deliberately skipped: a link the user picked by hand is one they
     explicitly want, and screening it against keywords would be surprising.
+
+    参数 / Args:
+        on_progress: 采集进度回调 `(第几篇, 共几篇, 标题)`，在每篇抓取**之前**触发
     """
     s = settings or get_settings()
     ledger = Ledger(s.db_file)
@@ -217,6 +232,7 @@ def intake_urls(
         download_videos=download_videos,
         refetch=refetch,
         profile=safe_profile(),
+        on_progress=on_progress,
     )
 
     logger.info("链接入库完成：%s", result.summary())
@@ -352,6 +368,7 @@ def _ingest_items(
     max_images: int | None,
     download_videos: bool,
     refetch: bool,
+    on_progress: IntakeProgressFn | None = None,
 ) -> None:
     """
     逐条登记、抓取、落盘 / Register, fetch and persist each item in turn.
@@ -359,7 +376,15 @@ def _ingest_items(
     **逐条隔离**：任何一篇失败都记进台账并继续，不影响其余文章。
     Per-item isolation: a failure is recorded in the ledger and the run continues.
     """
-    for item in items:
+    total = len(items)
+    for index, item in enumerate(items, start=1):
+        # 报的是**正在处理的那一篇**，不是刚做完的那一篇：抓一篇要好几秒，
+        # 而人盯着进度条想知道的是「现在卡在谁身上」。
+        # The item about to be fetched, not the one just finished: a fetch takes seconds
+        # and the question being asked is "which one is it on now".
+        if on_progress is not None:
+            on_progress(index, total, item.title or item.url)
+
         article_id, is_new = ledger.register(item)
 
         if not is_new and not refetch:
