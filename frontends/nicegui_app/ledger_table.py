@@ -78,6 +78,21 @@ _OPEN: dict[str, tuple[str, str] | None] = {"cell": None}
 # whereas a `set` would reorder them on every refresh.
 _SELECTED: dict[str, None] = {}
 
+# 上一次动过的那一行 / the row that was last acted upon
+#
+# 和 `_OPEN` / `_SELECTED` 同一个做法、同一个理由。表格重建之后浏览器回到页首，
+# 于是在第 30 行点了个「生成」，回来看到的是第 1 行——人得重新找一遍自己刚才在哪。
+# 只在这一行**还在本页**时才滚；不在（翻了页、被筛掉）就停在页首，
+# 硬滚到一个不存在的位置只会得到一次莫名其妙的跳动。
+# A rebuild scrolls the browser back to the top, losing the user's place. Only scrolled
+# when the anchor row is still on this page.
+_ANCHOR: dict[str, str | None] = {"id": None}
+
+
+def remember_row(article_id: str) -> None:
+    """记下正在操作的这一行 / Remember the row being acted upon."""
+    _ANCHOR["id"] = article_id
+
 
 def selected_ids() -> list[str]:
     """当前勾选的文章 id，按勾选顺序 / The picked article ids, in pick order."""
@@ -119,6 +134,24 @@ def render_table(
                 for row in rows:
                     _render_row(row, on_change=on_change, picks=picks)
         picks.sync()
+        _scroll_to_anchor(picks)
+
+
+def _scroll_to_anchor(picks: "_Selection") -> None:
+    """
+    滚回刚才操作的那一行 / Scroll back to the row just acted upon.
+
+    `getHtmlElement` 是 NiceGUI 自带的 JS 全局（`static/nicegui.js`），按元素 id
+    取 DOM 节点——比自己往元素上塞一个 id 属性再去查稳。
+    A NiceGUI-provided JS global; steadier than attaching our own id attribute.
+    """
+    target = picks.boxes.get(_ANCHOR["id"] or "")
+    if target is None:
+        return
+    ui.run_javascript(
+        f"getHtmlElement({target[1].id})?.scrollIntoView"
+        "({block:'center', behavior:'instant'})"
+    )
 
 
 class _Selection:
@@ -247,6 +280,8 @@ def _render_row(row: RowView, *, on_change, picks: _Selection) -> None:
 
         def toggle(kind: ProductionKind, *, remember: bool = True) -> None:
             """点同一格收起，点别的格切过去 / Same cell closes, another switches."""
+            if remember:
+                remember_row(article.id)
             if state["open"] == kind:
                 state["open"] = None
                 panel.visible = False
@@ -529,6 +564,7 @@ def _launch(
     The two costs differ and so does the wording: conflating them leaves the user unsure
     which of the two they just spent.
     """
+    remember_row(row.article.id)
     task = spec(kind)
     if task.needs_variant:
         _ask_longform(
@@ -569,7 +605,7 @@ def _ask_audio(
         return
 
     task = spec(kind)
-    with ui.dialog() as dialog, ui.card().classes("w-96").style(
+    with ui.dialog() as dialog, ui.card().classes("w-96 wb-dialog").style(
         "background: var(--wb-panel); border: 1px solid var(--wb-line-strong)"
     ):
         ui.label(f"合成{task.label}").classes("text-lg font-medium").style(
@@ -613,7 +649,7 @@ def _ask_longform(
     """长文案的形式选择与费用确认 / Mode choice and cost confirmation."""
     task = spec(kind)
 
-    with ui.dialog() as dialog, ui.card().classes("w-96").style(
+    with ui.dialog() as dialog, ui.card().classes("w-96 wb-dialog").style(
         "background: var(--wb-panel); border: 1px solid var(--wb-line-strong)"
     ):
         ui.label("生成长文案").classes("text-lg font-medium").style(
@@ -790,7 +826,7 @@ def render_batch_bar(container: ui.element, *, on_done) -> None:
 
 def _dialog_card():
     """确认框的外壳 / The shell every confirmation dialog shares."""
-    return ui.card().classes("w-[30rem]").style(
+    return ui.card().classes("w-[30rem] wb-dialog").style(
         "background: var(--wb-panel); border: 1px solid var(--wb-line-strong)"
     )
 
