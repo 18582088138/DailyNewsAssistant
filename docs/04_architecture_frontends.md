@@ -98,15 +98,22 @@
 
 | 文件 | 行数 | 职责 |
 |---|---|---|
-| `main.py` | 228 | 装配页面：顶栏 + 筛选 + 表格；`run()` 启服务 |
-| `ledger_table.py` | 969 | 表格：勾选列、表头、行、产物格、格子状态与配色、批量条、发起生成 |
-| `detail_panel.py` | 542 | 展开面板：语言开关、这一版的元信息、修改指令、下载/合成/重做 |
-| `actions.py` | 1069 | **界面动作**：读数据、跑生成、批量重抓/删除、配置读写、TTS 交接、打开文件 |
-| `import_dialog.py` | 139 | 链接导入对话框 |
+| `main.py` | 327 | 装配页面：顶栏（含 TTS 状态芯片）+ 筛选 + 表格 + 分页；`run()` 启服务 |
+| `ledger_table.py` | 1005 | 表格：勾选列、表头、行、产物格、格子状态与配色、批量条、发起生成、操作后回到原位 |
+| `detail_panel.py` | 411 | 展开面板：语言开关、这一版的元信息、修改指令、下载/合成/操作台/重做 |
+| `actions.py` | 1335 | **界面动作**：读数据、跑生成、批量重抓/删除、配置读写、TTS 状态/分段/生成/写回稿子、打开文件 |
+| `tts_panel.py` | 696 | **TTS 操作台**：可编辑分段、三态与缓存、逐段生成/重掷/插事件、整体合成（走 `produce(segments=..., rendered=...)`） |
+| `voice_controls.py` | 362 | 一组声音配置控件（**三种模式**/音色/语气或音色描述/参考音频/上传）；**统一配置与每段的单独配置是同一个类的两个实例** |
+| `import_dialog.py` | 137 | 链接导入对话框 |
 | `source_dialog.py` | 156 | **从订阅导入**：选源 + 最近几天 + 每源上限，不调 LLM |
-| `settings_dialog.py` | 336 | **设置面板**：内容偏好（profile.yaml 全开）+ 运行设置（`.env` 白名单） |
+| `settings_dialog.py` | 612 | **设置面板**：四个子页（内容偏好 / 文案 → `profile.yaml`；TTS / 运行设置 → `.env`） |
 | `audio_progress.py` | 129 | 音频合成的进度浮窗 |
+| `intake_progress.py` | 59 | 批量采集的进度提示条（工作线程写字典、UI 轮询） |
 | `theme.py` | 410 | 主题与列宽；`short_title()` / `short_url()` 截断 |
+
+操作台的后端能力在 `src/dna/tts/console.py`（118 行）：音色表、参考音频候选与解析、
+单段试听。**这三件都不能在前端自己算** —— 音色表在服务端，参考音频的相对路径按
+`data_dir` 解析（不是仓库根），前端另写一套的结果是「界面上看着有、合成时找不到」。
 
 ### `actions.py` —— 界面与后端之间的唯一一层
 
@@ -119,7 +126,6 @@
 | `audio_estimate_seconds()` | 这一格音频要等多久（RTF ≈ 2.5，长文案约 37 分钟） |
 | `last_instructions()` | 上一版是带着什么额外要求生成的 |
 | `preview_links()` / `import_links()` | 粘贴一段文本 → 认出链接 → 入库 |
-| `open_tts_workbench()` / `collect_tts_handoff()` / `import_tts_handoff()` | 把稿子交给 TTS 图形界面精修，出活了收回来 |
 | `production_text()` / `production_file()` / `production_sidecar()` | 读回产物供预览与下载 |
 | `article_directory()` / `media_folders()` / `open_in_file_manager()` | 打开素材目录**或文件**（`article.md` 用默认编辑器打开） |
 | `body_file()` / `media_target()` | 表格里正文格 / 媒体格点开的目标；没东西可开时返回 `None` |
@@ -170,8 +176,9 @@
 
 `render()` 画一格的详情；`effective_instructions()` 算出这次真正要发出去的额外要求。
 
-`_watch_handoff()` 盯 TTS 交接单：`_WATCH_INTERVAL = 4.0` 秒一次，
-上限 `_WATCH_LIMIT`（90 分钟）——长文案音频真的要跑这么久。
+「TTS 操作台」按钮在这里挂上 `tts_panel.open_panel()`——**这是唯一的 TTS 界面**，
+从前那条交给 TTS 自带图形界面的交接单路（`_open_tts_workbench` / `_watch_handoff`）
+已删除，见 `issues/012`。
 
 **改这里要注意**：`_render_language_toggle()` 的中/英是**同一产物的两个版本**
 （schema v4：语言是产物的一个维度，不是新的 kind），切换语言不是切换产物类型。
@@ -213,7 +220,17 @@
 | 设置里改了字数窗口，超长标记没变 | `actions.py::over_target` 是渲染时现算的，回调必须是 `refresh` 而不是关掉对话框了事 |
 | 选了「最近 3 天」却抓回一堆旧文章 | `sources/filters.py::should_keep`——`published_at is None` 的条目不受天数限制，这是有意的 |
 | 中/英切换像是切换了产物类型 | `detail_panel.py::_render_language_toggle` |
-| TTS 精修的产物收不回来 | `actions.py::collect_tts_handoff` + `_watch_handoff` 的轮询上限 |
+| 设置面板点开就 `ValueError: Invalid value:`（冒号后是空的） | `settings_dialog.py` 三处 `ui.select` 必须写 `value=value or None`——空字符串不是合法初值（`issues/013`） |
+| 弹窗底部的按钮看不见、只能拉整页滑条 | 那个 `ui.card()` 少了 `wb-dialog` 类（`theme.py`：`max-height: 88vh` + 可拉大） |
+| 微信文章的视频一个都没抓到 | `extract/media.py::_wechat_videos`——直链在 JS 里且 `&` 被转义（`issues/013`） |
+| 打开操作台就 `ValueError: Invalid value: …` | `voice_controls.py::voice_choice` / `ref_choice`——`ui.select` 的初值必须在选项里（`issues/012`） |
+| 音色设计合成报 422 | 描述填在「语气指令」框里，`voice_controls.py::voice_problem` 本该在点之前就提示 |
+| 点「TTS 操作台」直接开始合成了 | `detail_panel.py::_render_audio_button`——那里必须是按钮不是开关，且与「合成音频」隔一条竖线 |
+| 操作台里挑的音色没生效 | `tts_panel.py::_Panel.voice_for` → `actions.run_production(segments=...)` → `produce/service.py::_generate_audio` 的 `if segments is None` |
+| **5 段全部合成失败** | 先看 `data/logs/tts_service.log`：引擎在服务端那侧加载失败（torch/torchaudio ABI 不匹配就长这样，见 `issues/012`）。`/health` 探不出来，唯一的探针是 `dna tts --say` |
+| 操作台里改了字，落盘的音频还是旧的 | `tts_panel.py::_Panel.state` 的缓存作废判断 → `plan()` 的 `rendered` 筛选；改过字或换过音色的段不能进 `rendered` |
+| 试听报「参数冲突」 | 克隆模式下不能同时给音色名；护栏只有一份，在 `tts/service.py::TTSServiceProvider.synthesize` |
+| 操作台音色下拉是空的 / 参考音频标红 | 服务离线（`tts/console.py::available_voices` 静默回空表），或路径解析不到（`tts/factory.py::_ref_audio_path`，按 `data_dir` 不是仓库根） |
 | 标题在表格里被截断 | `theme.py::short_title` / `TITLE_MAX_CHARS` |
 | YAML 片段在终端里少了半截 | CLI 打印时缺 `markup=False`（rich 吞掉了 `[a, b]`） |
 | `dna xxx <id>` 说找不到文章 | `cli/main.py::_resolve_article`，id 前 8 位就够 |
