@@ -71,3 +71,29 @@ markers = [
 ]
 # 默认只跑离线快测。注意：`-m ''` 会把 live 也跑起来并产生费用，需要时再用。
 addopts = "-q -m 'not live and not slow'"
+
+[tool.ruff]
+# 规则集必须显式钉住：此前仓库里**没有任何 ruff 配置**，规则集跟着 ruff 版本漂移，
+# 于是 hook 会在某次升级后突然爆红，而那天并没有人改坏代码。
+line-length = 100
+target-version = "py312"
+extend-exclude = ["outputs", "data", "packaging", "verify_test"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP", "B", "SIM", "RUF", "PIE", "ISC", "FURB", "C4", "ASYNC", "YTT", "S"]
+ignore = [
+    # 本项目的注释与文案是中文，全角标点会被判成「易混淆字符」——实测 5164 条，
+    # 全是「，」「「」」这类正常写法。
+    "RUF001", "RUF002", "RUF003",
+    # 台账里的时间戳是**本地朴素时间**，已经入库的数据就是这个格式；
+    # 改成 tz-aware 会让新旧两批时间戳语义不同，比这条告警危险得多。
+    "DTZ",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# 这几个脚本的本职就是跑子进程
+"tools/*.py" = ["S603", "S607"]
+".claude/hooks/*.py" = ["S603", "S607"]
+# 本地 SQLite，WHERE 片段是模块内常量拼的，不接受外部输入
+"src/dna/store/ledger.py" = ["S608"]
+"tests/**/*.py" = ["S101"]
