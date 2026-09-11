@@ -65,9 +65,25 @@ ENV_ALLOWLIST: tuple[str, ...] = (
     "OPENROUTER_API_KEY",
     "OPENROUTER_MODEL",
     "LLM_CACHE_ENABLED",
-    # TTS
+    # TTS —— 服务 / service
     "TTS_SERVICE_URL",
+    "TTS_MODULE_DIR",
+    "TTS_PYTHON",
+    "TTS_AUTOSTART",
+    "TTS_START_TIMEOUT",
+    "TTS_REQUEST_TIMEOUT",
+    # TTS —— 音色与参考音频 / voices and reference audio
+    "TTS_MODE",
+    "TTS_VOICE_HOST",
+    "TTS_VOICE_GUEST",
+    "TTS_REF_AUDIO",
+    "TTS_REF_TEXT",
+    "TTS_REF_AUDIO_GUEST",
+    "TTS_REF_TEXT_GUEST",
+    # TTS —— 产物 / artefacts
     "TTS_PREPROCESS",
+    "TTS_SUBTITLES",
+    "TTS_ARTIFACT_DIRNAME",
     # 网络 / network
     "HTTP_PROXY",
     "HTTPS_PROXY",
