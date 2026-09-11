@@ -179,6 +179,38 @@ class ProductionRecord:
         )
 
 
+def _where(
+    *,
+    status: FetchStatus | None = None,
+    source_id: str | None = None,
+    search: str | None = None,
+    since: datetime | None = None,
+) -> tuple[str, list[object]]:
+    """
+    拼出 `list()` 与 `count()` 共用的 WHERE / The WHERE shared by `list()` and `count()`.
+
+    只有一份，因为「这一页的内容」和「一共多少条」必须出自同一组条件。
+    One copy only: the page contents and the total must come from the same predicate.
+    """
+    clauses: list[str] = []
+    params: list[object] = []
+
+    if status is not None:
+        clauses.append("status = ?")
+        params.append(status.value)
+    if source_id:
+        clauses.append("source_id = ?")
+        params.append(source_id)
+    if search:
+        clauses.append("(title LIKE ? OR url LIKE ?)")
+        params.extend([f"%{search}%", f"%{search}%"])
+    if since is not None:
+        clauses.append("first_seen_at >= ?")
+        params.append(_fmt_dt(since))
+
+    return (f"WHERE {' AND '.join(clauses)}" if clauses else ""), params
+
+
 class Ledger:
     """
     文章台账的读写接口 / Read/write interface of the article ledger.
@@ -402,23 +434,9 @@ class Ledger:
         Ordered by first-seen time descending by default: the newest arrivals come
         first, which is how one actually reads such a list.
         """
-        clauses: list[str] = []
-        params: list[object] = []
-
-        if status is not None:
-            clauses.append("status = ?")
-            params.append(status.value)
-        if source_id:
-            clauses.append("source_id = ?")
-            params.append(source_id)
-        if search:
-            clauses.append("(title LIKE ? OR url LIKE ?)")
-            params.extend([f"%{search}%", f"%{search}%"])
-        if since is not None:
-            clauses.append("first_seen_at >= ?")
-            params.append(_fmt_dt(since))
-
-        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        where, params = _where(
+            status=status, source_id=source_id, search=search, since=since
+        )
         params.extend([limit, offset])
 
         with open_db(self.db_path) as conn:
@@ -427,6 +445,32 @@ class Ledger:
                 params,
             ).fetchall()
         return [ArticleRecord.from_row(r) for r in rows]
+
+    def count(
+        self,
+        *,
+        status: FetchStatus | None = None,
+        source_id: str | None = None,
+        search: str | None = None,
+        since: datetime | None = None,
+    ) -> int:
+        """
+        同一组筛选下共有多少条 / How many rows match the same filters.
+
+        翻页用的总数。**筛选条件必须与 `list()` 逐字相同**，所以两边共用
+        `_where()`：各写一份的话，总页数与页内容迟早对不上，而这种错
+        看起来只是「最后一页是空的」，不像 bug。
+        Both share `_where()`; two copies would drift and show up merely as an empty
+        last page rather than as an obvious defect.
+        """
+        where, params = _where(
+            status=status, source_id=source_id, search=search, since=since
+        )
+        with open_db(self.db_path) as conn:
+            row = conn.execute(
+                f"SELECT COUNT(*) AS n FROM articles {where}", params
+            ).fetchone()
+        return int(row["n"])
 
     def count_by_status(self) -> dict[str, int]:
         """按状态统计 / Count articles grouped by status."""
