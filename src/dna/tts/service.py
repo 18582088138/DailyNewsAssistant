@@ -113,6 +113,7 @@ class TTSServiceProvider:
         *,
         on_progress: ProgressFn | None = None,
         run: str | None = None,
+        rendered: dict[int, bytes] | None = None,
     ) -> AudioClip:
         """
         逐段合成并拼接 / Synthesise each piece and join them.
@@ -121,6 +122,11 @@ class TTSServiceProvider:
             run: 服务端产物目录名。**同一格音频每次都传同一个名字**，重做就覆盖，
                  不会在服务端堆一串时间戳目录（谁是最新的只能靠人比时间）。
                  A stable name means a redo overwrites instead of accumulating.
+            rendered: `{段号: wav 字节}`——这些段不再请求服务端，直接拿现成的波形。
+                 TTS 操作台里逐段生成好的音频靠它复用：RTF≈2.5，整篇重跑要几分钟，
+                 逐段校对的结果不该在最后一步被推翻重做一遍。
+                 段号是**过滤掉空白段之后**的下标，也就是这个循环里的 `index`。
+                 Pre-rendered waveforms are reused instead of re-requested.
 
         抛出 / Raises:
             TTSError: 服务不可用（含自动拉起失败），或**一段都没成功**
@@ -137,6 +143,7 @@ class TTSServiceProvider:
         wavs: list[bytes] = []
         gaps: list[float] = []
         failed: list[int] = []
+        reasons: list[str] = []
         artifacts: list[str] = []
         local: list[tuple[str, bytes]] = []
         spoken: list[tuple[float, str]] = []      # 字幕要的 (时长, 原文)
@@ -145,22 +152,32 @@ class TTSServiceProvider:
         for index, piece in enumerate(pieces):
             voice = piece.voice
             cloning = voice.mode == "voice_clone" and bool(voice.ref_audio)
+            ready = (rendered or {}).get(index)
             try:
-                body = self.client.synthesize(
-                    piece.text,
-                    # 克隆模式**不能带 voice**：服务端把「有 ref_audio 又有音色名」
-                    # 视为互相冲突的参数并直接报错（它故意不做静默忽略）。
-                    # In clone mode a voice name is a conflicting parameter, not a hint.
-                    voice=None if cloning else self._voice_name(voice.speaker),
-                    language=_LANGUAGES.get((voice.language or "").lower(), "Chinese"),
-                    instruct=voice.instruct or None,
-                    role=piece.role,
-                    run=run,
-                    mode=voice.mode or None,
-                    ref_audio=voice.ref_audio or None,
-                    ref_text=voice.ref_text or None,
-                    x_vector_only=voice.x_vector_only,
-                )
+                if ready is not None:
+                    # 现成的波形只补一个 `seconds`，下面的路一个字不改：拼接、
+                    # 真实时长、字幕仍走同一个 `_join` / `build_cues`。唯一的差别是
+                    # 这一段没有服务端产物路径，`artifacts` 因此少一条（允许，
+                    # `_copy_tts_artifacts` 本来就只在拿不到时记一条警告）。
+                    body = {"wav": ready, "seconds": _wav_seconds(ready)}
+                else:
+                    body = self.client.synthesize(
+                        piece.text,
+                        # 克隆模式**不能带 voice**：服务端把「有 ref_audio 又有音色名」
+                        # 视为互相冲突的参数并直接报错（它故意不做静默忽略）。
+                        # In clone mode a voice name is a conflicting parameter, not a hint.
+                        voice=None if cloning else self._voice_name(voice.speaker),
+                        language=_LANGUAGES.get((voice.language or "").lower(), "Chinese"),
+                        instruct=voice.instruct or None,
+                        role=piece.role,
+                        run=run,
+                        mode=voice.mode or None,
+                        ref_audio=voice.ref_audio or None,
+                        ref_text=voice.ref_text or None,
+                        x_vector_only=voice.x_vector_only,
+                        seed=voice.seed,
+                        pause_ms=piece.pause_ms,
+                    )
             except TTSError as exc:
                 # 一段失败不毁掉整条：几十分钟的合成里丢一句，比全部重来划算得多。
                 # 但**必须记下来**——上层据此告诉人「音频不完整」。
@@ -168,6 +185,7 @@ class TTSServiceProvider:
                 # layer above can say the audio is incomplete.
                 logger.warning("第 %d/%d 段合成失败：%s", index + 1, len(pieces), exc)
                 failed.append(index)
+                reasons.append(str(exc))
                 if on_progress is not None:
                     on_progress(index + 1, len(pieces), seconds)
                 continue
@@ -189,7 +207,14 @@ class TTSServiceProvider:
                 on_progress(index + 1, len(pieces), seconds)
 
         if not wavs:
-            raise TTSError(f"{len(pieces)} 段全部合成失败，没有可用音频（看服务端日志）")
+            # **原因就在手里，不能让人去翻另一个进程的日志。**实测踩过一次：
+            # 环境里 torch 与 torchaudio 的 ABI 不匹配，每段都倒在同一处，
+            # 而界面上只有一句「看服务端日志」——查一个已知原因花掉了一整轮。
+            # The reason is in hand; sending someone to another process's log for it
+            # cost a whole round once already.
+            raise TTSError(
+                f"{len(pieces)} 段全部合成失败：{reasons[0] if reasons else '原因不明'}"
+            )
 
         joined, rate, real_seconds = _join(wavs, gaps[:-1] if gaps else [])
         return AudioClip(

@@ -95,6 +95,8 @@ class TTSServiceClient:
         ref_audio: str | None = None,
         ref_text: str | None = None,
         x_vector_only: bool = False,
+        seed: int | None = None,
+        pause_ms: int | None = None,
     ) -> dict[str, Any]:
         """
         合成一段 / Synthesise one piece，返回服务端的元信息 + `wav` 字节。
@@ -120,6 +122,13 @@ class TTSServiceClient:
             payload["name"] = run
         if mode:
             payload["mode"] = mode
+        # 两个都是 `Optional[int]`，**只有非 None 才送**：送 `null` 过去和不送
+        # 在服务端是一回事，但 0 是个合法种子，用 `if seed:` 会把它当没给。
+        # Zero is a valid seed, so the test is against None rather than falsiness.
+        if seed is not None:
+            payload["seed"] = int(seed)
+        if pause_ms is not None:
+            payload["pause_ms"] = int(pause_ms)
         if ref_audio:
             payload["ref_audio"] = self._ref_audio_payload(ref_audio)
             payload["x_vector_only"] = bool(x_vector_only)

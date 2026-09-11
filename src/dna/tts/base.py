@@ -102,6 +102,17 @@ class VoiceSpec:
     x_vector_only: bool = False
     """只取音色向量，不需要原话 / take the timbre only, no transcript needed."""
 
+    seed: int | None = None
+    """
+    采样种子 / the sampling seed；None = 由服务端按配置决定。
+
+    同一段文本换个种子会念出明显不同的一版，这是「这句念得不好听」时唯一的补救——
+    文本、音色、参数都没错，只是这一次采样不好。所以它是**每段一个值**，
+    不是全局设置：重掷的对象永远是某一段。
+    Re-rolling the seed is the only remedy when the text and the voice are both right and
+    only this take sounds wrong, so it belongs to the piece rather than the run.
+    """
+
 
 @dataclass(frozen=True)
 class SpeechSegment:
@@ -115,6 +126,15 @@ class SpeechSegment:
     text: str
     voice: VoiceSpec
     role: str = "narrator"
+
+    pause_ms: int | None = None
+    """
+    这一段之后的静音 / the silence after this piece；None = 用 `PAUSE_SECONDS` 那套默认。
+
+    只在人明确要求某处停久一点时才给值（操作台里插 `[pause:…]` 或调这一段）。
+    默认交给上面那两个常量，是因为「换角色处停得更长」这条规则应当全局一致，
+    不该由每段各自记一份。
+    """
 
 
 @dataclass(frozen=True)
@@ -210,6 +230,7 @@ class TTSProvider(Protocol):
         *,
         on_progress: ProgressFn | None = None,
         run: str | None = None,
+        rendered: dict[int, bytes] | None = None,
     ) -> AudioClip:
         """
         合成并拼接 / Synthesise every segment and join them.
@@ -218,6 +239,9 @@ class TTSProvider(Protocol):
             run: 后端侧的产物目录名。**同一格音频每次都给同一个名字**，
                  于是重做覆盖原目录，而不是每次多留一份（见 produce/service.py）。
                  A stable name per cell, so a redo overwrites instead of accumulating.
+            rendered: `{段号: wav 字节}`，这些段直接用现成波形，不再请求后端。
+                 后端不支持复用时忽略它即可——那只是慢一点，不是错。
+                 A backend that cannot reuse may ignore this; the result is slower, not wrong.
 
         抛出 / Raises:
             TTSError: 后端不可用，或**一段都没成功**
