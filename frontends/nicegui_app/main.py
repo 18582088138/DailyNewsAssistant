@@ -20,6 +20,7 @@ from __future__ import annotations
 from nicegui import ui
 
 from dna.core.config import get_settings
+from dna.core.logging import setup_logging
 from dna.produce import DISPLAY_ORDER
 from dna.store import Ledger
 from frontends.nicegui_app import (
@@ -48,9 +49,12 @@ def _render_page() -> None:
         "status": None,
         "source": None,
         "search": None,
-        "limit": 50,
+        "page": 1,
+        "page_size": 50,
         "only_gaps": False,
         "only_new": False,
+        "pager": None,      # 页码控件，建好后回填 / the pagination control
+        "syncing": False,   # 正在回写页码，别再触发刷新 / suppress the echo
     }
 
     ui.page_title(PAGE_TITLE)
@@ -61,7 +65,43 @@ def _render_page() -> None:
             ui.label("DAILYNEWS").classes("wb-title text-base font-medium")
             ui.label("//").classes("wb-title text-base").style("color: var(--wb-faint)")
             ui.label("文章台账").classes("wb-title text-base accent")
-        cost_label = ui.label("").classes("wb-path")
+        with ui.row().classes("items-center gap-3 no-wrap"):
+            tts_chip = ui.label("○ TTS ?").classes("wb-path cursor-pointer")
+            cost_label = ui.label("").classes("wb-path")
+
+    # TTS 服务状态一直挂在顶栏 / the TTS service state stays visible
+    #
+    # 合成那条路会自动拉起服务、并等模型冷启动最多两分钟，而这一步在界面上
+    # 完全没有痕迹。芯片点一下＝显式启动，于是「服务到底起没起」不再靠猜。
+    # The synthesis path silently spawns the service and waits out a cold start;
+    # the chip makes that state visible and clicking it starts the service explicitly.
+    async def probe_tts() -> None:
+        status = await actions.tts_status()
+        tts_chip.set_text(
+            ("● TTS " if status.online else "○ TTS ") + status.url.split("//")[-1]
+        )
+        tts_chip.style(
+            "color: var(--wb-accent)" if status.online else "color: var(--wb-faint)"
+        )
+        tts_chip.tooltip(status.detail + ("" if status.online else "　（点击启动）"))
+
+    async def start_tts() -> None:
+        # 已在线时 `ensure_service` 立即返回，所以这句话要同时覆盖「检查」
+        # Wording covers both cases: ensure_service returns at once when already up.
+        note = ui.notification("正在检查／启动 TTS 服务（模型冷启动可能要一两分钟）…",
+                               spinner=True, timeout=None)
+        try:
+            status = await actions.tts_start()
+            ui.notify(status.detail, type="positive")
+        except Exception as exc:  # noqa: BLE001 - 原因原样显示，里面写了怎么排查
+            ui.notify(f"TTS 服务启动失败：{exc}", type="negative", timeout=12000,
+                      multi_line=True, close_button=True)
+        finally:
+            note.dismiss()
+            await probe_tts()
+
+    tts_chip.on("click", start_tts)
+    ui.timer(0.1, probe_tts, once=True)
 
     # 容器先占位、**最后再挂到页面上**：筛选栏的回调里要调用 refresh()，
     # 而 refresh() 要往容器里画——两者互相引用，只能靠「先建对象、后定位置」拆开。
@@ -82,62 +122,94 @@ def _render_page() -> None:
 
     def refresh() -> None:
         """重新读数据并重建表格 / Reload and rebuild."""
-        rows = actions.load_rows(
+        view = actions.load_rows(
             status=state["status"],
             source=state["source"],
             search=state["search"],
-            limit=state["limit"],
+            page=state["page"],
+            page_size=state["page_size"],
             only_gaps=state["only_gaps"],
             only_new=state["only_new"],
         )
+        # 页码可能被后端夹回来（删了几条之后停在不存在的第 7 页）
+        # The backend may clamp the page after rows disappear underneath it.
+        state["page"] = view.page
         ledger_table.render_table(
-            table_container, rows, on_change=refresh, on_select=refresh_batch_bar
+            table_container, view.rows, on_change=refresh, on_select=refresh_batch_bar
         )
         refresh_batch_bar()
 
         # 新导入的条数单独报：粘完一批链接之后，这个数字就是「还有几条没动过」
         # Reported separately: right after pasting a batch this number is the backlog.
-        fresh = sum(1 for row in rows if row.is_new)
-        count_label.set_text(
-            f"显示 {len(rows)} 条" + (f"　·　{fresh} 条新导入" if fresh else "")
-        )
+        fresh = sum(1 for row in view.rows if row.is_new)
+        text = f"第 {view.page}/{view.pages} 页　·　共 {view.total} 条"
+        if fresh:
+            text += f"　·　本页 {fresh} 条新导入"
+        if view.scanned_cap:
+            text += f"　·　筛自最近 {actions.SCAN_CAP} 条"
+        count_label.set_text(text)
+        _sync_pagination(view)
         # 费用在每次操作后刷新——它必须一直是当前值，否则等于没显示
         # Refreshed after every action: a stale cost readout is no better than none.
         cost_label.set_text(actions.cache_status())
+
+    def go_filter(**changes: object) -> None:
+        """
+        改筛选条件 / Change a filter —— **一律回到第 1 页**。
+
+        不归位的话，在第 7 页上勾一个筛选、结果只有 3 条，看到的是一张空表，
+        观感上等于「筛没了」。
+        Without the reset, filtering while deep in the pages shows an empty table.
+        """
+        state.update(changes)
+        state["page"] = 1
+        refresh()
+
+    def _sync_pagination(view) -> None:  # noqa: ANN001 - actions.PageView
+        """
+        把页码控件对齐到刚画出来的这一页 / Align the control with the drawn page.
+
+        回写 `value` 会触发它自己的 `on_value_change`，所以要挡一下——
+        否则「刷新→回写→再刷新」会转起来。
+        Writing the value fires the control's own handler; the guard stops the loop.
+        """
+        pager = state.get("pager")
+        if pager is None:
+            return
+        pager.set_visibility(view.pages > 1)
+        pager.props(f"max={view.pages}")
+        if pager.value != view.page:
+            state["syncing"] = True
+            try:
+                pager.value = view.page
+            finally:
+                state["syncing"] = False
 
     # -- 筛选栏 / filter bar --------------------------------------------------
     with ui.row().classes("wb-filters w-full items-center gap-3 px-4 pt-3 no-wrap"):
         search_input = ui.input(placeholder="搜索标题或链接").props("dense outlined clearable").classes("w-64")
         search_input.on(
-            "keydown.enter", lambda: (state.update(search=search_input.value or None), refresh())
+            "keydown.enter", lambda: go_filter(search=search_input.value or None)
         )
 
         source_select = ui.select(
             _source_options(), value=None, label="来源", clearable=True
         ).props("dense outlined").classes("w-40")
-        source_select.on_value_change(
-            lambda e: (state.update(source=e.value), refresh())
-        )
+        source_select.on_value_change(lambda e: go_filter(source=e.value))
 
         status_select = ui.select(
             {None: "全部", "ok": "ok", "degraded": "degraded", "failed": "failed"},
             value=None,
             label="抓取状态",
         ).props("dense outlined").classes("w-36")
-        status_select.on_value_change(
-            lambda e: (state.update(status=e.value), refresh())
-        )
+        status_select.on_value_change(lambda e: go_filter(status=e.value))
 
         new_toggle = ui.switch("只看新导入").props("dense")
         new_toggle.tooltip("刚导入、还没调过 LLM 的（粘完一批链接后用它把它们挑出来）")
-        new_toggle.on_value_change(
-            lambda e: (state.update(only_new=e.value), refresh())
-        )
+        new_toggle.on_value_change(lambda e: go_filter(only_new=e.value))
 
         gaps_toggle = ui.switch("只看有缺口的").props("dense")
-        gaps_toggle.on_value_change(
-            lambda e: (state.update(only_gaps=e.value), refresh())
-        )
+        gaps_toggle.on_value_change(lambda e: go_filter(only_gaps=e.value))
 
         ui.space()
         count_label = ui.label("").classes("wb-path")
@@ -187,6 +259,34 @@ def _render_page() -> None:
         ui.space()
         ui.label("点格子看内容　·　重做按钮在展开面板里，不会误触").classes("wb-path")
 
+        # 翻页 / paging
+        #
+        # 表格原来写死只显示最近 50 条，于是导入一批新文章就把手头在办的那些
+        # 顶出了可见范围——用户看到的「订阅导入把之前的覆盖掉了」其实是这个。
+        # 数据一直都在（`register()` 对已存在的行只刷新 feed_title）。
+        # The table used to show only the newest 50 rows, so an import pushed
+        # work-in-progress articles out of sight; nothing was ever overwritten.
+        def _go_page(value: object) -> None:
+            if state["syncing"]:
+                return
+            state["page"] = int(value or 1)
+            refresh()
+
+        def _go_size(value: object) -> None:
+            state["page_size"] = int(value or 50)
+            state["page"] = 1
+            refresh()
+
+        size_select = ui.select(
+            [25, 50, 100, 200], value=state["page_size"], label="每页",
+        ).props("dense outlined").classes("w-28")
+        size_select.on_value_change(lambda e: _go_size(e.value))
+
+        state["pager"] = ui.pagination(
+            1, 1, value=1, direction_links=True,
+            on_change=lambda e: _go_page(e.value),
+        ).props("dense gutter=xs input")
+
     # 表格排到最后 / the table goes last
     #
     # 容器必须**先于筛选栏创建**（回调要引用它），但必须**后于筛选栏显示**——
@@ -221,6 +321,14 @@ def run(*, host: str = "127.0.0.1", port: int = 8080, show: bool = True) -> None
     `reload=False` is required: NiceGUI's hot reload re-imports the entry module, and
     since this is invoked from a Typer subcommand that would re-run the whole CLI app.
     """
+    # **日志必须落到文件。**界面把后端的报错压成一句话（「5 段全部合成失败」），
+    # 而每段的真实原因走的是 `logger.warning`——没有文件的话那些行就只在这个
+    # 没人看的终端里滚过去，实测因此查一个已知原因花掉了一整轮。
+    # INFO 级：这个终端不是给人读的，页面才是界面，多一点上下文只有好处。
+    # The page compresses backend errors into one line while the reasons go to the log;
+    # without a file they scroll past in a terminal nobody is watching.
+    settings = get_settings()
+    setup_logging(level="INFO", log_dir=settings.data_path / "logs", log_file="dna.log")
     build()
     ui.run(host=host, port=port, show=show, reload=False, title=PAGE_TITLE, favicon="📰")
 

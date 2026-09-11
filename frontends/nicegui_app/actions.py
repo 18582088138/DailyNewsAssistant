@@ -21,6 +21,8 @@ from __future__ import annotations
 import os
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -41,7 +43,7 @@ from dna.produce import (
 from dna.produce.tasks import DEFAULT_LANGUAGE, audio_kind, json_sidecar
 from dna.store import FetchStatus, IntakeResult, Ledger, ProductionRecord, intake_urls
 from dna.store.ledger import ArticleRecord
-from dna.tts.base import TTSError
+from dna.tts.base import SpeechSegment, VoiceSpec
 from dna.tts.factory import get_tts
 
 logger = get_logger("gui.actions")
@@ -93,30 +95,77 @@ class RowView:
         return f"{self.article.text_len} 字" if self.article.text_len else "—"
 
 
+@dataclass
+class PageView:
+    """
+    一页表格 / One page of the table.
+
+    页数在这里算好，界面只管画：分页控件与「共 N 条」如果各算各的，
+    两个数字迟早不一致，而人只会觉得「这表是坏的」。
+    Paging is computed here so the control and the counter cannot disagree.
+    """
+
+    rows: list[RowView]
+    total: int
+    page: int
+    page_size: int
+    pages: int
+    scanned_cap: bool = False
+
+
+# 后置筛选一次最多扫多少行 / how many rows a post-filter may scan
+#
+# `only_new` / `only_gaps` 要看产物矩阵，SQL 层数不出来，只能取一批回来在
+# Python 里筛。扫上限存在是为了不让「勾一下开关」变成全表扫描；**撞到上限
+# 必须说出来**——一个看起来「筛完了」而其实只筛了一部分的列表，比明说
+# 「只筛了最近 1000 条」危险得多。
+# Post-filters need the production matrix, so they scan a capped batch. Hitting the cap
+# is surfaced: a list that looks complete but is not is worse than an honest bound.
+SCAN_CAP = 1000
+
+
 def load_rows(
     *,
     status: str | None = None,
     source: str | None = None,
     search: str | None = None,
-    limit: int = 50,
+    page: int = 1,
+    page_size: int = 50,
     only_gaps: bool = False,
     only_new: bool = False,
-) -> list[RowView]:
+) -> PageView:
     """
-    读取表格数据 / Load the table data.
+    读取一页表格数据 / Load one page of the table.
 
     **产物状态一次查完**（`production_matrix`），不是每行每格查一次——
     一页 50 行 × 5 种产物就是 250 次查询，界面会肉眼可见地卡。
     Production status is fetched in a single query rather than per cell: fifty rows times
     five kinds would be 250 round trips and the lag would be visible.
+
+    两条路 / Two paths:
+        无后置筛选 —— SQL 直接 LIMIT/OFFSET，总数走 `ledger.count()`
+        有后置筛选 —— 取 `SCAN_CAP` 行在 Python 里筛完再切页（见 `SCAN_CAP`）
     """
     settings = get_settings()
     ledger = Ledger(settings.db_file)
 
+    page = max(1, int(page))
+    page_size = max(1, int(page_size))
     status_filter = FetchStatus(status) if status else None
-    records = ledger.list(
-        status=status_filter, source_id=source, search=search, limit=limit
-    )
+    post_filtered = only_new or only_gaps
+
+    if post_filtered:
+        records = ledger.list(
+            status=status_filter, source_id=source, search=search, limit=SCAN_CAP
+        )
+        scanned_cap = len(records) >= SCAN_CAP
+    else:
+        records = ledger.list(
+            status=status_filter, source_id=source, search=search,
+            limit=page_size, offset=(page - 1) * page_size,
+        )
+        scanned_cap = False
+
     matrix = ledger.production_matrix([r.id for r in records])
 
     rows = [
@@ -147,7 +196,17 @@ def load_rows(
             )
         ]
 
-    return rows
+    if post_filtered:
+        total = len(rows)
+        rows = rows[(page - 1) * page_size : page * page_size]
+    else:
+        total = ledger.count(status=status_filter, source_id=source, search=search)
+
+    pages = max(1, -(-total // page_size))  # 向上取整 / ceiling division
+    return PageView(
+        rows=rows, total=total, page=min(page, pages), page_size=page_size,
+        pages=pages, scanned_cap=scanned_cap,
+    )
 
 
 async def run_production(
@@ -159,6 +218,8 @@ async def run_production(
     force: bool = False,
     instructions: str = "",
     progress: dict | None = None,
+    segments: list[SpeechSegment] | None = None,
+    rendered: dict[int, bytes] | None = None,
 ) -> ProduceResult:
     """
     在后台线程里生成一种产物 / Produce one kind on a worker thread.
@@ -172,6 +233,10 @@ async def run_production(
     在没配 key 的机器上，合成语音本来是能跑的，却会在这一步先失败。
     Audio kinds do not build an LLM: they spend nothing, yet `get_llm()` would demand an
     API key and fail on a machine where synthesis would otherwise work fine.
+
+    `segments` 只给音频产物用：TTS 操作台里逐段调好的分段从这里进来，
+    走的仍是同一条落盘路径（台账、时长、字幕都一样）。
+    `rendered` 是操作台里已经逐段生成好的波形，那些段不再重新合成。
 
     `progress` 是一个**共享字典**，工作线程往里写、界面定时读。
     跨线程直接改 NiceGUI 元素是不安全的；写字典再由 UI 侧轮询是最简单可靠的做法。
@@ -198,6 +263,8 @@ async def run_production(
             force=force,
             instructions=instructions,
             on_progress=_on_progress if is_audio else None,
+            segments=segments,
+            rendered=rendered,
         )
 
     return await run.io_bound(_work)
@@ -264,6 +331,22 @@ def preview_links(text: str) -> list[str]:
     return extract_urls(text or "")
 
 
+def _progress_writer(progress: dict | None):
+    """
+    把采集回调接到共享字典上 / Wire the intake callback to the shared dict.
+
+    工作线程只写字典，UI 侧用 `ui.timer` 读——**不能在这里碰任何 NiceGUI 元素**。
+    The worker only writes the dict; touching NiceGUI elements here is unsafe.
+    """
+    if progress is None:
+        return None
+
+    def _write(done: int, total: int, title: str) -> None:
+        progress.update(done=done, total=total, title=title)
+
+    return _write
+
+
 async def import_links(
     text: str,
     *,
@@ -271,6 +354,7 @@ async def import_links(
     download_videos: bool = True,
     max_images: int | None = None,
     refetch: bool = False,
+    progress: dict | None = None,
 ) -> str:
     """
     导入用户粘贴的链接 / Ingest the links the user pasted.
@@ -294,6 +378,7 @@ async def import_links(
             max_images=max_images,
             download_videos=download_videos,
             refetch=refetch,
+            on_progress=_progress_writer(progress),
         )
         if result.collected == 0:
             return "没有识别到任何链接"
@@ -319,159 +404,164 @@ async def import_links(
 
 
 @dataclass
-class TTSHandoff:
+class TTSStatus:
     """
-    一次「交给 TTS 界面精修」/ One hand-off to the TTS workbench.
+    TTS 服务此刻在不在 / Whether the TTS service is up right now.
 
-    界面拿着它做两件事：打开那个 URL，然后**轮询**同一个 token 等产物。
-    不用回调（TTS 那边可能在另一台机器上，也不该知道工作台的地址）。
-    Polled rather than called back: the service may be on another machine and should not
-    need to know this application's address.
+    界面必须一直显示这个。合成那条路会**自动拉起**服务并等最多
+    `tts_start_timeout` 秒（模型冷启动），期间画面上什么都没有 ——
+    于是「点了没反应」和「正在冷启动」是同一个观感。
+    The synthesis path auto-spawns the service and waits out a cold start with nothing
+    on screen, making "nothing happened" indistinguishable from "still loading".
     """
 
-    token: str
-    gui_url: str
-    article_id: str
-    kind: str
-    lang: str
-    segments: int = 0
+    online: bool
+    url: str
+    detail: str
 
 
-async def open_tts_workbench(
+async def tts_voices() -> list[str]:
+    """服务端的音色表 / The voice list，离线返回空表。**HTTP 调用，不能在事件循环里做。**"""
+    from dna.tts.console import available_voices
+
+    return await run.io_bound(available_voices)
+
+
+async def speech_segments(
     article_id: str,
     kind: ProductionKind | str,
     *,
     lang: str = DEFAULT_LANGUAGE,
-    title: str = "",
-    return_url: str = "",
-) -> TTSHandoff:
+) -> list[SpeechSegment]:
     """
-    把这一格的稿子交给 TTS 图形界面 / Hand this cell's script to the TTS workbench.
+    这一格会念哪些分段 / The pieces this cell would speak.
 
-    做四件事（都在工作线程里，因为都可能等）/ Four steps, all off the event loop:
-        1. 确认 TTS 服务在线（不在线自动拉起，三次失败报不可用）
-        2. 确认 TTS 界面在线（它是另一个进程、另一个端口）
-        3. 把稿子切成分段 —— **和自动合成切得一模一样**（同一份 `_build_segments`），
-           所以在界面里调完的东西，和这边跑出来的是同一批分段
-        4. POST 交接单（带上 `return_url`），拿回一个直接能打开的 URL
-
-    `return_url` 是**本页面的地址**：TTS 界面生成完会自己跳回来（关不掉标签页时
-    才退回跳转）。不带的话人得自己找回原来那个标签页。
-    The caller's own URL, so the TTS workbench can come back when it is done.
-
-    抛出 / Raises:
-        TTSError: 服务或界面拉不起来；调用方原样显示（那句话里已经写了怎么排查）
+    **会走一次朗读友好化**（`TTS_PREPROCESS=true` 时是一次 LLM 调用，很便宜），
+    所以操作台把拿到的分段一直拿在手里，合成时原样传回 `run_production`——
+    重新取一次不只是慢，还会再调一次 LLM，且切点可能与试听过的那批不同。
+    Preprocessing happens here, so the console keeps the pieces it got and hands the very
+    same list back at synthesis time.
     """
     from dna.produce.service import speech_segments_for
-    from dna.tts.factory import voice_for_role
-    from dna.tts.supervisor import ensure_gui, ensure_service
 
-    def _work() -> TTSHandoff:
-        settings = get_settings()
-        provider = get_tts(settings)
-        ensure_service(settings, client=provider.client)
-        gui = ensure_gui(settings)
-
-        pieces = [s.text for s in speech_segments_for(article_id, kind, lang=lang)]
-        if not pieces:
-            raise TTSError("这一格还没有可朗读的稿子")
-
-        # 只在用内置音色时把音色名带过去 / carry the voice name only for built-ins
-        #
-        # 克隆模式下 `speaker` 是一个**本地文件路径**，不是音色名 —— 带过去 TTS 界面
-        # 只会得到一个「没有这个音色」。参考音频要在那边的上传框里选，
-        # 那个控件本来就在（这也正是「高级配置」存在的理由）。
-        # In clone mode the speaker field holds a file path, not a name.
-        host = voice_for_role("host", settings, lang=lang)
-        body = provider.client.handoff(
-            pieces,
-            title=title,
-            voice=host.speaker if host.mode == "custom_voice" else None,
-            return_url=return_url,
-            meta={"article_id": article_id, "kind": str(kind), "lang": lang},
-        )
-        # 交接单里的 gui_url 用的是**服务端**配置的界面地址；本项目自己的
-        # TTS_GUI_URL 才是这台机器上打得开的那个，两者不一致时以后者为准。
-        # The record's URL comes from the service's own config; this project's setting is
-        # the one the browser here can actually reach.
-        url = f"{gui.rstrip('/')}/?import={body['token']}"
-        return TTSHandoff(token=body["token"], gui_url=url, article_id=article_id,
-                          kind=str(kind), lang=lang, segments=len(pieces))
+    def _work() -> list[SpeechSegment]:
+        return speech_segments_for(article_id, kind, lang=lang)
 
     return await run.io_bound(_work)
 
 
-async def collect_tts_handoff(handoff: TTSHandoff) -> dict | None:
+async def preview_voice(text: str, voice: VoiceSpec, *, role: str = "narrator") -> bytes:
     """
-    看一眼交接单 / Take one look at the hand-off record.
+    试听一段 / Audition one piece，返回 wav 字节，**不写台账**。
 
-    **不判断完成与否**，原样把记录交出去：里面既有 `status`，也有 TTS 界面写回的
-    `done` / `total` —— 等待动效要靠后两个数字动起来，在这里过滤掉就只剩一个
-    「还在等」，和卡死看起来一样。
-    Returned unfiltered: the progress counts drive the waiting animation.
-
-    返回 `None` 只表示**这次没读到**（服务重启、交接单过期），不是「没完成」。
+    参数拼装在 `dna.tts.console.preview_segment` 里（那里复用 provider 自己的
+    那一份），界面不碰。
     """
-    def _work() -> dict | None:
-        return get_tts().client.handoff_state(handoff.token)
+    from dna.tts.console import preview_segment
 
-    try:
-        return await run.io_bound(_work)
-    except TTSError:
-        return None
+    def _work() -> bytes:
+        return preview_segment(text, voice, role=role)
+
+    return await run.io_bound(_work)
 
 
-async def import_tts_handoff(handoff: TTSHandoff, record: dict) -> ProduceResult:
+async def save_script(
+    article_id: str,
+    kind: ProductionKind | str,
+    text: str,
+    *,
+    lang: str = DEFAULT_LANGUAGE,
+) -> int:
     """
-    把 TTS 界面的产物收进本项目 / Adopt what the workbench produced.
+    把操作台里校对过的文本写回稿子 / Write the console's proof-read text back.
 
-    产物**全部**拷进文章目录（逐段 wav、合并音频、字幕），然后把整条音频
-    记进台账 —— 记了那一格才会变成「已生成」，否则界面上刚忙完的活看起来像丢了。
-    Everything is copied next to the article and the merged track is recorded, or the
-    cell would still read empty.
-
-    整条音频认哪一个 / Which file becomes the production:
-        优先 `merged.wav`（多段合并的成品）；没有就取**唯一/最后一个** wav。
-        猜错的代价很直接，所以规则写死，不做"最大文件"这类启发式。
+    零 LLM、零费用；台账里多一行 `calls=0` 的「人工校对」。
+    **先写稿子行、再写音频行** —— 顺序反了的话，音频那一格的前置稿子还是旧的。
     """
-    from dna.produce.service import import_audio
+    from dna.produce.service import save_script_text
 
-    def _work() -> ProduceResult:
+    def _work() -> int:
+        return save_script_text(article_id, kind, text, lang=lang)
+
+    return await run.io_bound(_work)
+
+
+def script_is_editable(kind: ProductionKind | str, *, lang: str = DEFAULT_LANGUAGE) -> bool:
+    """
+    这一格的稿子能不能从操作台写回 / Whether this cell's script can be written back.
+
+    长文案的稿子**按发言人分轮**存在 JSON 边车里，一段纯文本写不回去（`save_script_text`
+    会直接拒绝）。面板要提前知道，好在打开时就说清「这里改的字不会写回稿子」——
+    等到人校对完一整篇再报错，那份工就白做了。
+    """
+    task = spec(kind)
+    if task.audio_of is not None:
+        task = spec(task.audio_of)
+    return not json_sidecar(task, lang)
+
+
+def resplit_text(text: str, *, max_chars: int | None = None) -> list[str]:
+    """
+    重新拆条 / Re-split，纯函数、零费用，直接在事件循环里算（微秒级）。
+
+    切法与自动合成同一份（`tts/segment.py`）—— 面板里看到的分段必须就是
+    真会合成的那批。`max_chars` 由操作台上那个输入框给：默认值就是自动合成用的那个，
+    调大调小只影响这一次拆分。
+    """
+    from dna.tts.console import resplit
+
+    if max_chars:
+        return resplit(text, max_chars=int(max_chars))
+    return resplit(text)
+
+
+async def upload_ref_audio(filename: str, data: bytes) -> str:
+    """
+    收下一份上传的参考音频 / Adopt an uploaded reference clip，返回相对路径。
+
+    落盘是 I/O，交给工作线程；返回的相对路径可以直接进下拉框，也能存进 `.env`。
+    """
+    from dna.tts.console import save_ref_audio
+
+    def _work() -> str:
+        return save_ref_audio(filename, data)
+
+    return await run.io_bound(_work)
+
+
+async def tts_status() -> TTSStatus:
+    """探一次 TTS 服务 / Probe the TTS service. 不拉起、不抛异常。"""
+
+    def _work() -> TTSStatus:
         settings = get_settings()
-        ledger = Ledger(settings.db_file)
-        article = ledger.get(handoff.article_id)
-        if article is None or not article.store_dir:
-            return ProduceResult(kind=spec(handoff.kind).kind, ok=False,
-                                 error="台账里找不到这篇文章")
-
-        # 一篇文章一个文件夹，**同名覆盖**：不按 run 或时间再分层，
-        # 否则「这篇的音频是哪一份」要靠人比时间戳。
-        # One folder per article, overwritten in place.
-        target = (settings.output_path / article.store_dir
-                  / (settings.tts_artifact_dirname or "tts"))
+        url = settings.tts_service_url
         client = get_tts(settings).client
+        if client.health():
+            return TTSStatus(online=True, url=url, detail=f"TTS 服务在线：{url}")
+        hint = "点一下启动" if settings.tts_autostart else "自动启动已关闭（TTS_AUTOSTART）"
+        return TTSStatus(online=False, url=url, detail=f"TTS 服务离线：{url}　·　{hint}")
 
-        saved: list[Path] = []
-        for relative in record.get("files", []):
-            try:
-                saved.append(client.download(relative, target / Path(relative).name))
-            except TTSError:
-                continue
-        if not saved:
-            return ProduceResult(kind=spec(handoff.kind).kind, ok=False,
-                                 error="产物一个都没取回来（服务可能已重启）")
+    return await run.io_bound(_work)
 
-        wavs = [p for p in saved if p.suffix.lower() == ".wav"]
-        merged = next((p for p in wavs if p.name == "merged.wav"), wavs[-1] if wavs else None)
-        if merged is None:
-            return ProduceResult(kind=spec(handoff.kind).kind, ok=False,
-                                 error="产物里没有 wav")
 
-        # 附件一起交给 import_audio：它会把 .srt 放到音频旁边（同名同目录），
-        # 于是产物形状和流水线合成出来的完全一致。
-        return import_audio(handoff.article_id, handoff.kind, merged,
-                            lang=handoff.lang, extras=saved,
-                            source="tts_gui", settings=settings)
+async def tts_start() -> TTSStatus:
+    """
+    拉起 TTS 服务 / Bring the TTS service up.
+
+    失败原因**原样上抛**：`ensure_service` 抛出的那句话里已经写了怎么排查
+    （模块目录、Python 路径、端口占用），改写成「启动失败」就把它扔了。
+    The reason is propagated verbatim; it already says where to look.
+    """
+    from dna.tts.supervisor import ensure_service
+
+    def _work() -> TTSStatus:
+        settings = get_settings()
+        client = get_tts(settings).client
+        ensure_service(settings, client=client)
+        return TTSStatus(
+            online=True, url=settings.tts_service_url,
+            detail=f"TTS 服务已就绪：{settings.tts_service_url}",
+        )
 
     return await run.io_bound(_work)
 
@@ -505,6 +595,24 @@ def production_file(
         return None
     path = get_settings().output_path / record.store_dir / spec(kind).filename_for(lang)
     return path if path.exists() else None
+
+
+def subtitle_file(
+    record: ArticleRecord, kind: ProductionKind | str, lang: str = DEFAULT_LANGUAGE
+) -> Path | None:
+    """
+    音频旁边的字幕 / The subtitle file next to one audio production.
+
+    字幕是**音频那一格的产物**（`produce()` 写在音频同名 `.srt` 上，时间轴按每段
+    波形的真实长度算），但界面上此前完全没提过它——于是「操作台按分段出字幕」
+    这件事做了，人看不见，只能当成没做。
+    Written all along, but nothing in the UI ever pointed at it.
+    """
+    audio = production_file(record, kind, lang)
+    if audio is None:
+        return None
+    srt = audio.with_suffix(".srt")
+    return srt if srt.exists() else None
 
 
 def production_sidecar(
@@ -677,7 +785,13 @@ async def batch_refetch(
     if failed:
         parts.append(f"失败 {failed}")
     if warnings:
-        parts.append(f"媒体未下载 {len(warnings)}（不影响正文）")
+        # **原因要带上第一条。** 只说「媒体未下载 2」等于没说：视频失败的原因
+        # （地域限制、封禁下载、拿回来是错误页）决定了要不要人工去弄，
+        # 而完整清单在文章目录的 `references.md` 里。
+        parts.append(
+            f"媒体未下载 {len(warnings)}（不影响正文）——{warnings[0][1]}"
+            + ("；其余见文章目录的 references.md" if len(warnings) > 1 else "")
+        )
     return "，".join(parts)
 
 
@@ -747,11 +861,11 @@ def open_in_file_manager(path: str | Path) -> str:
 
     try:
         if sys.platform == "win32":
-            os.startfile(target)  # noqa: S606 - 路径来自本地台账，非用户输入
+            _open_on_windows(target)
         elif sys.platform == "darwin":
-            subprocess.Popen(["open", str(target)])  # noqa: S603,S607
+            subprocess.Popen(["open", str(target)])
         else:
-            subprocess.Popen(["xdg-open", str(target)])  # noqa: S603,S607
+            subprocess.Popen(["xdg-open", str(target)])
     except OSError as exc:
         return f"打不开：{exc}"
     return ""
@@ -761,6 +875,87 @@ def _server_is_local() -> bool:
     """服务端是否绑在本机 / Whether the server is bound to loopback."""
     host = str(getattr(app, "config", None) and getattr(app.config, "host", "") or "")
     return host in {"", "127.0.0.1", "localhost", "::1"}
+
+
+def _open_on_windows(target: Path) -> None:
+    """
+    Windows 下打开并尽量顶到最前 / Open on Windows and try to raise it to the front.
+
+    为什么要额外做一步 / Why the extra step:
+        抢到前台权的是浏览器，我们这个 Python 进程没有——Windows 于是拒绝激活
+        资源管理器，只让它在任务栏闪一下，看起来就是「被浏览器盖住了」。
+        `AllowSetForegroundWindow(ASFW_ANY)` 把这一次的前台权让出去，
+        再由后面那个线程把窗口顶上来。
+        The browser owns the foreground right, not this process, so Windows refuses to
+        activate Explorer and only flashes it in the taskbar.
+
+    **任何一步失败都退回原来的行为**：窗口照样开，只是可能在后面。
+    提示「打不开」会是假的。
+    """
+    try:
+        import ctypes
+
+        ctypes.windll.user32.AllowSetForegroundWindow(-1)  # ASFW_ANY
+    except Exception as exc:  # noqa: BLE001 - 顶不上来不算失败
+        logger.debug("放行前台权失败，窗口可能开在后面：%s", exc)
+
+    if not target.is_dir():
+        # 文件仍走 startfile：它按扩展名挑默认程序，
+        # 「点正文格用编辑器打开 article.md」这条行为不能变成「打开所在目录」。
+        # 路径来自本地台账，不是用户输入 / from the local ledger, not user input
+        os.startfile(target)
+        return
+
+    subprocess.Popen(["explorer", os.path.normpath(str(target))])
+    # 开窗要时间，不能同步等：这个函数跑在界面的事件循环上，等两秒就是卡两秒。
+    threading.Thread(target=_raise_explorer, args=(target,), daemon=True).start()
+
+
+def _raise_explorer(target: Path, *, timeout: float = 2.0) -> None:
+    """把刚开的资源管理器窗口顶到最前 / Bring the new Explorer window to the front."""
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        user32 = ctypes.windll.user32
+        wanted = {target.name.lower(), os.path.normpath(str(target)).lower()}
+        found: list[int] = []
+
+        @ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+        def _visit(hwnd, _lparam):  # pragma: no cover - 要真的有窗口才会进来
+            buf = ctypes.create_unicode_buffer(256)
+            user32.GetClassNameW(hwnd, buf, 256)
+            if buf.value not in {"CabinetWClass", "ExploreWClass"}:
+                return True
+            title = ctypes.create_unicode_buffer(512)
+            user32.GetWindowTextW(hwnd, title, 512)
+            if title.value.lower() in wanted:
+                found.append(hwnd)
+                return False
+            return True
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline and not found:
+            user32.EnumWindows(_visit, 0)
+            if found:
+                break
+            time.sleep(0.1)
+
+        if not found:
+            return
+        hwnd = found[0]
+        user32.ShowWindow(hwnd, 9)  # SW_RESTORE，窗口可能是最小化状态
+        if user32.SetForegroundWindow(hwnd):
+            return
+        # 还是不给：把自己的线程挂到前台线程的输入队列上再试一次，这是
+        # Windows 唯一还认的一条路（前台窗口所属线程可以替别人做主）。
+        target_tid = user32.GetWindowThreadProcessId(user32.GetForegroundWindow(), None)
+        own_tid = ctypes.windll.kernel32.GetCurrentThreadId()
+        if user32.AttachThreadInput(own_tid, target_tid, True):
+            user32.SetForegroundWindow(hwnd)
+            user32.AttachThreadInput(own_tid, target_tid, False)
+    except Exception:
+        logger.debug("raise explorer failed", exc_info=True)
 
 
 def longform_estimate(record: ArticleRecord) -> str:
@@ -822,6 +1017,7 @@ async def import_from_sources(
     download_images: bool = True,
     download_videos: bool = True,
     refetch: bool = False,
+    progress: dict | None = None,
 ) -> str:
     """
     从订阅源采集并入库 / Collect from the sources and ingest.
@@ -831,6 +1027,11 @@ async def import_from_sources(
     这类问题永远查不清是配置差异还是代码差异。
     Calls no LLM. Delegates to the same `intake_sources` as `dna fetch`, so the two
     front-ends cannot collect differently.
+
+    `progress` 与 `run_production` 是同一个做法：**共享字典由工作线程写、UI 定时读**。
+    整趟采集在一个 `run.io_bound` 里，回调落在工作线程上，而跨线程改 NiceGUI
+    元素不安全。
+    The same shared-dict idiom as `run_production`, for the same cross-thread reason.
     """
     from dna.store import intake_sources
 
@@ -842,6 +1043,7 @@ async def import_from_sources(
             download_videos=download_videos,
             refetch=refetch,
             max_age_days=max_age_days,
+            on_progress=_progress_writer(progress),
         )
         message = result.summary()
         # 源级失败单独报：一个 feed 挂了而其余正常时，总数会显得「今天新闻很少」,
@@ -852,7 +1054,11 @@ async def import_from_sources(
             names = "、".join(sid for sid, _ in result.source_failures[:3])
             message += f"　·　{len(result.source_failures)} 个源失败（{names}）"
         if result.media_warnings:
-            message += f"　·　媒体未下载 {len(result.media_warnings)}（不影响正文）"
+            # 同上：带上第一条原因，否则「媒体未下载 N」等于没提示
+            message += (
+                f"　·　媒体未下载 {len(result.media_warnings)}（不影响正文）"
+                f"——{result.media_warnings[0][1]}"
+            )
         return message
 
     return await run.io_bound(_work)
@@ -880,6 +1086,17 @@ class EnvField:
 
     boolean: bool = False
     secret: bool = False
+
+    page: str = "运行设置"
+    """哪个子页 / which settings tab；`group` 仍是页内的小标题。"""
+
+    needs_mode: str = ""
+    """
+    只在 `TTS_MODE` 等于这个值时才生效 / only meaningful in this `TTS_MODE`.
+
+    服务端把「同时给 ref_audio 和音色名」当成互相冲突的参数**直接报错**，
+    所以界面按当前模式把无关的那几项灰掉，而不是让人配好了才发现两者不能共存。
+    """
 
     @property
     def field(self) -> str:
@@ -915,8 +1132,65 @@ ENV_FIELDS: tuple[EnvField, ...] = (
         help="留空表示不修改。只显示前 7 位与长度——界面会被截图",
     ),
     EnvField("OPENROUTER_API_KEY", "密钥", "OpenRouter API Key", secret=True, help="留空表示不修改"),
-    EnvField("TTS_SERVICE_URL", "TTS", "TTS 服务地址"),
-    EnvField("TTS_PREPROCESS", "TTS", "合成前做文本预处理", boolean=True),
+    # --- TTS 子页 / the TTS tab ---
+    EnvField("TTS_SERVICE_URL", "服务", "TTS 服务地址", page="TTS"),
+    EnvField(
+        "TTS_MODULE_DIR", "服务", "TTS 模块目录", page="TTS",
+        help="留空表示用内置默认位置；自动拉起服务时从这里启动",
+    ),
+    EnvField(
+        "TTS_PYTHON", "服务", "TTS 用的 Python", page="TTS",
+        help="留空表示用当前解释器。TTS 常装在自己的环境里，两边依赖不一样",
+    ),
+    EnvField(
+        "TTS_AUTOSTART", "服务", "服务没起来时自动拉起", boolean=True, page="TTS",
+        help="关掉之后合成会直接失败并提示，而不是等模型冷启动",
+    ),
+    EnvField(
+        "TTS_START_TIMEOUT", "服务", "启动等待上限（秒）", page="TTS",
+        help="模型冷启动要一两分钟；调太小会在快好的时候放弃",
+    ),
+    EnvField(
+        "TTS_REQUEST_TIMEOUT", "服务", "单次请求上限（秒）", page="TTS",
+        help="本地合成 RTF≈2.5，长文案一段就要几分钟——这个值宁大勿小",
+    ),
+    EnvField(
+        "TTS_MODE", "音色", "合成方式", options=("voice_clone", "custom_voice"), page="TTS",
+        help="voice_clone 用参考音频克隆；custom_voice 用服务端的音色名。**两者不能同时给**",
+    ),
+    EnvField(
+        "TTS_VOICE_HOST", "音色", "主播音色名", page="TTS", needs_mode="custom_voice",
+        help="服务在线时下拉里就是服务端的音色表；手打一个不存在的名字，"
+             "要等几分钟的合成跑完才会报错",
+    ),
+    EnvField(
+        "TTS_VOICE_GUEST", "音色", "嘉宾音色名（双人稿）", page="TTS", needs_mode="custom_voice",
+        help="只有长文案的访谈体用得上",
+    ),
+    EnvField(
+        "TTS_REF_AUDIO", "参考音频", "主播参考音频", page="TTS", needs_mode="voice_clone",
+        help="相对路径按**数据目录**解析（不是仓库根）",
+    ),
+    EnvField(
+        "TTS_REF_TEXT", "参考音频", "主播参考音频的原话", page="TTS", needs_mode="voice_clone",
+        help="留空则走纯 x-vector；随便编一句会让克隆质量明显变差",
+    ),
+    EnvField(
+        "TTS_REF_AUDIO_GUEST", "参考音频", "嘉宾参考音频", page="TTS", needs_mode="voice_clone",
+    ),
+    EnvField(
+        "TTS_REF_TEXT_GUEST", "参考音频", "嘉宾参考音频的原话", page="TTS",
+        needs_mode="voice_clone",
+    ),
+    EnvField("TTS_PREPROCESS", "产物", "合成前做文本预处理", boolean=True, page="TTS"),
+    EnvField(
+        "TTS_SUBTITLES", "产物", "同时导出字幕", boolean=True, page="TTS",
+        help="按段落时间轴出 srt，剪辑时省一遍对轴",
+    ),
+    EnvField(
+        "TTS_ARTIFACT_DIRNAME", "产物", "音频落盘子目录名", page="TTS",
+        help="在文章目录下，默认 tts",
+    ),
     EnvField("HTTP_PROXY", "网络", "HTTP 代理"),
     EnvField("HTTPS_PROXY", "网络", "HTTPS 代理"),
     EnvField(
@@ -930,11 +1204,17 @@ ENV_FIELDS: tuple[EnvField, ...] = (
 )
 
 
-def env_groups() -> list[tuple[str, list[EnvField]]]:
-    """按分组给出字段，保持 `ENV_FIELDS` 里的顺序 / Grouped, in declaration order."""
+def env_groups(page: str = "运行设置") -> list[tuple[str, list[EnvField]]]:
+    """
+    某个子页的字段，按小组归拢 / One tab's fields, grouped, in declaration order.
+
+    分页之后**每个字段有且只有一个归属**：同一项画在两页上，人会在另一页看到
+    自己刚改过的旧值，然后不知道哪一份才算数。
+    """
     groups: dict[str, list[EnvField]] = {}
     for field in ENV_FIELDS:
-        groups.setdefault(field.group, []).append(field)
+        if field.page == page:
+            groups.setdefault(field.group, []).append(field)
     return list(groups.items())
 
 
@@ -961,6 +1241,27 @@ def env_shadowed(field: EnvField) -> bool:
     from dna.core.config_edit import shadowed_by_env
 
     return shadowed_by_env(field.key)
+
+
+def tts_voice_options() -> list[str]:
+    """服务端的音色表 / The service's voice list（离线返回空表）。"""
+    from dna.tts.console import available_voices
+
+    return available_voices()
+
+
+def ref_audio_options() -> list[str]:
+    """可选的参考音频 / The reference-audio candidates，相对路径。"""
+    from dna.tts.console import ref_audio_choices
+
+    return ref_audio_choices()
+
+
+def ref_audio_file(raw: str) -> Path | None:
+    """某个参考音频设置解析到的文件 / The file a reference-audio setting resolves to。"""
+    from dna.tts.console import resolve_ref_audio
+
+    return resolve_ref_audio(raw)
 
 
 def profile_values() -> dict:
@@ -1033,37 +1334,33 @@ __all__ = [
     "ENV_FIELDS",
     "EnvField",
     "RowView",
-    "TTSHandoff",
-    "env_display",
-    "env_groups",
-    "env_shadowed",
-    "import_from_sources",
-    "profile_values",
-    "save_settings",
-    "source_options",
-    "collect_tts_handoff",
-    "import_tts_handoff",
-    "open_tts_workbench",
     "article_directory",
     "audio_estimate_seconds",
     "audio_for",
     "batch_delete",
     "batch_refetch",
     "body_file",
-    "last_instructions",
     "cache_status",
+    "env_display",
+    "env_groups",
+    "env_shadowed",
+    "import_from_sources",
     "import_links",
-    "media_target",
-    "over_target",
-    "plan_batch_delete",
-    "preview_links",
+    "last_instructions",
     "load_rows",
     "longform_estimate",
     "media_folders",
+    "media_target",
     "open_in_file_manager",
+    "over_target",
+    "plan_batch_delete",
+    "preview_links",
     "production_file",
     "production_sidecar",
     "production_text",
+    "profile_values",
     "run_production",
+    "save_settings",
+    "source_options",
     "target_window",
 ]
