@@ -45,7 +45,7 @@ import json
 import time
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 from dna.core.config import Profile, Settings, get_settings, safe_profile
@@ -59,6 +59,7 @@ from dna.pipeline.source import load_candidates
 from dna.produce.documents import (
     front_matter,
     longform_turns,
+    replace_spoken,
     script_block,
     spoken_text,
     strip_front_matter,
@@ -74,7 +75,7 @@ from dna.produce.tasks import (
     prerequisite,
     spec,
 )
-from dna.store.ledger import ArticleRecord, Ledger, ProductionRecord
+from dna.store.ledger import ArticleRecord, Ledger
 from dna.tts.base import ProgressFn, SpeechSegment, TTSProvider, wav_seconds
 from dna.tts.factory import get_tts, voice_for_role
 from dna.tts.preprocess import prepare_for_speech
@@ -89,6 +90,12 @@ logger = get_logger("produce.service")
 # NEW 标识区分的正是这两者，见 `is_new_article`。
 # A pasted or messaged link was deliberately chosen; the RSS feed is a candidate pool.
 MANUAL_SOURCES = frozenset({"gui", "inbox"})
+
+# 订阅导入的 NEW 标识挂多久 / how long a subscription import stays badged
+#
+# 只用于「或」的右边（见 `is_new_article`）：它只能加标识、拿不掉。
+# Used only as an OR: it can add the badge, never remove one.
+NEW_WINDOW_HOURS = 24.0
 
 
 @dataclass
@@ -183,6 +190,8 @@ def produce(
     llm: LLMProvider | None = None,
     tts: TTSProvider | None = None,
     on_progress: ProgressFn | None = None,
+    segments: list[SpeechSegment] | None = None,
+    rendered: dict[int, bytes] | None = None,
 ) -> ProduceResult:
     """
     为一篇文章生成一种产物 / Produce one kind for one article.
@@ -198,6 +207,16 @@ def produce(
         tts:         音频产物的后端；不给则按 .env 构造
         on_progress: 音频合成的进度回调 `(已完成段, 总段, 已产出秒数)`。
                      长文案音频要跑半小时，没有进度就只能看着界面发呆
+        segments:    音频产物专用：用外部调好的分段替掉自动切分。TTS 操作台里
+                     逐段挑过音色之后走这里，**落盘路径与自动合成完全同一条**
+                     （写台账、算时长、出字幕），否则两条路的产物迟早不一致。
+                     为 `None` 时行为与从前一字不差。
+                     Audio only: overrides the automatic segmentation with pieces tuned
+                     in the TTS console, while keeping one single write path.
+        rendered:    音频产物专用：`{段号: wav 字节}`，这些段直接用现成的波形，
+                     不再送去合成。操作台里逐段试听过的段就是这么复用的 ——
+                     RTF≈2.5，整篇重跑要几分钟，不复用等于逐段校对白做。
+                     段号对应 `segments` 的下标（空段会被丢掉，见 `tts/service.py`）。
     """
     s = settings or get_settings()
     prof = profile or safe_profile()
@@ -286,6 +305,7 @@ def produce(
             result = _generate_audio(
                 task, speaker, directory, lang=lang, settings=s,
                 on_progress=on_progress, llm=llm, article_id=article_id,
+                segments=segments, rendered=rendered,
             )
         else:
             result = generate_text(
@@ -403,13 +423,17 @@ def produce_all(
 def is_new_article(
     record: ArticleRecord,
     productions: dict,
+    *,
+    now: datetime | None = None,
+    window_hours: float = NEW_WINDOW_HOURS,
 ) -> bool:
     """
-    这篇是「手动导入、还没动过」的吗 / Is this a manually imported, untouched article?
+    这篇是「刚进来、还没动过」的吗 / Is this a freshly arrived, untouched article?
 
-    两个条件同时成立 / Both conditions must hold:
-        1. **是人工投递进来的**（界面粘的链接或飞书投的），不是 RSS 抓来的
-        2. **一条产物记录都没有**——包括失败的那种
+    先要**一条产物记录都没有**（包括失败的那种），然后满足其一 / No production record
+    at all, then either of:
+        1. **是人工投递进来的**（界面粘的链接或飞书投的）——不看时间，一直挂着
+        2. 或者 `first_seen_at` 在 `window_hours` 之内——**刚从订阅导进来的那批**
 
     标识**一直挂着，直到对它调过一次 LLM 为止**。
     The badge stays until an LLM has been called for the article.
@@ -422,24 +446,25 @@ def is_new_article(
         the article is no longer untouched. The cell also already shows a failure glyph,
         and pairing it with NEW would send contradicting signals.
 
-    为什么改成看来源，而不是看时间 / Why the source replaced the time window:
-        原先加了 24 小时的时间窗，因为实测 37 篇里有 32 篇没有任何产物——
-        RSS 抓来的存量文章大多如此，只看「有没有产物」的话 NEW 会挂在 32 行上。
-        但时间窗解决错了问题：它让**昨天粘进来、今天还没处理**的链接第二天就
-        失去标识——而那恰恰是最需要标识的一条。实测 `fe3b7d3c` 导入 47 小时、
-        零产物，正是这样丢掉的。
-        真正要区分的是**来源**：人工粘进来的链接是「我特意要处理的」，
-        RSS 抓来的是「候选池」。按来源过滤后实测只有 5 行挂 NEW，
-        既解决了泛滥，又不会因为过了一夜就把待办清空。
-        The window solved the wrong problem: it stripped the badge from a link pasted
-        yesterday and still untouched today — precisely the row that most needs it. What
-        actually distinguishes them is provenance: a pasted link was deliberately chosen,
-        while the RSS backlog is a candidate pool. Filtering by source leaves five badged
-        rows in the real ledger, without emptying the to-do list overnight.
+    时间窗是「或」，不是「改」 / The window is an OR, never a replacement:
+        **纯时间窗**曾经用过并被否掉：它让昨天粘进来、今天还没处理的链接第二天就
+        失去标识——而那恰恰是最需要标识的一条（实测 `fe3b7d3c` 导入 47 小时、
+        零产物，正是这样丢掉的）。那个理由针对的是「窗口能把标识**拿掉**」。
+        现在窗口只出现在 `or` 的右边：它只能**加**标识，人工投递那条判据一个字没动，
+        于是否掉纯时间窗的理由不再适用。
+        加它是因为订阅导入的那批一条标识都没有，人分不出哪些是这次新到的。
+        The pure window was tried and rejected because it *removed* the badge from a
+        still-untouched pasted link. As an OR it can only *add* one, leaving the manual
+        rule untouched — so that objection no longer applies. It exists because a
+        subscription import otherwise arrives entirely unmarked.
     """
     if productions:
         return False
-    return record.via in MANUAL_SOURCES
+    if record.via in MANUAL_SOURCES:
+        return True
+    if record.first_seen_at is None:
+        return False
+    return record.first_seen_at >= (now or datetime.now()) - timedelta(hours=window_hours)
 
 
 
@@ -493,6 +518,72 @@ def speech_segments_for(
         task, s.output_path / record.store_dir, lang=lang, settings=s, llm=llm
     )
     return segments
+
+
+def save_script_text(
+    article_id: str,
+    kind: ProductionKind | str,
+    text: str,
+    *,
+    lang: str = DEFAULT_LANGUAGE,
+    settings: Settings | None = None,
+) -> int:
+    """
+    把人工校对过的稿子写回文件与台账 / Write a proof-read script back to file and ledger.
+
+    TTS 操作台里的文本是可编辑的，改完必须回到稿子文件里 —— 不写回的话，音频念的
+    是操作台里的文本，而台账指向的稿子还是 LLM 那一版，「这一版到底念了什么」
+    就没有答案了，而这正是台账存在的理由。
+    The console's text is editable; without this the audio would speak one text while the
+    ledger pointed at another, and the ledger's whole purpose is to answer what was said.
+
+    **零费用、零 LLM**：只是覆盖正文并插一行 `calls=0` 的台账记录
+    （`instructions="人工校对（TTS 操作台）"`），历史仍由 `redo_of_id` 链承担。
+    不归档旧文件 —— 现在的重做也是直接覆盖，这里不新造一套。
+
+    `kind` 给音频产物也可以，会自动落到它的稿子上（操作台手里拿的是音频那一格）。
+    长文案除外：它的稿子按发言人分轮存在 `.json` 附件里，一段纯文本写不回去。
+
+    返回新插入的台账行 id / Returns the id of the inserted ledger row.
+    """
+    s = settings or get_settings()
+    task = spec(kind)
+    if task.audio_of is not None:
+        task = spec(task.audio_of)
+    lang = normalize_lang(lang)
+
+    if json_sidecar(task, lang):
+        raise ValueError(f"{task.label}按发言人分轮保存，操作台改不了它的稿子")
+
+    record = Ledger(s.db_file).get(article_id)
+    if record is None or not record.store_dir:
+        raise ValueError(f"台账里没有这篇文章或它还没落盘：{article_id}")
+
+    path = s.output_path / record.store_dir / task.filename_for(lang)
+    try:
+        markdown = path.read_text(encoding="utf-8")
+    except OSError:
+        markdown = ""
+
+    body = text.strip()
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(replace_spoken(markdown, body, lang=lang), encoding="utf-8")
+
+    logger.info("稿子已按人工校对写回：%s（%d 字）", path.name, len(body))
+    return Ledger(s.db_file).record_production(
+        article_id,
+        str(task.kind),
+        status="ok",
+        lang=lang,
+        instructions="人工校对（TTS 操作台）",
+        output_path=path.relative_to(s.output_path).as_posix(),
+        chars=len(body),
+        # 人改的稿子没有模型，也没有调用 —— 这两个字段留空不是偷懒，
+        # 是台账上「这一版不是 LLM 写的」的唯一标记。
+        llm_provider=None,
+        llm_model=None,
+        calls=0,
+    )
 
 
 def import_audio(
@@ -789,6 +880,8 @@ def _generate_audio(
     on_progress: ProgressFn | None,
     llm: LLMProvider | None = None,
     article_id: str = "",
+    segments: list[SpeechSegment] | None = None,
+    rendered: dict[int, bytes] | None = None,
 ) -> Generated:
     """
     把已有的稿子合成为音频 / Synthesise the existing script into audio.
@@ -813,9 +906,17 @@ def _generate_audio(
         Preprocessing precedes segmentation because it rewrites the very punctuation the
         segmentation depends on.
     """
-    segments, spoken_chars = _build_segments(
-        task, directory, lang=lang, settings=settings, llm=llm
-    )
+    # 外部给了分段就不再切一遍：那份分段本来就是 `speech_segments_for()` 切出来的，
+    # 重切会把 TTS 操作台里逐段挑好的音色丢掉，还会**再调一次朗读友好化**
+    # （预处理在切分之前，重跑等于对已改写过的文本再改写一遍）。
+    # Re-segmenting would discard the per-piece voices and re-run preprocessing on text
+    # that has already been rewritten once.
+    if segments is None:
+        segments, spoken_chars = _build_segments(
+            task, directory, lang=lang, settings=settings, llm=llm
+        )
+    else:
+        spoken_chars = sum(len(seg.text) for seg in segments)
     if not segments:
         raise RuntimeError(f"{spec(task.audio_of).label}里没有可朗读的内容")
 
@@ -824,7 +925,9 @@ def _generate_audio(
     # 而不是每次多留一份时间戳目录（那样「哪份是最新的」只能靠人比时间戳）。
     # A stable name per cell: a redo overwrites rather than accumulating.
     run = "-".join(filter(None, [article_id[:8] or "adhoc", str(task.kind), lang]))
-    clip = tts.synthesize(segments, on_progress=on_progress, run=run)
+    if rendered:
+        logger.info("复用已生成的 %d 段，本次只合成 %d 段", len(rendered), len(segments) - len(rendered))
+    clip = tts.synthesize(segments, on_progress=on_progress, run=run, rendered=rendered)
 
     # 服务端留下的逐段 wav 与字幕拷进文章目录 —— 产物必须在**本项目的**输出里
     # 找得齐，否则想换一句话或拿字幕去剪辑时得翻到另一个仓库的 outputs/ 下。
@@ -951,5 +1054,6 @@ __all__ = [
     "produce",
     "produce_all",
     "read_production",
+    "save_script_text",
     "speech_segments_for",
 ]
