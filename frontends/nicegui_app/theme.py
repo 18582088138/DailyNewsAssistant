@@ -306,6 +306,19 @@ body::before {
   word-break: break-all;
 }
 
+/* 弹窗：可拉大、超高就自己滚，别让内容被切掉
+   Dialogs: user-resizable, and they scroll instead of clipping their content.
+
+   `resize: both` 只在 `overflow != visible` 时生效——这两条必须成对写。
+   `max-height: 88vh` 是关键的一条：Quasar 的 dialog 不给内容高度上限，
+   面板一长就顶出屏幕，只能靠整页的滚动条去找底栏的按钮（实测踩到）。 */
+.wb-dialog {
+  resize: both; overflow: auto;
+  max-height: 88vh; max-width: 96vw; min-width: 380px;
+}
+/* 拉大手柄在右下角，深色主题里默认几乎看不见 */
+.wb-dialog::-webkit-resizer { background: var(--wb-line-strong); }
+
 /* 会花钱的按钮统一是琥珀色，视觉上和其它操作分开
    Anything that spends money is amber, visually separated from everything else. */
 .wb-btn-cost { color: var(--wb-warn) !important; }
