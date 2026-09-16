@@ -263,7 +263,7 @@ def _cfg(source_id: str) -> SourceConfig:
     return SourceConfig(id=source_id, name=source_id, kind=SourceKind.RSS, url="https://e.com/feed")
 
 
-def test_collect_isolates_source_errors(settings) -> None:  # noqa: ANN001
+def test_collect_isolates_source_errors(settings) -> None:
     """
     **一个源失败不能中断整轮采集。**
     One failing source must not abort the whole round.
@@ -287,7 +287,7 @@ def test_collect_isolates_source_errors(settings) -> None:  # noqa: ANN001
     assert "502" in result.failures[0].reason
 
 
-def test_collect_isolates_unexpected_exceptions(settings) -> None:  # noqa: ANN001
+def test_collect_isolates_unexpected_exceptions(settings) -> None:
     """
     连未预期的异常也要兜住 —— 第三方库偶尔会抛出意料之外的类型。
     Even unexpected exception types are contained; third-party libraries occasionally
@@ -304,13 +304,13 @@ def test_collect_isolates_unexpected_exceptions(settings) -> None:  # noqa: ANN0
     assert "ValueError" in result.failures[0].reason
 
 
-def test_collect_records_per_source_counts(settings) -> None:  # noqa: ANN001
+def test_collect_records_per_source_counts(settings) -> None:
     """按源统计条数，供 GUI 与台账展示 / Per-source counts for the GUI and ledger."""
     result = collect([_OkAdapter(_cfg("a")), _OkAdapter(_cfg("b"))], settings=settings)
     assert result.per_source == {"a": 1, "b": 1}
 
 
-def test_collect_summary_mentions_failures(settings) -> None:  # noqa: ANN001
+def test_collect_summary_mentions_failures(settings) -> None:
     """摘要里要体现失败数 / The summary surfaces the failure count."""
     result = collect(
         [_OkAdapter(_cfg("a")), _BoomAdapter(_cfg("b"), SourceError("x"))], settings=settings
@@ -318,7 +318,7 @@ def test_collect_summary_mentions_failures(settings) -> None:  # noqa: ANN001
     assert "1 个源失败" in result.summary()
 
 
-def test_build_adapter_dispatches_by_kind(settings) -> None:  # noqa: ANN001
+def test_build_adapter_dispatches_by_kind(settings) -> None:
     """按源类型构造对应的 adapter / The right adapter is built for each kind."""
     from dna.sources.rss import RSSAdapter
     from dna.sources.user_link import UserLinkSource

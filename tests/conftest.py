@@ -112,3 +112,31 @@ def daily_digest(digest_entry: DigestEntry) -> DailyDigest:
         entries=[digest_entry],
         trend_note_zh="今日主线是多模态模型的成本下探。",
     )
+
+
+@pytest.fixture
+def patch_actions_settings(monkeypatch):
+    """
+    把 `actions` 包各子模块里的 `get_settings` 一起替掉。
+
+    **这个夹具存在的唯一理由是一个容易误判的坑。** `frontends/nicegui_app/actions`
+    是一个包（facade + 8 个子模块），每个子模块都写 `from dna.core.config import
+    get_settings` —— 于是每个模块里都有一份**独立的绑定**。
+    只 `monkeypatch.setattr(actions, "get_settings", …)` 打的是 facade 上那一份，
+    子模块里的原函数照旧被调用，测试会去读真实的 `.env` 与真实的 `data/`。
+    而报错长得像「测试写错了」，不像「打的位置不对」。
+
+    Each submodule holds its own binding, so patching the facade alone has no effect.
+    """
+
+    def apply(settings) -> None:
+        import sys
+
+        import frontends.nicegui_app.actions  # noqa: F401  确保子模块都已导入
+
+        prefix = "frontends.nicegui_app.actions"
+        for name, module in list(sys.modules.items()):
+            if name.startswith(prefix) and hasattr(module, "get_settings"):
+                monkeypatch.setattr(module, "get_settings", lambda: settings)
+
+    return apply

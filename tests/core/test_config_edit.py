@@ -85,7 +85,7 @@ def test_only_the_target_line_changes() -> None:
     before = SAMPLE.splitlines()
     after = out.splitlines()
     assert len(before) == len(after)
-    differing = [i for i, (a, b) in enumerate(zip(before, after)) if a != b]
+    differing = [i for i, (a, b) in enumerate(zip(before, after, strict=True)) if a != b]
     assert differing == [8]
     assert after[8] == "digest_max_entries: 20"
 

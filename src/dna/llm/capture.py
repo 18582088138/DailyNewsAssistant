@@ -121,7 +121,7 @@ class RecordingProvider(LLMProvider):
         json_mode: bool = False,
     ) -> ChatResult:
         self.captured.append(list(messages))
-        return self._inner._complete(  # noqa: SLF001 - 就是要透传到被包装的那一层
+        return self._inner._complete(
             messages,
             temperature=temperature,
             max_tokens=max_tokens,

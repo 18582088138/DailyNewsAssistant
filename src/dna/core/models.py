@@ -88,7 +88,9 @@ class MediaAsset(_Base):
     kind: MediaKind
     url: str
     source_url: str = Field(description="该资产所在文章的 URL / URL of the article it came from")
-    local_path: str | None = Field(default=None, description="下载后的本地相对路径 / local path once downloaded")
+    local_path: str | None = Field(
+        default=None, description="下载后的本地相对路径 / local path once downloaded"
+    )
     caption: str | None = None
     credit: str | None = Field(default=None, description="版权/来源署名 / copyright or attribution")
     width: int | None = None
@@ -124,7 +126,8 @@ class Article(_Base):
     extracted_at: datetime = Field(default_factory=datetime.now)
     extraction_ok: bool = Field(
         default=True,
-        description="抽取是否成功；失败时降级为仅标题+链接 / False means degraded to title+link only",
+        description="抽取是否成功；失败时降级为仅标题+链接 / "
+        "False means degraded to title+link only",
     )
 
 
@@ -133,11 +136,15 @@ class NewsItem(_Base):
     清洗归一化后进入流水线的新闻条目 / A normalised news item entering the pipeline.
     """
 
-    id: str = Field(description="稳定标识，取 canonical_url 的哈希 / stable id, hash of canonical_url")
+    id: str = Field(
+        description="稳定标识，取 canonical_url 的哈希 / stable id, hash of canonical_url"
+    )
     source_id: str
     via: SourceKind
     url: str
-    canonical_url: str = Field(description="去除 utm 等追踪参数后的规范 URL / URL with tracking params stripped")
+    canonical_url: str = Field(
+        description="去除 utm 等追踪参数后的规范 URL / URL with tracking params stripped"
+    )
     title: str
     text: str = ""
     published_at: datetime | None = None
@@ -195,7 +202,9 @@ class DigestEntry(_Base):
     """
 
     id: str
-    rank: int = Field(ge=1, description="在日报中的排序，从 1 开始 / 1-based position in the digest")
+    rank: int = Field(
+        ge=1, description="在日报中的排序，从 1 开始 / 1-based position in the digest"
+    )
     cluster_id: str
 
     title_zh: str
@@ -207,7 +216,8 @@ class DigestEntry(_Base):
     tags: list[str] = Field(default_factory=list)
     need_video: bool = Field(
         default=False,
-        description="是否需要制作短视频；LLM+规则判定，可人工覆盖 / flagged for the short-video app",
+        description="是否需要制作短视频；LLM+规则判定，可人工覆盖 / "
+        "flagged for the short-video app",
     )
 
     images: list[MediaAsset] = Field(default_factory=list)
@@ -253,15 +263,21 @@ class DailyDigest(_Base):
 
     date: Date
     entries: list[DigestEntry] = Field(default_factory=list)
-    trend_note_zh: str | None = Field(default=None, description="当日主线与观点提炼 / daily trend note")
+    trend_note_zh: str | None = Field(
+        default=None, description="当日主线与观点提炼 / daily trend note"
+    )
     trend_note_en: str | None = None
     stats: DigestStats = Field(default_factory=DigestStats)
     generated_at: datetime = Field(default_factory=datetime.now)
-    schema_version: int = Field(default=1, description="结构版本，用于旧产物兼容 / for backward compatibility")
+    schema_version: int = Field(
+        default=1, description="结构版本，用于旧产物兼容 / for backward compatibility"
+    )
 
     def trend_note(self, lang: Language) -> str | None:
         """按语言取趋势段落 / Trend note for a language, falling back to Chinese."""
-        return (self.trend_note_en or self.trend_note_zh) if lang is Language.EN else self.trend_note_zh
+        if lang is Language.EN:
+            return self.trend_note_en or self.trend_note_zh
+        return self.trend_note_zh
 
     def video_entries(self) -> list[DigestEntry]:
         """需要制作短视频的条目 / Entries flagged for the short-video app."""

@@ -20,7 +20,6 @@ from typing import Any
 
 from dna.llm.base import ChatMessage, ChatResult, LLMProvider, ProviderInfo, Usage
 
-
 # ---------------------------------------------------------------------------
 # 假的 OpenAI SDK 响应 / Fake OpenAI SDK response objects
 # ---------------------------------------------------------------------------

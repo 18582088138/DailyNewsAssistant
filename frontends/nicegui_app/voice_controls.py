@@ -280,7 +280,7 @@ class VoiceControls:
         """
         try:
             relative = await actions.upload_ref_audio(event.name, event.content.read())
-        except Exception as exc:  # noqa: BLE001 - 原因原样显示
+        except Exception as exc:
             ui.notify(f"参考音频保存失败：{exc}", type="negative", multi_line=True,
                       close_button=True)
             return

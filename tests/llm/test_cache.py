@@ -39,7 +39,7 @@ from pathlib import Path
 import pytest
 
 from dna.core.errors import RateLimitError
-from dna.llm.base import ChatMessage, system, user
+from dna.llm.base import system, user
 from dna.llm.cache import CachedProvider, cache_key
 from tests.llm.fakes import ScriptedProvider
 

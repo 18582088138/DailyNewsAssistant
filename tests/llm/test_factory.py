@@ -51,12 +51,11 @@ from dna.llm.factory import (
     is_configured,
 )
 from dna.llm.openvino_provider import OpenVINOProvider
-
 from tests.llm.fakes import ScriptedProvider
 
 
 @pytest.fixture
-def cfg(tmp_path) -> Settings:  # noqa: ANN001
+def cfg(tmp_path) -> Settings:
     """一份配置齐全的 Settings / A fully configured Settings instance."""
     return Settings(
         _env_file=None,
@@ -168,7 +167,7 @@ def test_retry_policy_respects_max_delay() -> None:
 
 def test_retries_then_succeeds() -> None:
     """限流两次后成功 / Succeeds after two rate-limit errors."""
-    delays, sleep = recorder()
+    _delays, sleep = recorder()
     primary = ScriptedProvider(
         "primary", [RateLimitError("429"), RateLimitError("429"), "终于成功"]
     )
@@ -198,7 +197,7 @@ def test_backoff_delays_are_exponential_and_not_slept_for_real() -> None:
 
 def test_retries_exhausted_raises() -> None:
     """重试用尽后抛出最后一个异常 / Raises the last error once retries run out."""
-    delays, sleep = recorder()
+    _delays, sleep = recorder()
     primary = ScriptedProvider("p", [RateLimitError("boom")] * 5)
     llm = ResilientProvider(primary, policy=RetryPolicy(max_attempts=3), sleep=sleep)
 
@@ -228,7 +227,7 @@ def test_non_retryable_error_is_not_retried() -> None:
 
 def test_falls_back_after_primary_exhausted() -> None:
     """主 provider 重试用尽后切备用 / Switches to the fallback once the primary is exhausted."""
-    delays, sleep = recorder()
+    _delays, sleep = recorder()
     primary = ScriptedProvider("primary", [RateLimitError("429")] * 5)
     fallback = ScriptedProvider("fallback", ["备用的回答"])
     llm = ResilientProvider(primary, fallback, policy=RetryPolicy(max_attempts=2), sleep=sleep)
@@ -259,7 +258,7 @@ def test_auth_failure_switches_immediately() -> None:
 
 def test_both_providers_failing_raises() -> None:
     """主备都失败时抛出异常 / Raises when both providers fail."""
-    delays, sleep = recorder()
+    _delays, sleep = recorder()
     primary = ScriptedProvider("p", [RateLimitError("a")] * 3)
     fallback = ScriptedProvider("f", [RateLimitError("b")] * 3)
     llm = ResilientProvider(primary, fallback, policy=RetryPolicy(max_attempts=2), sleep=sleep)
@@ -272,7 +271,7 @@ def test_both_providers_failing_raises() -> None:
 
 def test_active_provider_is_reported() -> None:
     """info 应反映当前实际生效的 provider / info reflects the provider actually used."""
-    delays, sleep = recorder()
+    _delays, sleep = recorder()
     llm = ResilientProvider(
         ScriptedProvider("primary", [RateLimitError("x")] * 3),
         ScriptedProvider("fallback", ["ok"]),
@@ -336,7 +335,7 @@ def test_resilient_provider_supports_chat_json() -> None:
     Because ResilientProvider is itself an LLMProvider, chat_json works through it
     and JSON repair composes with provider fallback.
     """
-    delays, sleep = recorder()
+    _delays, sleep = recorder()
     primary = ScriptedProvider("primary", [RateLimitError("429")])
     fallback = ScriptedProvider("fallback", ['{"value": 42}'])
     llm = ResilientProvider(primary, fallback, policy=RetryPolicy(max_attempts=1), sleep=sleep)

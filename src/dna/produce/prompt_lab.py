@@ -427,7 +427,7 @@ def _invoke(
             settings=s,
             profile=prof,
         )
-    except Exception as exc:  # noqa: BLE001 - 干跑的假回复用完就是正常结束
+    except Exception as exc:
         result.error = " ".join(str(exc).split())[:300]
 
     # 提示词无论成败都要交出来 / the prompts come back either way

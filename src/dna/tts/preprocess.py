@@ -124,7 +124,7 @@ def prepare_for_speech(
             # 输出与输入同量级，给两倍余量就够；不设上限时小模型会自己续写下去
             max_tokens=min(8000, max(600, len(cleaned) * 2)),
         )
-    except Exception as exc:  # noqa: BLE001 - 预处理失败绝不能挡住音频
+    except Exception as exc:
         logger.warning("TTS 预处理失败，用原文合成：%s", " ".join(str(exc).split())[:200])
         return PreparedSpeech(text=cleaned, reason=f"LLM 调用失败：{exc}"[:300])
 

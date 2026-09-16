@@ -112,7 +112,7 @@ class OpenAICompatProvider(LLMProvider):
 
         try:
             response = self._client.chat.completions.create(**payload)
-        except Exception as exc:  # noqa: BLE001 - 统一翻译成本项目的异常体系
+        except Exception as exc:
             translated = _translate_error(exc, self._info)
             # 少数端点不认 response_format，退回普通模式重试一次而不是直接失败
             # A few endpoints reject response_format; fall back once instead of failing.
@@ -121,7 +121,7 @@ class OpenAICompatProvider(LLMProvider):
                 payload.pop("response_format")
                 try:
                     response = self._client.chat.completions.create(**payload)
-                except Exception as retry_exc:  # noqa: BLE001
+                except Exception as retry_exc:
                     raise _translate_error(retry_exc, self._info) from retry_exc
             else:
                 raise translated from exc
@@ -153,7 +153,9 @@ def _extract_text(response: Any, info: ProviderInfo, usage: Usage) -> tuple[str,
         choice = choices[0]
         content = choice.message.content
     except AttributeError as exc:
-        raise ProviderResponseError(f"{info} 返回结构异常 / unexpected response shape: {exc}") from exc
+        raise ProviderResponseError(
+            f"{info} 返回结构异常 / unexpected response shape: {exc}"
+        ) from exc
 
     reasoning = getattr(choice.message, "reasoning", None) or getattr(
         choice.message, "reasoning_content", None
@@ -243,7 +245,9 @@ def _is_unsupported_parameter(exc: Exception) -> bool:
     text = str(exc).lower()
     return any(
         marker in text
-        for marker in ("response_format", "unsupported parameter", "unknown field", "invalid_request")
+        for marker in (
+            "response_format", "unsupported parameter", "unknown field", "invalid_request",
+        )
     )
 
 

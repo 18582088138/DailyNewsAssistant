@@ -39,7 +39,9 @@ _WINDOWS_RESERVED = {
 }
 
 # 连续的空白或分隔符 / runs of whitespace or separators
-_SEPARATORS = re.compile(r"[\s_\-–—·、,，.。!！?？:：;；'\"“”‘’()（）\[\]【】{}<>《》/\\|+*#@&$%^~`=]+")
+_SEPARATORS = re.compile(
+    r"[\s_\-–—·、,，.。!！?？:：;；'\"“”‘’()（）\[\]【】{}<>《》/\\|+*#@&$%^~`=]+"
+)
 
 DEFAULT_SLUG_MAX_LEN = 40
 

@@ -5,7 +5,14 @@
 This layer depends on no other internal module; it is the base of the dependency graph.
 """
 
-from dna.core.config import Profile, Settings, SourceConfig, get_settings, load_profile, load_sources
+from dna.core.config import (
+    Profile,
+    Settings,
+    SourceConfig,
+    get_settings,
+    load_profile,
+    load_sources,
+)
 from dna.core.errors import (
     ConfigError,
     DNAError,

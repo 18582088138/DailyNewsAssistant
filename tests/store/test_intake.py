@@ -39,6 +39,7 @@ from dna.core.config import Profile, Settings, SourceConfig, SourceFilter
 from dna.core.models import RawItem, SourceKind
 from dna.sources.registry import CollectResult
 from dna.store import intake as intake_module
+from dna.store import intake_engine as engine_module
 from dna.store.intake import intake_sources
 from dna.store.ledger import Ledger
 
@@ -168,8 +169,8 @@ def test_media_warnings_are_collected_but_not_failures(
             skipped_videos=[("https://v.qq.com/x/1", "地域限制")],
         )
 
-    monkeypatch.setattr(intake_module, "fetch_article", fake_fetch)
-    monkeypatch.setattr(intake_module, "save_article", fake_save)
+    monkeypatch.setattr(engine_module, "fetch_article", fake_fetch)
+    monkeypatch.setattr(engine_module, "save_article", fake_save)
 
     result = intake_sources(settings=settings, profile=Profile(), extract=True)
 

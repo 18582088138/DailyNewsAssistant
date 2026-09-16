@@ -40,7 +40,7 @@ from pathlib import Path
 import pytest
 
 from dna.core.models import Article, MediaAsset, MediaKind
-from dna.store import article_store
+from dna.store import article_render, article_store
 from dna.store.article_store import article_dir, save_article
 
 NOW = datetime(2026, 9, 2, 10, 0, 0)
@@ -428,7 +428,7 @@ def test_read_body_returns_pasted_text(tmp_path: Path) -> None:
     original = saved.article_path.read_text(encoding="utf-8")
     saved.article_path.write_text(original + "\n这是我手动补的正文。\n第二段。\n", encoding="utf-8")
 
-    body = article_store.read_body(saved.article_path)
+    body = article_render.read_body(saved.article_path)
 
     assert body == "这是我手动补的正文。\n第二段。"
     assert "粘贴" not in body  # 操作提示行必须被剔掉
@@ -442,7 +442,7 @@ def test_read_body_of_a_normal_article_skips_frontmatter(tmp_path: Path) -> None
     """
     saved = save_article(make_article(text="第一段。\n第二段。"), "abc", root=tmp_path, when=NOW)
 
-    body = article_store.read_body(saved.article_path)
+    body = article_render.read_body(saved.article_path)
 
     assert body == "第一段。\n第二段。"
     assert "extraction_ok" not in body
@@ -458,7 +458,7 @@ def test_read_body_of_an_untouched_degraded_article_is_empty(tmp_path: Path) -> 
     """
     saved = save_article(make_article(text="", ok=False), "abc", root=tmp_path, when=NOW)
 
-    assert article_store.read_body(saved.article_path) == ""
+    assert article_render.read_body(saved.article_path) == ""
 
 
 # --- 旧目录清理 / stale directory cleanup --------------------------------------
@@ -616,4 +616,4 @@ def test_read_title_picks_up_a_hand_edited_heading(tmp_path: Path) -> None:
     edited = original.replace("# 某公司发布多模态大模型", "# 我改对的标题")
     saved.article_path.write_text(edited, encoding="utf-8")
 
-    assert article_store.read_title(saved.article_path) == "我改对的标题"
+    assert article_render.read_title(saved.article_path) == "我改对的标题"

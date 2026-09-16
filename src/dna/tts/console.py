@@ -40,7 +40,7 @@ def available_voices(settings: Settings | None = None) -> list[str]:
     s = settings or get_settings()
     try:
         return list(get_tts(s).available_speakers())
-    except Exception as exc:  # noqa: BLE001 - 离线是常态，不是错误
+    except Exception as exc:
         logger.debug("音色表取不到（服务多半没起）：%s", exc)
         return []
 

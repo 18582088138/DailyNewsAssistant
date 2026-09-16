@@ -34,7 +34,6 @@ import pytest
 from dna.core.errors import ProviderResponseError
 from dna.llm.parsing import extract_json_block, strip_think_tags
 
-
 # --- 正常形态 / well-formed shapes -------------------------------------------
 
 

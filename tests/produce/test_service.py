@@ -548,9 +548,9 @@ def test_badge_survives_any_amount_of_time(settings: Settings) -> None:
     A pure time window used to strip the badge from exactly the row that still needed it.
     The window is now only an OR branch, so it can add a badge but never remove one.
     """
-    from dna.produce import is_new_article
-
     import dataclasses
+
+    from dna.produce import is_new_article
 
     article_id = seed(settings, via=SourceKind.GUI)
     record = Ledger(settings.db_file).get(article_id)
@@ -600,7 +600,7 @@ class FakeTTS:
         self.segments: list = []
 
     @property
-    def info(self):  # noqa: ANN201
+    def info(self):
         from dna.tts.base import TTSInfo
 
         return TTSInfo(name="fake_tts", model="fake", device="CPU")
@@ -608,7 +608,7 @@ class FakeTTS:
     def available_speakers(self) -> list[str]:
         return ["serena", "uncle_fu"]
 
-    def synthesize(self, segments, *, on_progress=None, run=None, rendered=None):  # noqa: ANN001, ANN201
+    def synthesize(self, segments, *, on_progress=None, run=None, rendered=None):
         import numpy as np
 
         from dna.tts.base import AudioClip, encode_wav
@@ -799,7 +799,7 @@ def test_redo_builds_an_uncached_provider(settings, monkeypatch) -> None:
     seen: list[bool | None] = []
     real_llm = ScriptedProvider("fake", [summary_reply(), summary_reply()])
 
-    def fake_get_llm(*args, **kwargs):  # noqa: ANN002, ANN003, ANN202
+    def fake_get_llm(*args, **kwargs):
         seen.append(kwargs.get("cache"))
         return real_llm
 
@@ -1025,7 +1025,7 @@ def test_rendered_pieces_reach_the_backend(settings: Settings) -> None:
     class _Spy(FakeTTS):
         rendered_seen: dict | None = None
 
-        def synthesize(self, segments, *, on_progress=None, run=None, rendered=None):  # noqa: ANN001, ANN201
+        def synthesize(self, segments, *, on_progress=None, run=None, rendered=None):
             self.rendered_seen = rendered
             return super().synthesize(segments, on_progress=on_progress, run=run)
 
@@ -1113,7 +1113,7 @@ def test_subtitles_follow_the_console_split(settings: Settings) -> None:
     class _WithCues(FakeTTS):
         """按真实服务的做法补上 cues（`FakeTTS` 本身不出字幕）。"""
 
-        def synthesize(self, segments, *, on_progress=None, run=None, rendered=None):  # noqa: ANN001, ANN201
+        def synthesize(self, segments, *, on_progress=None, run=None, rendered=None):
             clip = super().synthesize(segments, on_progress=on_progress, run=run)
             spoken = [(1.0, seg.text) for seg in segments]
             clip.cues = build_cues(spoken, [0.0] * len(segments))

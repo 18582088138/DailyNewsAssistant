@@ -37,7 +37,9 @@ class UserLinkSource(SourceAdapter):
     GUI or the Feishu bot, and `fetch()` merely hands over what has been collected.
     """
 
-    def __init__(self, config: SourceConfig | None = None, via: SourceKind = SourceKind.GUI) -> None:
+    def __init__(
+        self, config: SourceConfig | None = None, via: SourceKind = SourceKind.GUI
+    ) -> None:
         super().__init__(config or default_config())
         self.via = via
         self._items: list[RawItem] = []

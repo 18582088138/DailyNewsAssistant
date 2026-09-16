@@ -30,22 +30,9 @@ from dna.core.models import Cluster, MediaKind
 
 logger = get_logger("pipeline.score")
 
-# 各信号的权重，合计 1.0 / signal weights, summing to 1.0
-W_KEYWORD = 0.35
-W_SOURCES = 0.25
-W_FRESHNESS = 0.20
-W_SUBSTANCE = 0.12
-W_MEDIA = 0.08
-
-# 多源报道的饱和点：超过这么多个来源，再多也不额外加分
-# Saturation point: beyond this many sources, additional ones add nothing.
-SOURCE_SATURATION = 4
-
-# 正文字数的饱和点 / body-length saturation
-SUBSTANCE_SATURATION = 1500
-
-# 新鲜度衰减窗口 / freshness decay window
-FRESHNESS_WINDOW_HOURS = 48
+# 这些值的**唯一来源是 `profile.tuning`**（`config/profile.yaml`）。
+# 它们决定「日报收录什么」，写死在代码里等于把选题口味焊死；默认值在 `core/config.Tuning`。
+# The live values come from `profile.tuning`; defaults live on the `Tuning` model.
 
 
 @dataclass
@@ -101,17 +88,18 @@ def score_cluster(
     breakdown = ScoreBreakdown()
 
     breakdown.keyword, breakdown.matched_keywords = _keyword_signal(cluster, profile)
-    breakdown.sources = _source_signal(cluster)
-    breakdown.freshness = _freshness_signal(cluster, moment)
-    breakdown.substance = _substance_signal(cluster)
+    breakdown.sources = _source_signal(cluster, profile)
+    breakdown.freshness = _freshness_signal(cluster, moment, profile)
+    breakdown.substance = _substance_signal(cluster, profile)
     breakdown.media = _media_signal(cluster)
 
+    tuning = profile.tuning
     breakdown.total = round(
-        W_KEYWORD * breakdown.keyword
-        + W_SOURCES * breakdown.sources
-        + W_FRESHNESS * breakdown.freshness
-        + W_SUBSTANCE * breakdown.substance
-        + W_MEDIA * breakdown.media,
+        tuning.weight_keyword * breakdown.keyword
+        + tuning.weight_multi_source * breakdown.sources
+        + tuning.weight_freshness * breakdown.freshness
+        + tuning.weight_substance * breakdown.substance
+        + tuning.weight_media * breakdown.media,
         4,
     )
     return breakdown
@@ -132,7 +120,8 @@ def needs_video(cluster: Cluster, profile: Profile, score: float) -> bool:
     unticked in the UI, whereas a missed one never appears among the video candidates at
     all and nobody goes looking for it.
     """
-    text = f"{cluster.canonical.title}\n{cluster.canonical.text[:600]}".lower()
+    window = profile.tuning.video_scan_chars
+    text = f"{cluster.canonical.title}\n{cluster.canonical.text[:window]}".lower()
 
     if any(keyword.lower() in text for keyword in profile.video_keywords):
         return True
@@ -163,7 +152,7 @@ def _keyword_signal(cluster: Cluster, profile: Profile) -> tuple[float, list[str
         return 0.0, []
 
     title = cluster.canonical.title.lower()
-    body = cluster.canonical.text[:2000].lower()
+    body = cluster.canonical.text[: profile.tuning.focus_scan_chars].lower()
 
     hits = 0.0
     matched: list[str] = []
@@ -184,7 +173,7 @@ def _keyword_signal(cluster: Cluster, profile: Profile) -> tuple[float, list[str
     return min(hits / 3.0, 1.0), matched
 
 
-def _source_signal(cluster: Cluster) -> float:
+def _source_signal(cluster: Cluster, profile: Profile) -> float:
     """
     多源报道程度 / How many outlets covered it.
 
@@ -195,10 +184,11 @@ def _source_signal(cluster: Cluster) -> float:
     distinct = len({m.source_id for m in cluster.members if m.source_id})
     if distinct <= 1:
         return 0.0
-    return min((distinct - 1) / (SOURCE_SATURATION - 1), 1.0)
+    saturation = max(2, profile.tuning.source_saturation)
+    return min((distinct - 1) / (saturation - 1), 1.0)
 
 
-def _freshness_signal(cluster: Cluster, now: datetime) -> float:
+def _freshness_signal(cluster: Cluster, now: datetime, profile: Profile) -> float:
     """
     新鲜度 / Freshness.
 
@@ -216,15 +206,16 @@ def _freshness_signal(cluster: Cluster, now: datetime) -> float:
     age = now - published.replace(tzinfo=None) if published.tzinfo else now - published
     if age <= timedelta(0):
         return 1.0
-    if age >= timedelta(hours=FRESHNESS_WINDOW_HOURS):
+    hours = profile.tuning.freshness_window_hours
+    if age >= timedelta(hours=hours):
         return 0.0
-    return 1.0 - (age.total_seconds() / (FRESHNESS_WINDOW_HOURS * 3600))
+    return 1.0 - (age.total_seconds() / (hours * 3600))
 
 
-def _substance_signal(cluster: Cluster) -> float:
+def _substance_signal(cluster: Cluster, profile: Profile) -> float:
     """正文篇幅 / Body length, saturating."""
     length = len(cluster.canonical.text)
-    return min(length / SUBSTANCE_SATURATION, 1.0)
+    return min(length / max(1, profile.tuning.substance_saturation), 1.0)
 
 
 def _media_signal(cluster: Cluster) -> float:
@@ -281,8 +272,6 @@ def rank_clusters(
 
 
 __all__ = [
-    "FRESHNESS_WINDOW_HOURS",
-    "SOURCE_SATURATION",
     "ScoreBreakdown",
     "needs_video",
     "rank_clusters",

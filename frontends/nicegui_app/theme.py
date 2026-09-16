@@ -319,6 +319,17 @@ body::before {
 /* 拉大手柄在右下角，深色主题里默认几乎看不见 */
 .wb-dialog::-webkit-resizer { background: var(--wb-line-strong); }
 
+/* 分页内容自己滚，不靠对话框整体滚
+   A tabbed dialog's body scrolls on its own rather than via the card.
+
+   Quasar 的 `q-panel-parent` 是 `overflow: hidden`：子页比它高就**直接裁掉，
+   而且不出滚动条**——`.wb-dialog` 上那句 `overflow: auto` 永远轮不到触发，
+   因为卡片本身没有超高。设置面板的「运行设置」页有几十项，底下几项就这么
+   看不见了（用户实测报的就是这个）。
+   分页自己滚还有个副作用是好的：底栏的「保存 / 取消」永远在屏幕上。 */
+.wb-dialog-body { overflow-y: auto; max-height: 62vh; }
+.wb-dialog-body .q-panel-parent, .wb-dialog-body .q-panel { overflow: visible; }
+
 /* 会花钱的按钮统一是琥珀色，视觉上和其它操作分开
    Anything that spends money is amber, visually separated from everything else. */
 .wb-btn-cost { color: var(--wb-warn) !important; }

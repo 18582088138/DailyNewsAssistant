@@ -35,17 +35,7 @@ import pytest
 
 from dna.core.config import Profile
 from dna.core.models import Cluster, MediaAsset, MediaKind, NewsItem, SourceKind
-from dna.pipeline.score import (
-    FRESHNESS_WINDOW_HOURS,
-    W_FRESHNESS,
-    W_KEYWORD,
-    W_MEDIA,
-    W_SOURCES,
-    W_SUBSTANCE,
-    needs_video,
-    rank_clusters,
-    score_cluster,
-)
+from dna.pipeline.score import needs_video, rank_clusters, score_cluster
 
 NOW = datetime(2026, 9, 2, 12, 0, 0)
 
@@ -94,7 +84,15 @@ def test_weights_sum_to_one() -> None:
 
     调其中一个却忘了调别的，会让总分悄悄跑出 0~1 区间，而排序看起来还是「正常的」。
     """
-    assert W_KEYWORD + W_SOURCES + W_FRESHNESS + W_SUBSTANCE + W_MEDIA == pytest.approx(1.0)
+    tuning = Profile().tuning
+    total = (
+        tuning.weight_keyword
+        + tuning.weight_multi_source
+        + tuning.weight_freshness
+        + tuning.weight_substance
+        + tuning.weight_media
+    )
+    assert pytest.approx(1.0) == total
 
 
 def test_score_stays_within_zero_and_one() -> None:
@@ -112,7 +110,7 @@ def test_score_stays_within_zero_and_one() -> None:
     )
     worst = make_cluster(make_item("完全不相关的标题", "", when=NOW - timedelta(days=30)))
 
-    assert 0.0 <= score_cluster(worst, profile(), now=NOW).total
+    assert score_cluster(worst, profile(), now=NOW).total >= 0.0
     assert score_cluster(best, profile(), now=NOW).total <= 1.0
 
 
@@ -220,7 +218,10 @@ def test_missing_publish_time_scores_half_not_zero() -> None:
 def test_beyond_the_window_scores_zero() -> None:
     """超出 48 小时窗口的归零，不出现负分。"""
     old = make_cluster(
-        make_item("某事件", "正文" * 50, when=NOW - timedelta(hours=FRESHNESS_WINDOW_HOURS + 10))
+        make_item(
+            "某事件", "正文" * 50,
+            when=NOW - timedelta(hours=Profile().tuning.freshness_window_hours + 10),
+        )
     )
     assert score_cluster(old, profile(), now=NOW).freshness == 0.0
 

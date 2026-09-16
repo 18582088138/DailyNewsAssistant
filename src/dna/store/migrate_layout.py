@@ -179,7 +179,6 @@ def migrate(settings: Settings | None = None, *, dry_run: bool = False) -> Migra
         return plan
 
     ledger = Ledger(s.db_file)
-    new_root = s.output_path / ARTICLES_SUBDIR
     moved: list[tuple[Path, Path]] = []
 
     for source, target in plan.moves:

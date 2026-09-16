@@ -41,7 +41,6 @@ from dna.core.errors import (
 from dna.llm.base import user
 from dna.llm.ollama_provider import OllamaProvider, normalize_base_url
 from dna.llm.openai_compat import OpenAICompatProvider
-
 from tests.llm.fakes import FakeOpenAIClient, FakeUsage, make_response
 
 

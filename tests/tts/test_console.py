@@ -79,7 +79,7 @@ def test_offline_service_yields_an_empty_voice_list(monkeypatch) -> None:
     An offline service is normal, not an error: raising here would break the very dialog
     used to fix the service address.
     """
-    def _dead(_settings=None):  # noqa: ANN001, ANN202
+    def _dead(_settings=None):
         raise TTSError("服务不可用")
 
     monkeypatch.setattr(console, "get_tts", _dead)
@@ -279,7 +279,7 @@ def test_segment_type_is_what_the_provider_expects() -> None:
     seen: list[object] = []
     original = provider.synthesize
 
-    def _spy(segments, **kwargs):  # noqa: ANN001, ANN202
+    def _spy(segments, **kwargs):
         seen.extend(segments)
         return original(segments, **kwargs)
 

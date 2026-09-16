@@ -48,16 +48,15 @@ import pytest
 from dna.narration.duration import (
     CHARS_PER_SECOND_ZH,
     MIXED_COPY_CHAR_FACTOR,
+    char_feedback,
     count_units,
     estimate_seconds,
-    char_feedback,
     observed_chars_per_second,
     prompt_char_budget,
     spoken_text,
     target_chars,
     within,
 )
-
 
 # --- 基本估算 / basic estimation -----------------------------------------------
 

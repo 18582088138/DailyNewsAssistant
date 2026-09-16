@@ -112,7 +112,7 @@ def translate_batch(
         out = llm.chat_json(
             build_messages(items, instructions=instructions), TranslationOut, temperature=0.2
         )
-    except Exception as exc:  # noqa: BLE001 - 翻译失败只影响英文版，中文版照常
+    except Exception as exc:
         logger.warning("翻译失败（%d 条），本批跳过英文版：%s", len(items), exc)
         return {}
 
@@ -175,7 +175,7 @@ def translate_text(text: str, llm: LLMProvider, *, kind: str = "段落") -> str 
     ]
     try:
         return llm.chat_text(messages, temperature=0.2).strip() or None
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         logger.warning("整段翻译失败，英文版将缺少该段：%s", exc)
         return None
 

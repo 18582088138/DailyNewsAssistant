@@ -141,7 +141,7 @@ def _run(
                 refetch=refetch,
                 progress=notice.progress,
             )
-        except Exception as exc:  # noqa: BLE001 - 转成提示，不让转圈永远停在那里
+        except Exception as exc:
             ui.notify(f"采集失败：{exc}", type="negative", timeout=10000)
             return
         finally:

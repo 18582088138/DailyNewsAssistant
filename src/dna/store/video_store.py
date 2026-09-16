@@ -25,6 +25,7 @@ Downloads the official videos referenced by an article.
 
 from __future__ import annotations
 
+import contextlib
 import os
 from pathlib import Path
 
@@ -135,7 +136,7 @@ def _download_one(
                 path = _download_direct(asset, directory, stem, timeout=timeout)
             else:
                 path = _download_with_ytdlp(asset, directory, stem, timeout=timeout)
-        except Exception as exc:  # noqa: BLE001 - 单条视频失败不影响其余内容
+        except Exception as exc:
             reason = _short(exc)
             path = None
         else:
@@ -144,7 +145,9 @@ def _download_one(
             reason = "未能取得视频文件"
 
         if attempt < attempts:
-            logger.debug("视频下载第 %d/%d 次失败，重试：%s（%s）", attempt, attempts, asset.url, reason)
+            logger.debug(
+                "视频下载第 %d/%d 次失败，重试：%s（%s）", attempt, attempts, asset.url, reason
+            )
 
     return None, reason
 
@@ -152,10 +155,9 @@ def _download_one(
 def _clear_leftovers(directory: Path, stem: str) -> None:
     """清掉上一次尝试留下的残片 / Drop partial files from a previous attempt."""
     for path in directory.glob(f"{stem}.*"):
-        try:
+        # 文件被占用时留着即可，下一步会覆盖
+        with contextlib.suppress(OSError):
             path.unlink()
-        except OSError:  # pragma: no cover - 文件被占用时留着即可，下一步会覆盖
-            pass
 
 
 # ---------------------------------------------------------------------------
