@@ -34,13 +34,12 @@ from dna.core.doctor import (
     check_packages,
     check_proxy,
     check_python,
-    check_tts_service,
     check_writable_dirs,
     has_failure,
     run_all,
     summarize,
 )
-
+from dna.tts.doctor import check_tts_service  # 已从 core 挪到它所属的那一层
 
 # --- 基础检查 / basic checks -------------------------------------------------
 

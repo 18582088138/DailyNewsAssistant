@@ -47,8 +47,8 @@ def test_doctor_exit_code_1_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     A failing check must exit with code 1 so scripts and CI can gate on it.
     """
     monkeypatch.setattr(
-        "frontends.cli.main.run_all",
-        lambda: [CheckResult("假检查", Status.FAIL, "故意失败", hint="修它")],
+        "frontends.cli.cmd_env.run_all",
+        lambda **_: [CheckResult("假检查", Status.FAIL, "故意失败", hint="修它")],
     )
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 1
@@ -58,8 +58,8 @@ def test_doctor_exit_code_1_on_failure(monkeypatch: pytest.MonkeyPatch) -> None:
 def test_doctor_exit_code_0_when_clean(monkeypatch: pytest.MonkeyPatch) -> None:
     """全部通过时退出码 0 / Exits 0 when everything passes."""
     monkeypatch.setattr(
-        "frontends.cli.main.run_all",
-        lambda: [CheckResult("假检查", Status.OK, "通过")],
+        "frontends.cli.cmd_env.run_all",
+        lambda **_: [CheckResult("假检查", Status.OK, "通过")],
     )
     result = runner.invoke(app, ["doctor"])
     assert result.exit_code == 0
