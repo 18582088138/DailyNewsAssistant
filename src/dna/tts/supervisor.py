@@ -30,6 +30,7 @@ The GUI is mounted on the service rather than started separately.
 
 from __future__ import annotations
 
+import contextlib
 import subprocess
 import sys
 import time
@@ -39,8 +40,9 @@ from urllib.parse import urlparse
 
 from dna.core.config import Settings, get_settings
 from dna.core.logging import get_logger
+from dna.core.urls import is_local_url
 from dna.tts.base import TTSError
-from dna.tts.client import TTSServiceClient, is_local_url
+from dna.tts.client import TTSServiceClient
 
 logger = get_logger("tts.supervisor")
 
@@ -129,37 +131,6 @@ def ensure_service(
     )
 
 
-def gui_url(settings: Settings | None = None) -> str:
-    """
-    TTS 图形界面的地址 / Where the TTS workbench lives.
-
-    **它就挂在 TTS 服务上**（同一个进程、同一个端口，路径 `/gui`），所以这里
-    不再单独探活、更不单独拉进程 —— 服务在线，界面就在线。
-    先前把它当成第二个应用（8301 端口）来拉，代价是**两份权重**：1.7B 各占几 GB，
-    8 GB 卡上直接顶满，而且点一次「高级配置」要等第二个进程冷启动。
-    The GUI is mounted on the service: one process, one copy of the weights. Treating it
-    as a second application cost a second copy and a cold start per click.
-
-    `TTS_GUI_URL` 填了就用它（界面确实单独部署的情况），否则按服务地址拼。
-    """
-    s = settings or get_settings()
-    explicit = (s.tts_gui_url or "").strip().rstrip("/")
-    if explicit:
-        return explicit
-    return s.tts_service_url.rstrip("/") + "/" + (s.tts_gui_path or "/gui").strip("/")
-
-
-def ensure_gui(settings: Settings | None = None) -> str:
-    """
-    确保界面可用并返回地址 / Ensure the workbench is reachable.
-
-    就是「确保服务在线」——界面是服务的一部分。
-    """
-    s = settings or get_settings()
-    ensure_service(s)
-    return gui_url(s)
-
-
 # ---------------------------------------------------------------------------
 # 内部实现 / internals
 # ---------------------------------------------------------------------------
@@ -214,7 +185,8 @@ def _spawn(s: Settings, role: str, args: list[str], url: str) -> subprocess.Pope
     # On Windows the child must leave this console group, or Ctrl+C here kills the
     # shared service too.
     flags = getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0) if sys.platform == "win32" else 0
-    process = subprocess.Popen(  # noqa: S603 - 命令由配置组装，非用户输入
+    # 命令由配置组装，非用户输入（S603/S607 在 pyproject 里按文件放行）
+    process = subprocess.Popen(
         command,
         cwd=s.tts_module_dir,
         stdout=handle,
@@ -261,10 +233,8 @@ def _terminate(process: subprocess.Popen) -> None:
         process.terminate()
         process.wait(timeout=10)
     except (OSError, subprocess.TimeoutExpired):
-        try:
+        with contextlib.suppress(OSError):
             process.kill()
-        except OSError:
-            pass
 
 
-__all__ = ["ServiceStatus", "ensure_gui", "ensure_service", "gui_url"]
+__all__ = ["ServiceStatus", "ensure_service"]
