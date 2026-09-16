@@ -3,7 +3,8 @@
 
     python tools/check.py                 # ruff + 全量 pytest + doctor
     python tools/check.py --fast          # ruff + 只跑 git 改过的那些包
-    python tools/check.py --max-lines 500 --prose-ratio 25
+    python tools/check.py --max-lines 500   # 散文占比默认只报不拦，见 PROSE_BUDGET
+    python tools/check.py --prose-ratio 40  # 显式传才当闸门用
     python tools/check.py --list          # 现算测试清单（文档里不再手抄数字）
 
 **报告完成之前必须跑它。** 「我觉得没问题」不是验收，退出码才是。
@@ -26,6 +27,15 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 CODE_DIRS = ("src", "frontends", "tools")
 FAIL_RE = re.compile(r"(\d+)\s*FAIL")
+
+# 散文（注释 + docstring）占非空行的参考线 / the prose-ratio reference line
+#
+# **只报不拦**：它拦不住真正该拦的东西。这个项目里最贵的 bug 全是「不报错，
+# 只是不对」（配置被静默忽略、字数预算少要三分之一、重做拿回旧答案），
+# 记着那些「为什么」的注释正是防止它们被重新引入的东西 —— 把比例当硬门，
+# 第一个被删的就是它们。40 是按当前存量（约 38%）留一点余量定的：
+# 新代码里散文失控会顶上来，而不要求回头删已经写下的根因记录。
+PROSE_BUDGET = 40
 
 
 def python_exe() -> str:
@@ -117,18 +127,27 @@ def check_max_lines(limit: int) -> tuple[bool, str]:
     return ok, detail
 
 
-def check_prose(limit: int) -> tuple[bool, str]:
+def check_prose(limit: int, *, enforce: bool = True) -> tuple[bool, str]:
+    """
+    注释 + docstring 占非空行的比例。
+
+    默认**只报不拦**（见 `PROSE_BUDGET`）。显式传 `--prose-ratio N` 才当闸门用。
+    """
     rows = [(p, *file_stats(p)) for p in code_files()]
     non_blank = sum(r[2] for r in rows) or 1
     prose = sum(r[3] for r in rows)
     ratio = prose * 100 / non_blank
     ok = ratio <= limit
-    print(f"{'✔' if ok else '✘'} 散文占比 {ratio:.1f}%（上限 {limit}%）")
+    mark = "✔" if ok else ("✘" if enforce else "⚠")
+    suffix = "" if enforce else "，只报不拦"
+    print(f"{mark} 散文占比 {ratio:.1f}%（参考线 {limit}%{suffix}）")
     worst = sorted(
         ((p, pr * 100 / (nb or 1)) for p, _, nb, pr in rows if nb >= 150),
         key=lambda x: -x[1])[:10]
     detail = "\n".join(
         f"  {p.relative_to(REPO).as_posix()}  {r:.0f}%" for p, r in worst)
+    if not ok and not enforce:
+        print(detail)
     return ok, detail
 
 
@@ -182,7 +201,8 @@ def main() -> int:
     parser.add_argument("--all", action="store_true", help="全量（默认行为）")
     parser.add_argument("--no-lint", action="store_true", help="跳过 ruff")
     parser.add_argument("--max-lines", type=int, help="单文件行数上限")
-    parser.add_argument("--prose-ratio", type=int, help="注释+docstring 占非空行的上限 %%")
+    parser.add_argument("--prose-ratio", type=int,
+                        help=f"把散文占比当闸门，上限 %% （默认 {PROSE_BUDGET}%% 只报不拦）")
     parser.add_argument("--list", action="store_true", help="打印测试清单后退出")
     args = parser.parse_args()
 
@@ -217,6 +237,8 @@ def main() -> int:
         ok, detail = check_prose(args.prose_ratio)
         if not ok:
             failures.append(("散文占比", detail))
+    else:
+        check_prose(PROSE_BUDGET, enforce=False)
 
     if not failures:
         print("\n全部通过。")
