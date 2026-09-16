@@ -26,6 +26,14 @@ INDEX = DOCS / "00_INDEX.md"
 
 LINK = re.compile(r"\[[^\]]*\]\(([^)]+)\)")
 FENCE = re.compile(r"^\s*```")
+# 反引号里的 `docs/04_architecture.md` 不是 markdown 链接，LINK 抓不到 ——
+# 实测正是这种写法藏住了一条指向不存在文件的引用。
+TICKED = re.compile(r"`([^`\n]+)`")
+# 只认 docs 自己的命名约定（`docs/x.md`、`04_architecture.md`、`issues/007-x.md`）——
+# 产物文件也叫 .md（`article.md`、`summary.zh.md`、`_references.md`），不能一起查
+DOC_REF = re.compile(r"^(?:docs/)?(?:issues/\d{3}-[\w\-]+|\d{2}_[\w\-]+)\.md$")
+# 占位符不是引用：`docs/issues/NNN-*.md` 是在描述命名规则
+PLACEHOLDER = re.compile(r"NNN|\*|<|>")
 FROZEN = (
     re.compile(r"\d+\s*passed"),
     re.compile(r"\d+\s*行(?!业|为|动|情)"),      # 「N 行」——排除「行业/行为/行动/行情」
@@ -65,6 +73,22 @@ def check_links() -> list[str]:
                 if not (path.parent / clean).exists():
                     problems.append(
                         f"断链 {path.relative_to(REPO).as_posix()}:{number} → {target}")
+            problems.extend(_ticked_refs(path, number, line))
+    return problems
+
+
+def _ticked_refs(path: Path, number: int, line: str) -> list[str]:
+    """反引号里写成纯文本的文档路径，同样要指得到东西。"""
+    problems = []
+    for ref in TICKED.findall(line):
+        ref = ref.strip()
+        if not DOC_REF.match(ref) or PLACEHOLDER.search(ref):
+            continue
+        # `docs/x.md` 从仓库根算，`x.md` 从本文件所在目录算
+        base = REPO if ref.startswith("docs/") else path.parent
+        if not (base / ref).exists():
+            problems.append(
+                f"断链（反引号）{path.relative_to(REPO).as_posix()}:{number} → {ref}")
     return problems
 
 
