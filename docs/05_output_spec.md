@@ -41,7 +41,13 @@ DailyNewsAssistant/
     │           ├── shortvideo.zh.md              短视频 25~35s │ 每项可单独重做
     │           ├── narration.zh.md               口播 1~2min   │
     │           ├── longform.zh.md                长文案 5~15min│
-    │           └── longform.zh.json              长文案角色轮次（TTS 消费）┘
+    │           ├── longform.zh.json              长文案角色轮次（TTS 消费）┘
+    │           ├── shortvideo.zh.wav             音频：与文稿同名，换扩展名 ┐
+    │           ├── shortvideo.zh.srt             字幕：与音频逐段对齐       │ dna.tts
+    │           └── tts/                          逐段中间产物              │ 生成
+    │               ├── seg_001_anchor_f.wav …    分段音频（`seg_<序号>_<角色>`）│
+    │               ├── merged.wav                                          │
+    │               └── merged.srt                                          ┘
     │
     └── 20260902-DailyNews/                       ← 期次级：只放整期产物
         ├── _digest.json                          结构化事实源，可重放
@@ -59,6 +65,8 @@ DailyNewsAssistant/
 | 条目目录 | `<标题slug>__<id前8位>` | `DeepSeek-V4-Flash-正式版开源__decef4a4` |
 | slug | `core/naming.slugify()`：剔 Windows 非法字符、折叠分隔符、截 40 字、保留中文 | |
 | 语言后缀 | 统一 `.zh` / `.en`，放在扩展名之前 | `summary.zh.md` |
+| 音频 / 字幕 | **与文稿同名，只换扩展名** | `narration.zh.wav` · `shortvideo.zh.srt` |
+| 分段中间产物 | `tts/seg_<序号>_<角色>.wav`，可安全删除（只影响断点续合成） | `tts/seg_001_anchor_f.wav` |
 
 id 是 `url_hash(url)`（规范化 URL 的 sha256 前 16 位，见 `core/urls.py`）。
 **台账主键、`NewsItem.id`、`DigestEntry.id` 是同一个值**，所以三者互相查得到。

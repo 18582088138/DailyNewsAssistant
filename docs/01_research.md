@@ -81,7 +81,7 @@ DailyNewsAssistant（DNA）：**每日 AI 资讯采集 → 结构化处理 → �
 | 一级去重 | URL 规范化 + SimHash | 零成本干掉完全重复 | — |
 | 二级聚类 | `bge-m3` 向量 + 层次聚类（sklearn） | 多源同一事件合并；embedding 全本地、无 token 成本 | LLM 判重（贵，不用） |
 | 摘要/打分/趋势 | LLM（Pipeline 节点） | 只在必要节点调用，省 token，便于 Local 迁移 | — |
-| 云 LLM | OpenRouter（主）/ DeepSeek（备） | 已有 key；DeepSeek 中文摘要质量好、稳定不限流 | — |
+| 云 LLM | **DeepSeek（主）/ OpenRouter（备）** | DeepSeek 中文摘要质量好、稳定不限流；OpenRouter 免费层会限流且充值受阻 | — |
 | 本地 LLM | Ollama → 后续 OpenVINO | 与你的迁移目标一致 | vLLM(Linux) |
 | TTS | **Qwen3-TTS OpenVINO**（本地） | 已本地验证，支持 Intel CPU/GPU，无外网依赖 | edge-tts |
 | 图文长图 | Jinja2 HTML + Playwright 截图 | 排版自由度最高，HTML 稿可直接复用；`playwright` 已装 | PIL 绘制 |
@@ -174,7 +174,8 @@ v2 曾以「IM 机器人需公网回调地址」为由排除飞书/钉钉，选�
 2. 应用层（图文/视频/播客）本就互相独立、只读 Digest——「重做某一种输出」= 单独调一次对应的 `AppProducer`
 
 因此只需再补一张 `productions` 表记录「digest_date × entry × app × variant × lang → 产物路径/状态/耗时/token」，
-即可同时得到：产出矩阵视图、统计报表、重做入口。旧产物移入 `_history/<时间戳>/` 不覆盖，历史可追溯。
+即可同时得到：产出矩阵视图、统计报表、重做入口。（当初设想的 `_history/` 目录后来取消，
+重做历史记在 `productions` 表的 `redo_of_id` 上，见 `02_development_plan.md` §9.3。）
 
 ---
 
