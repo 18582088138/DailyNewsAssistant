@@ -40,7 +40,6 @@ from dna.core.config import (
 from dna.core.errors import ConfigError
 from dna.core.models import Language, SourceKind
 
-
 # --- Settings 基础 / Settings basics -----------------------------------------
 
 
@@ -49,7 +48,6 @@ def test_settings_defaults_without_env_file() -> None:
     s = Settings(_env_file=None)
     assert s.llm_provider == "deepseek"
     assert s.default_language is Language.ZH
-    assert s.digest_max_entries == 15
     assert s.inbox_provider == "feishu"
     assert s.inbox_enabled is False  # 开发机默认不启用飞书投递
 
@@ -59,14 +57,12 @@ def test_settings_reads_env_file(tmp_path: Path) -> None:
     env = tmp_path / ".env"
     env.write_text(
         "LLM_PROVIDER=ollama\n"
-        "DIGEST_MAX_ENTRIES=7\n"
         "DEFAULT_LANGUAGE=en\n"
         "INBOX_ENABLED=true\n",
         encoding="utf-8",
     )
     s = Settings(_env_file=env)
     assert s.llm_provider == "ollama"
-    assert s.digest_max_entries == 7
     assert s.default_language is Language.EN
     assert s.inbox_enabled is True
 
@@ -210,7 +206,6 @@ def test_load_profile(tmp_path: Path) -> None:
         """
 focus_keywords: [大模型, agent]
 exclude_keywords: [招聘]
-languages: [zh, en]
 digest_max_entries: 8
 video_duration_seconds: [20, 25]
 """,
@@ -218,16 +213,16 @@ video_duration_seconds: [20, 25]
     )
     p = load_profile(path)
     assert p.focus_keywords == ["大模型", "agent"]
-    assert p.languages == [Language.ZH, Language.EN]
     assert p.digest_max_entries == 8
     assert p.video_duration_seconds == (20, 25)
 
 
 def test_profile_defaults() -> None:
-    """偏好默认值 / Profile defaults."""
+    """偏好默认值。回炉上限必须和 profile.yaml 注释里写的那两个数一致。"""
     p = Profile()
-    assert p.languages == [Language.ZH]
-    assert p.summary_max_sentences == 2
+    assert p.digest_max_entries == 15
+    assert p.copy_max_rewrites == 2
+    assert p.summary_max_rewrites == 1
 
 
 @pytest.mark.parametrize(
@@ -344,7 +339,7 @@ def test_dna_home_overrides_the_project_root(tmp_path: Path, monkeypatch) -> Non
     它不是为打包加的，是为**测试**加的：没有它，验证「打包成 exe 之后路径指哪」
     要真去打一个包。顺带也支持「程序放 C 盘、数据放 D 盘」。
     """
-    from dna.core import config as config_module
+    from dna.core.config import settings as config_module
 
     monkeypatch.setenv("DNA_HOME", str(tmp_path))
 
@@ -360,7 +355,7 @@ def test_frozen_root_is_the_executable_directory(monkeypatch) -> None:
     Under PyInstaller `__file__` lives in a temporary extraction directory, so every
     launch would silently start from an empty database.
     """
-    from dna.core import config as config_module
+    from dna.core.config import settings as config_module
 
     monkeypatch.delenv("DNA_HOME", raising=False)
     monkeypatch.setattr(sys, "frozen", True, raising=False)
@@ -370,8 +365,14 @@ def test_frozen_root_is_the_executable_directory(monkeypatch) -> None:
 
 
 def test_source_root_is_the_repository(monkeypatch) -> None:
-    """源码运行时上溯三层就是仓库根——config/ 与 src/ 应当都在那儿。"""
-    from dna.core import config as config_module
+    """
+    源码运行时**向上找 `pyproject.toml`**，那个目录就是仓库根。
+
+    原先数的是 `parents[3]`。把 `config.py` 拆成包之后文件深了一层，
+    仓库根就指到了 `src/` —— 而代码一个字都没动。这条测试断言的是
+    「根目录里有 config/ 与 src/dna/」，不是某个具体层数。
+    """
+    from dna.core.config import settings as config_module
 
     monkeypatch.delenv("DNA_HOME", raising=False)
     monkeypatch.setattr(sys, "frozen", False, raising=False)

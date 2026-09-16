@@ -9,7 +9,7 @@ test_summarize.py —— 摘要节点单元测试 / Summarisation node unit test
 
 覆盖 / Covers:
     1. 提示词里带上标题与正文（**测试重点在这里**）
-    2. 正文超长时被截到 MAX_BODY_CHARS，不把整篇塞进去烧 token
+    2. 正文超长时被截到 SUMMARY_BODY_LIMIT，不把整篇塞进去烧 token
     3. 多源报道时提示词里说明「另有 N 家媒体报道同一事件」
     4. 正文为空（抽取降级）时提示词明确要求「不要编造细节」
     5. **提示词要求信息完整**：原文讲了几件事就都要覆盖到
@@ -38,7 +38,7 @@ import json
 from dna.core.errors import RateLimitError
 from dna.core.models import Cluster, NewsItem, SourceKind
 from dna.pipeline.summarize import (
-    MAX_BODY_CHARS,
+    SUMMARY_BODY_LIMIT,
     build_messages,
     summarize_all,
     summarize_cluster,
@@ -89,7 +89,7 @@ def test_long_body_is_truncated() -> None:
     cluster = make_cluster(make_item("某标题", "正" * 10_000))
     user_message = build_messages(cluster)[-1].content
 
-    assert len(user_message) < MAX_BODY_CHARS + 500
+    assert len(user_message) < SUMMARY_BODY_LIMIT + 500
     assert "正" * 100 in user_message
 
 

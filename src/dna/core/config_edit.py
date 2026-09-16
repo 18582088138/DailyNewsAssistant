@@ -71,6 +71,9 @@ ENV_ALLOWLIST: tuple[str, ...] = (
     "TTS_PYTHON",
     "TTS_AUTOSTART",
     "TTS_START_TIMEOUT",
+    # 代码确实读它（supervisor 拉起重试次数），此前漏在白名单外：
+    # 界面给了「启动等待上限」却不给「试几次」，改 .env 也提交不上去
+    "TTS_START_ATTEMPTS",
     "TTS_REQUEST_TIMEOUT",
     # TTS —— 音色与参考音频 / voices and reference audio
     "TTS_MODE",
@@ -253,7 +256,13 @@ def _split_comment(fragment: str) -> tuple[str, str]:
             in_single = not in_single
         elif char == '"' and not in_single:
             in_double = not in_double
-        elif char == "#" and not in_single and not in_double and position and fragment[position - 1].isspace():
+        elif (
+            char == "#"
+            and not in_single
+            and not in_double
+            and position
+            and fragment[position - 1].isspace()
+        ):
             return fragment[:position], fragment[position:].rstrip()
     return fragment, ""
 
@@ -365,7 +374,7 @@ def save_profile(updates: dict[str, Any], *, path: Path | None = None) -> Profil
     merged = {**current, **updates}
     try:
         profile = Profile(**merged)
-    except Exception as exc:  # noqa: BLE001 - pydantic 的错误信息要原样带给用户
+    except Exception as exc:
         raise ConfigError(f"配置校验失败 / invalid preferences: {exc}") from exc
 
     target.write_text(patch_yaml_values(text, updates), encoding="utf-8")

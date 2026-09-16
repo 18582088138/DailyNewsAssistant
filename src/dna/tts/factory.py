@@ -84,7 +84,9 @@ def voice_for_role(
     but the model has to be told which, or English comes out with Chinese phonetics.
     """
     s = settings or get_settings()
-    language = "chinese" if lang == "zh" else "english"
+    # 只有明确要英文才用英文音色。写成「不是 zh 就是 english」的话，任何没归一化过的
+    # 空值都会静默变成英文音色——中文稿被用英文发音习惯念出来，而日志里什么都没有。
+    language = "english" if lang == "en" else "chinese"
 
     # 默认走音色克隆 / cloning is the default
     #

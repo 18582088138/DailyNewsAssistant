@@ -36,10 +36,12 @@ from dna.sources.http import fetch_text, is_local_url
 logger = get_logger("extract.article")
 
 # 正文短于此长度视为抽取失败 / a body shorter than this counts as a failed extraction
-MIN_BODY_CHARS = 80
+MIN_EXTRACTED_CHARS = 80
 
 
-def extract_article(html: str, url: str, *, fallback_title: str = "") -> Article:
+def extract_article(
+    html: str, url: str, *, fallback_title: str = "", max_images: int | None = None
+) -> Article:
     """
     从 HTML 抽出文章 / Extract an article from HTML.
 
@@ -49,6 +51,10 @@ def extract_article(html: str, url: str, *, fallback_title: str = "") -> Article
         html:           页面 HTML
         url:            原文链接，用于补全相对图片地址与来源署名
         fallback_title: 抽不到标题时用的兜底（通常来自 RSS 的标题）
+        max_images:     配图上限。**必须一路传到这里**：不传的话抽取阶段先按
+            `media.DEFAULT_MAX_IMAGES` 砍一刀，后面无论 `profile.yaml` 写多少，
+            候选池里已经只剩那么几张了 —— 配置写了 100 却只存到 10，
+            而且完全静默（见 issues/014）。
 
     返回 / Returns:
         Article；`extraction_ok=False` 表示降级为「仅标题 + 链接」
@@ -56,9 +62,13 @@ def extract_article(html: str, url: str, *, fallback_title: str = "") -> Article
     soup = _soup(html)
 
     text = _extract_body(html, soup)
-    media = extract_media(html, url, soup=soup)
+    media = (
+        extract_media(html, url, soup=soup)
+        if max_images is None
+        else extract_media(html, url, soup=soup, max_images=max_images)
+    )
 
-    ok = len(text) >= MIN_BODY_CHARS
+    ok = len(text) >= MIN_EXTRACTED_CHARS
     if not ok:
         logger.debug("正文抽取降级（%d 字符）：%s", len(text), url)
 
@@ -75,16 +85,24 @@ def extract_article(html: str, url: str, *, fallback_title: str = "") -> Article
     )
 
 
-def fetch_article(url: str, *, fallback_title: str = "", timeout: float = 20.0) -> Article:
+def fetch_article(
+    url: str,
+    *,
+    fallback_title: str = "",
+    timeout: float = 20.0,
+    max_images: int | None = None,
+) -> Article:
     """
     抓取并抽取一篇文章 / Fetch a URL and extract the article.
 
     网络失败时同样降级返回，而不是抛异常——理由见模块文档。
     Network failures also degrade rather than raise; see the module docstring.
+
+    `max_images` 要一路传下去，否则配置里的上限会在抽取阶段就被砍掉（issues/014）。
     """
     try:
         html = fetch_text(url, timeout=timeout, local=is_local_url(url))
-    except Exception as exc:  # noqa: BLE001 - 抓取失败不应中断整条流水线
+    except Exception as exc:
         logger.warning("抓取失败，降级为仅标题+链接：%s —— %s", url, exc)
         return Article(
             url=url,
@@ -98,7 +116,7 @@ def fetch_article(url: str, *, fallback_title: str = "", timeout: float = 20.0) 
             extraction_ok=False,
         )
 
-    return extract_article(html, url, fallback_title=fallback_title)
+    return extract_article(html, url, fallback_title=fallback_title, max_images=max_images)
 
 
 # ---------------------------------------------------------------------------
@@ -127,9 +145,9 @@ def _extract_body(html: str, soup: BeautifulSoup) -> str:
             no_fallback=False,
             favor_precision=True,
         )
-        if extracted and len(extracted.strip()) >= MIN_BODY_CHARS:
+        if extracted and len(extracted.strip()) >= MIN_EXTRACTED_CHARS:
             return _normalise(extracted)
-    except Exception as exc:  # noqa: BLE001 - trafilatura 对畸形 HTML 偶有崩溃
+    except Exception as exc:
         logger.debug("trafilatura 抽取异常，改用启发式：%s", exc)
 
     return _normalise(_heuristic_body(soup))
@@ -246,7 +264,7 @@ def _extract_published(soup: BeautifulSoup) -> datetime | None:
         if not content:
             continue
         try:
-            return datetime.fromisoformat(content.replace("Z", "+00:00")).replace(tzinfo=None)
+            return datetime.fromisoformat(content).replace(tzinfo=None)
         except ValueError:
             continue
     return None
@@ -266,4 +284,4 @@ def _normalise(text: str | None) -> str:
     return "\n".join(line for line in lines if line).strip()
 
 
-__all__ = ["MIN_BODY_CHARS", "extract_article", "fetch_article"]
+__all__ = ["MIN_EXTRACTED_CHARS", "extract_article", "fetch_article"]

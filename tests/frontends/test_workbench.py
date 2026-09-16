@@ -74,7 +74,6 @@ from dna.produce import DISPLAY_ORDER, ProductionKind, spec
 from dna.store.ledger import Ledger
 from frontends.nicegui_app import theme
 
-
 # --- 标题截断 / title clipping --------------------------------------------------
 
 
@@ -281,7 +280,11 @@ def test_over_length_tone_is_actually_used() -> None:
     from frontends.nicegui_app.theme import _CSS
 
     assert ".wb-over" in _CSS
-    source = Path(ledger_table.__file__).read_text(encoding="utf-8")
+    # ledger_table 现在是一个包，要扫整个目录（只读 __init__ 会永远是空的）
+    package = Path(ledger_table.__file__).parent
+    source = "\n".join(
+        f.read_text(encoding="utf-8") for f in sorted(package.glob("*.py"))
+    )
     assert "wb-over" in source
 
 
@@ -414,7 +417,7 @@ def _seed(settings: Settings) -> tuple[str, Path]:
     return article_id, directory
 
 
-def test_production_file_is_none_when_missing(settings: Settings, monkeypatch) -> None:
+def test_production_file_is_none_when_missing(settings: Settings, monkeypatch, patch_actions_settings) -> None:
     """
     文件不在时返回 None，界面据此**禁用**下载按钮。
 
@@ -425,7 +428,7 @@ def test_production_file_is_none_when_missing(settings: Settings, monkeypatch) -
     from frontends.nicegui_app import actions
 
     monkeypatch.setattr(config_module, "get_settings", lambda: settings)
-    monkeypatch.setattr(actions, "get_settings", lambda: settings)
+    patch_actions_settings(settings)
 
     article_id, directory = _seed(settings)
     record = Ledger(settings.db_file).get(article_id)
@@ -436,11 +439,11 @@ def test_production_file_is_none_when_missing(settings: Settings, monkeypatch) -
     assert actions.production_file(record, ProductionKind.SUMMARY) is not None
 
 
-def test_sidecar_only_exists_for_longform(settings: Settings, monkeypatch) -> None:
+def test_sidecar_only_exists_for_longform(settings: Settings, monkeypatch, patch_actions_settings) -> None:
     """只有长文案有 JSON 附件——其余产物不该冒出一个下载 JSON 的按钮。"""
     from frontends.nicegui_app import actions
 
-    monkeypatch.setattr(actions, "get_settings", lambda: settings)
+    patch_actions_settings(settings)
     article_id, directory = _seed(settings)
     record = Ledger(settings.db_file).get(article_id)
 
@@ -451,7 +454,7 @@ def test_sidecar_only_exists_for_longform(settings: Settings, monkeypatch) -> No
     assert actions.production_sidecar(record, ProductionKind.NARRATION) is None
 
 
-def test_media_folders_skips_missing_and_empty(settings: Settings, monkeypatch) -> None:
+def test_media_folders_skips_missing_and_empty(settings: Settings, monkeypatch, patch_actions_settings) -> None:
     """
     只返回真实存在**且非空**的素材目录。
 
@@ -459,7 +462,7 @@ def test_media_folders_skips_missing_and_empty(settings: Settings, monkeypatch) 
     """
     from frontends.nicegui_app import actions
 
-    monkeypatch.setattr(actions, "get_settings", lambda: settings)
+    patch_actions_settings(settings)
     article_id, directory = _seed(settings)
     record = Ledger(settings.db_file).get(article_id)
 
@@ -473,7 +476,7 @@ def test_media_folders_skips_missing_and_empty(settings: Settings, monkeypatch) 
     assert set(actions.media_folders(record)) == {"配图"}
 
 
-def test_body_file_is_none_until_the_body_exists(settings: Settings, monkeypatch) -> None:
+def test_body_file_is_none_until_the_body_exists(settings: Settings, monkeypatch, patch_actions_settings) -> None:
     """
     没有 `article.md` 就返回 None，界面据此**不把正文格做成可点的**。
 
@@ -482,7 +485,7 @@ def test_body_file_is_none_until_the_body_exists(settings: Settings, monkeypatch
     """
     from frontends.nicegui_app import actions
 
-    monkeypatch.setattr(actions, "get_settings", lambda: settings)
+    patch_actions_settings(settings)
     article_id, directory = _seed(settings)
     record = Ledger(settings.db_file).get(article_id)
 
@@ -492,7 +495,7 @@ def test_body_file_is_none_until_the_body_exists(settings: Settings, monkeypatch
     assert actions.body_file(record) == directory / "article.md"
 
 
-def test_media_target_prefers_images(settings: Settings, monkeypatch) -> None:
+def test_media_target_prefers_images(settings: Settings, monkeypatch, patch_actions_settings) -> None:
     """
     媒体格优先开配图目录，两者都没有时返回 None。
 
@@ -501,7 +504,7 @@ def test_media_target_prefers_images(settings: Settings, monkeypatch) -> None:
     """
     from frontends.nicegui_app import actions
 
-    monkeypatch.setattr(actions, "get_settings", lambda: settings)
+    patch_actions_settings(settings)
     article_id, directory = _seed(settings)
     record = Ledger(settings.db_file).get(article_id)
 
@@ -530,9 +533,9 @@ def test_open_in_file_manager_accepts_a_file(tmp_path: Path, monkeypatch) -> Non
     target.write_text("# 标题", encoding="utf-8")
 
     opened: list[Path] = []
-    monkeypatch.setattr(actions, "_server_is_local", lambda: True)
-    monkeypatch.setattr(actions.os, "startfile", opened.append, raising=False)
-    monkeypatch.setattr(actions.sys, "platform", "win32")
+    monkeypatch.setattr(actions.reveal, "_server_is_local", lambda: True)
+    monkeypatch.setattr(actions.reveal.os, "startfile", opened.append, raising=False)
+    monkeypatch.setattr(actions.reveal.sys, "platform", "win32")
 
     assert actions.open_in_file_manager(target) == ""
     assert opened == [target]
@@ -648,13 +651,13 @@ def test_open_in_file_manager_refuses_when_not_bound_locally(
     """
     from frontends.nicegui_app import actions
 
-    monkeypatch.setattr(actions, "_server_is_local", lambda: False)
+    monkeypatch.setattr(actions.reveal, "_server_is_local", lambda: False)
     message = actions.open_in_file_manager(tmp_path)
 
     assert "没有绑定在本机" in message
 
 
-def test_longform_estimate_uses_the_core_formula(settings: Settings, monkeypatch) -> None:
+def test_longform_estimate_uses_the_core_formula(settings: Settings, monkeypatch, patch_actions_settings) -> None:
     """
     确认框里的时长预估走核心的 `plan_target_seconds`，不在界面里另算一遍。
 
@@ -665,7 +668,7 @@ def test_longform_estimate_uses_the_core_formula(settings: Settings, monkeypatch
     from dna.narration.longform import MAX_TARGET_SECONDS
     from frontends.nicegui_app import actions
 
-    monkeypatch.setattr(actions, "get_settings", lambda: settings)
+    patch_actions_settings(settings)
     article_id, _ = _seed(settings)
     record = Ledger(settings.db_file).get(article_id)
 
@@ -720,14 +723,14 @@ def test_secret_fields_match_the_secret_keys() -> None:
     assert {f.key for f in actions.ENV_FIELDS if f.secret} == set(SECRET_KEYS)
 
 
-def test_secrets_are_never_displayed_in_full(monkeypatch) -> None:
+def test_secrets_are_never_displayed_in_full(monkeypatch, patch_actions_settings) -> None:
     """密钥框里放的是打码值。界面会被截图，真值不能出现在任何一处。"""
     from dna.core.config import Settings as RealSettings
     from frontends.nicegui_app import actions
 
     secret = "sk-0123456789abcdefghijklmnopqrstuv"
     settings = RealSettings(deepseek_api_key=secret, _env_file=None)
-    monkeypatch.setattr(actions, "get_settings", lambda: settings)
+    patch_actions_settings(settings)
 
     field = next(f for f in actions.ENV_FIELDS if f.key == "DEEPSEEK_API_KEY")
     shown = actions.env_display(field)
@@ -777,8 +780,13 @@ def test_the_settings_panel_covers_every_profile_field() -> None:
     from dna.core.config import Profile
     from frontends.nicegui_app import settings_dialog as sd
 
+    # 只在文件里改的进阶旋钮不进面板：它们要懂后果才该动（改判重阈值会让两件事
+    # 混成一条，改语速会推翻已经校准过的字数窗口）。面板是日常设置，不是调参台。
+    # 允许这一项，但**必须显式列出来**——否则「加了字段忘了控件」这条护栏就漏了。
+    file_only = {"tuning"}
+
     covered = {spec.key for spec in sd.FIELD_SPECS}
-    assert covered == set(Profile.model_fields)
+    assert covered == set(Profile.model_fields) - file_only
 
 
 def test_duration_windows_are_marked_as_reference_only() -> None:
@@ -877,7 +885,7 @@ def test_a_broken_sources_file_does_not_break_the_dialog(monkeypatch) -> None:
 # --------------------------------------------------------------- TTS 服务状态
 
 
-def test_tts_status_reports_offline_with_a_reason(monkeypatch) -> None:
+def test_tts_status_reports_offline_with_a_reason(monkeypatch, patch_actions_settings) -> None:
     """
     服务连不上时 `online=False` 且 `detail` 写清楚下一步做什么。
 
@@ -893,9 +901,9 @@ def test_tts_status_reports_offline_with_a_reason(monkeypatch) -> None:
             return False
 
     settings = Settings(tts_service_url="http://127.0.0.1:8300", tts_autostart=True)
-    monkeypatch.setattr(actions, "get_settings", lambda: settings)
+    patch_actions_settings(settings)
     monkeypatch.setattr(
-        actions, "get_tts", lambda *a, **k: type("P", (), {"client": _DeadClient()})()
+        actions.tts_actions, "get_tts", lambda *a, **k: type("P", (), {"client": _DeadClient()})()
     )
 
     status = asyncio.run(actions.tts_status())
@@ -906,7 +914,7 @@ def test_tts_status_reports_offline_with_a_reason(monkeypatch) -> None:
     assert "127.0.0.1:8300" in status.detail
 
 
-def test_tts_status_is_online_when_health_passes(monkeypatch) -> None:
+def test_tts_status_is_online_when_health_passes(monkeypatch, patch_actions_settings) -> None:
     """健康检查通过就是在线；这一路**不拉起服务**（探活不能有副作用）。"""
     import asyncio
 
@@ -917,9 +925,9 @@ def test_tts_status_is_online_when_health_passes(monkeypatch) -> None:
             return True
 
     settings = Settings(tts_service_url="http://127.0.0.1:8300")
-    monkeypatch.setattr(actions, "get_settings", lambda: settings)
+    patch_actions_settings(settings)
     monkeypatch.setattr(
-        actions, "get_tts", lambda *a, **k: type("P", (), {"client": _LiveClient()})()
+        actions.tts_actions, "get_tts", lambda *a, **k: type("P", (), {"client": _LiveClient()})()
     )
 
     assert asyncio.run(actions.tts_status()).online is True
@@ -937,7 +945,7 @@ def _seed_many(settings: Settings, n: int, *, via=SourceKind.RSS) -> None:
         )
 
 
-def test_paging_slices_the_same_list(settings: Settings, monkeypatch) -> None:
+def test_paging_slices_the_same_list(settings: Settings, monkeypatch, patch_actions_settings) -> None:
     """
     第 2 页接着第 1 页往下走，总数与页数由后端算好。
 
@@ -946,7 +954,7 @@ def test_paging_slices_the_same_list(settings: Settings, monkeypatch) -> None:
     """
     from frontends.nicegui_app import actions
 
-    monkeypatch.setattr(actions, "get_settings", lambda: settings)
+    patch_actions_settings(settings)
     _seed_many(settings, 7)
 
     first = actions.load_rows(page=1, page_size=3)
@@ -960,11 +968,11 @@ def test_paging_slices_the_same_list(settings: Settings, monkeypatch) -> None:
     assert first.scanned_cap is False
 
 
-def test_page_beyond_the_end_is_clamped(settings: Settings, monkeypatch) -> None:
+def test_page_beyond_the_end_is_clamped(settings: Settings, monkeypatch, patch_actions_settings) -> None:
     """删到只剩一页之后停在不存在的第 7 页，应当夹回最后一页而不是显示空表。"""
     from frontends.nicegui_app import actions
 
-    monkeypatch.setattr(actions, "get_settings", lambda: settings)
+    patch_actions_settings(settings)
     _seed_many(settings, 2)
 
     view = actions.load_rows(page=7, page_size=50)
@@ -973,7 +981,7 @@ def test_page_beyond_the_end_is_clamped(settings: Settings, monkeypatch) -> None
     assert view.page == 1
 
 
-def test_post_filters_report_when_they_hit_the_scan_cap(
+def test_post_filters_report_when_they_hit_the_scan_cap(patch_actions_settings,
     settings: Settings, monkeypatch
 ) -> None:
     """
@@ -984,8 +992,8 @@ def test_post_filters_report_when_they_hit_the_scan_cap(
     """
     from frontends.nicegui_app import actions
 
-    monkeypatch.setattr(actions, "get_settings", lambda: settings)
-    monkeypatch.setattr(actions, "SCAN_CAP", 3)
+    patch_actions_settings(settings)
+    monkeypatch.setattr(actions.rows, "SCAN_CAP", 3)
     _seed_many(settings, 5)
 
     assert actions.load_rows(only_new=True).scanned_cap is True
@@ -1004,14 +1012,14 @@ def test_non_windows_never_touches_the_windows_path(tmp_path: Path, monkeypatch)
     """
     from frontends.nicegui_app import actions
 
-    monkeypatch.setattr(actions, "_server_is_local", lambda: True)
-    monkeypatch.setattr(actions.sys, "platform", "linux")
+    monkeypatch.setattr(actions.reveal, "_server_is_local", lambda: True)
+    monkeypatch.setattr(actions.reveal.sys, "platform", "linux")
     monkeypatch.setattr(
-        actions, "_open_on_windows", lambda _t: pytest.fail("非 Windows 不该走这里")
+        actions.reveal, "_open_on_windows", lambda _t: pytest.fail("非 Windows 不该走这里")
     )
 
     calls: list[list[str]] = []
-    monkeypatch.setattr(actions.subprocess, "Popen", lambda cmd, **k: calls.append(cmd))
+    monkeypatch.setattr(actions.reveal.subprocess, "Popen", lambda cmd, **k: calls.append(cmd))
 
     assert actions.open_in_file_manager(tmp_path) == ""
     assert calls == [["xdg-open", str(tmp_path)]]
@@ -1023,26 +1031,26 @@ def test_windows_opens_a_directory_with_explorer_and_raises_it(
     """目录走 explorer，并把顶窗口那步扔到后台线程——它要轮询两秒，不能占着事件循环。"""
     from frontends.nicegui_app import actions
 
-    monkeypatch.setattr(actions, "_server_is_local", lambda: True)
-    monkeypatch.setattr(actions.sys, "platform", "win32")
+    monkeypatch.setattr(actions.reveal, "_server_is_local", lambda: True)
+    monkeypatch.setattr(actions.reveal.sys, "platform", "win32")
 
     calls: list[list[str]] = []
-    monkeypatch.setattr(actions.subprocess, "Popen", lambda cmd, **k: calls.append(cmd))
+    monkeypatch.setattr(actions.reveal.subprocess, "Popen", lambda cmd, **k: calls.append(cmd))
 
     spawned: list[object] = []
 
     class _FakeThreading:
         @staticmethod
-        def Thread(*, target, args, daemon):  # noqa: N802 - 冒充 threading.Thread
+        def Thread(*, target, args, daemon):
             spawned.append((target, args, daemon))
             return type("T", (), {"start": lambda self: None})()
 
-    monkeypatch.setattr(actions, "threading", _FakeThreading)
+    monkeypatch.setattr(actions.reveal, "threading", _FakeThreading)
 
     assert actions.open_in_file_manager(tmp_path) == ""
     assert calls == [["explorer", os.path.normpath(str(tmp_path))]]
     assert len(spawned) == 1, "顶窗口必须异步做"
-    assert spawned[0][0] is actions._raise_explorer
+    assert spawned[0][0] is actions.reveal._raise_explorer
     assert spawned[0][2] is True, "守护线程：顶不上来也不能拖住退出"
 
 
@@ -1054,8 +1062,8 @@ def test_raising_the_window_never_breaks_opening_it(tmp_path: Path, monkeypatch)
     """
     from frontends.nicegui_app import actions
 
-    monkeypatch.setattr(actions.sys, "platform", "win32")
-    actions._raise_explorer(tmp_path / "不存在", timeout=0.0)  # 不抛就算过
+    monkeypatch.setattr(actions.reveal.sys, "platform", "win32")
+    actions.reveal._raise_explorer(tmp_path / "不存在", timeout=0.0)  # 不抛就算过
 
 
 # --- 设置面板的字段表 / the settings field tables --------------------------------
@@ -1072,8 +1080,8 @@ def test_every_profile_field_spec_exists_on_the_model() -> None:
     from frontends.nicegui_app import settings_dialog
 
     known = set(Profile.model_fields)
-    for spec in settings_dialog.FIELD_SPECS:
-        assert spec.key in known, f"{spec.key} 不是 Profile 的字段"
+    for field_spec in settings_dialog.FIELD_SPECS:
+        assert field_spec.key in known, f"{field_spec.key} 不是 Profile 的字段"
 
 
 def test_field_specs_have_no_duplicates_and_one_page_each() -> None:
@@ -1089,9 +1097,9 @@ def test_cross_checked_duration_keys_are_also_configured() -> None:
     from frontends.nicegui_app import settings_dialog
 
     keys = {s.key for s in settings_dialog.FIELD_SPECS}
-    for spec in settings_dialog.FIELD_SPECS:
-        if spec.duration_key:
-            assert spec.duration_key in keys
+    for field_spec in settings_dialog.FIELD_SPECS:
+        if field_spec.duration_key:
+            assert field_spec.duration_key in keys
 
 
 def test_every_env_field_maps_to_a_settings_attribute() -> None:

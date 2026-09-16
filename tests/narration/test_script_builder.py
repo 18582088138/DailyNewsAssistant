@@ -11,7 +11,7 @@ test_script_builder.py —— 短视频与口播文案单元测试 / Short-video
 覆盖 / Covers:
     1. 提示词包含专业性约束（术语准确、数值与原文一致、不确定的不写）
     2. **信息密度是第一要求**，且逐条点名了禁止出现的填充句式
-    3. 提示词包含正文，且超长时截断到 MAX_BODY_CHARS
+    3. 提示词包含正文，且超长时截断到 SCRIPT_BODY_LIMIT
     4. 短视频要求**覆盖文章主干**（第一句给事件、每句换一个新事实）
     5. 口播提示词要求技术深度，并要求提到局限
     6. 结尾引导语由调用方传入，不写死在提示词里
@@ -46,14 +46,9 @@ from __future__ import annotations
 import json
 
 from dna.core.models import Article
-from dna.narration.duration import (
-    CHARS_PER_SECOND_ZH,
-    estimate_seconds,
-    observed_chars_per_second,
-)
 from dna.narration.script_builder import (
-    MAX_BODY_CHARS,
-    MAX_REWRITES,
+    DEFAULT_MAX_REWRITES,
+    SCRIPT_BODY_LIMIT,
     build_narration,
     build_short_video,
 )
@@ -115,7 +110,7 @@ def test_long_body_is_truncated() -> None:
     build_short_video(article(text="正" * 10_000), llm)
 
     user_message = llm.messages[0][1].content
-    assert len(user_message) < MAX_BODY_CHARS + 300
+    assert len(user_message) < SCRIPT_BODY_LIMIT + 300
 
 
 def test_prompt_demands_information_density() -> None:
@@ -321,8 +316,8 @@ def test_rewrites_are_capped() -> None:
     llm = ScriptedProvider("fake", [short_reply("超" * 300)] * 10)
     result = build_short_video(article(), llm, low=25, high=35)
 
-    assert llm.call_count == MAX_REWRITES + 1
-    assert result.calls == MAX_REWRITES + 1
+    assert llm.call_count == DEFAULT_MAX_REWRITES + 1
+    assert result.calls == DEFAULT_MAX_REWRITES + 1
 
 
 def test_still_off_target_returns_the_draft_rather_than_failing() -> None:

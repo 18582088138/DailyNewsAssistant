@@ -203,10 +203,16 @@ def test_out_of_range_samples_are_normalised_not_clipped() -> None:
     assert pcm[2] == pytest.approx(16383, abs=2)  # 1.0 / 2.0 峰值 → 一半
 
 
-def test_estimate_uses_measured_rtf() -> None:
-    """预估耗时 = 稿子时长 × 实测 RTF / The estimate is the script duration times RTF."""
-    assert estimate_synthesis_seconds(100.0) == pytest.approx(250.0)
-    assert estimate_synthesis_seconds(0.0) == 0.0
+def test_estimate_uses_the_given_rtf() -> None:
+    """
+    预估耗时 = 稿子时长 × 传进来的 RTF。
+
+    断言的是**倍率从外面来**，不是某个具体数字：这个倍率跟着硬件走
+    （`TTS_RTF_ESTIMATE`），写死一个数正是它出过的那个错——界面少报五倍。
+    """
+    assert estimate_synthesis_seconds(100.0, rtf=2.5) == pytest.approx(250.0)
+    assert estimate_synthesis_seconds(100.0, rtf=13.0) == pytest.approx(1300.0)
+    assert estimate_synthesis_seconds(0.0, rtf=13.0) == 0.0
 
 
 # --- 逐段合成、拼接与容错 / per-piece synthesis, joining, fault tolerance ------

@@ -28,17 +28,24 @@ and there is no file I/O in this module at all.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field as dc_field
+from dataclasses import dataclass
 
 from nicegui import ui
 
 from dna.narration.duration import seconds_for_units
 from frontends.nicegui_app import actions
-
-PAGE_CONTENT = "内容偏好"
-PAGE_COPY = "文案"
-PAGE_TTS = "TTS"
-PAGE_RUNTIME = "运行设置"
+from frontends.nicegui_app.settings_tts_page import _render_tts
+from frontends.nicegui_app.settings_widgets import (
+    PAGE_CONTENT,
+    PAGE_COPY,
+    PAGE_RUNTIME,
+    PAGE_TTS,
+    _env_widget,
+    _field_note,
+    _int,
+    _number,
+    _window,
+)
 
 
 @dataclass(frozen=True)
@@ -51,7 +58,7 @@ class FieldSpec:
 
     key: str
     kind: str
-    """keywords / number / window / languages / text"""
+    """keywords / number / window / text"""
 
     page: str
     label: str
@@ -76,13 +83,18 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     FieldSpec("video_keywords", "keywords", PAGE_CONTENT, "视频关键词",
               "命中则倾向标记 need_video；标错了在表格里不点就行"),
     FieldSpec("digest_max_entries", "number", PAGE_CONTENT, "日报条目上限"),
-    FieldSpec("summary_max_sentences", "number", PAGE_CONTENT, "摘要句数"),
+    FieldSpec("copy_max_rewrites", "number", PAGE_CONTENT, "文案回炉上限",
+              "超出字数区间时最多重写几次；每次都是一次计费调用"),
+    FieldSpec("summary_max_rewrites", "number", PAGE_CONTENT, "摘要回炉上限",
+              "摘要每条都跑，这里加一次就是整期翻倍"),
     # 多存是为了攒素材：日报只用 1~3 张，但长图、配图、封面都要挑，
     # 而**重抓拿不回当初那些图**——站点会换图删图。
     FieldSpec("max_images_per_article", "number", PAGE_CONTENT, "每篇存图上限",
               "日报只用 1~3 张，多存的是素材库；重抓拿不回站点已经换掉的图"),
     FieldSpec("max_videos_per_article", "number", PAGE_CONTENT, "每篇存视频上限"),
-    FieldSpec("languages", "languages", PAGE_CONTENT, "输出语言"),
+    # 这里曾经有一个「输出语言」多选（`languages`）。它是**假配置**：全仓没有任何
+    # 地方读 `profile.languages`，语言实际是每次生成时的参数（`--lang` / 展开面板
+    # 里的中英开关）。配了没用的开关比没有开关更坏，字段与控件一并删掉。
     # --- 文案 ---
     FieldSpec("summary_chars", "window", PAGE_COPY, "条目摘要", unit="字"),
     FieldSpec("shortvideo_chars", "window", PAGE_COPY, "短视频稿", unit="字",
@@ -94,6 +106,11 @@ FIELD_SPECS: tuple[FieldSpec, ...] = (
     FieldSpec("longform_duration_seconds", "window", PAGE_COPY, "长文案", unit="秒"),
     FieldSpec("cta_line", "text", PAGE_COPY, "视频稿结尾引导语",
               "账号品牌，换栏目就要换——所以它在配置里而不是写死在提示词里"),
+    # 两个数不一样是刻意的：摘要每条都跑，上限乘以条目数；文案单篇按需跑。
+    FieldSpec("summary_body_chars", "number", PAGE_COPY, "摘要读多少正文",
+              "每条都跑，上限直接乘以条目数"),
+    FieldSpec("script_body_chars", "number", PAGE_COPY, "文案读多少正文",
+              "截短是有代价的：被切掉的尾部往往正是「必须说局限」要用的料"),
 )
 
 
@@ -123,7 +140,7 @@ def open_dialog(*, on_saved=None) -> None:
             tab_env = ui.tab(PAGE_RUNTIME)
 
         with ui.tab_panels(tabs, value=tab_content).classes(
-            "w-full"
+            "w-full wb-dialog-body"
         ).style("background: transparent"):
             with ui.tab_panel(tab_content):
                 _render_content(profile, inputs)
@@ -178,13 +195,6 @@ def _render_content(profile: dict, inputs: dict) -> None:
         for spec in _specs(PAGE_CONTENT, "number"):
             inputs[spec.key] = _number(spec.label, profile[spec.key], hint=spec.hint)
 
-    languages = [str(x) for x in (profile.get("languages") or ["zh"])]
-    inputs["languages"] = (
-        ui.select({"zh": "中文", "en": "English"}, multiple=True, value=languages,
-                  label="输出语言")
-        .props("outlined dense use-chips")
-        .classes("w-64")
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -237,11 +247,12 @@ def _render_copy(profile: dict, inputs: dict) -> None:
         for spec, boxes, label in estimates:
             text, warn = _estimate(spec, boxes, inputs.get(spec.duration_key))
             label.text = text
-            label.style(replace=f"margin-bottom:4px; color: var(--wb-{'danger' if warn else 'dim'})")
+            tone = "danger" if warn else "dim"
+            label.style(replace=f"margin-bottom:4px; color: var(--wb-{tone})")
 
     # 改数字的同一刻秒数就跟着动：算完再手动去点一下「保存」才看到结果，
     # 等于还是要靠试。
-    for spec, boxes, _ in estimates:
+    for _spec, boxes, _ in estimates:
         for box in boxes:
             box.on_value_change(lambda _e: _refresh())
     for spec in duration_specs:
@@ -256,6 +267,14 @@ def _render_copy(profile: dict, inputs: dict) -> None:
         .classes("w-full")
     )
     inputs["cta_line"].tooltip(spec.hint)
+
+    # 「读多少正文」这两项漏画过一次：清单里有、页面上没有，于是 `_save` 按清单
+    # 取值时 `KeyError`。护栏 5 说的正是这件事——页面必须画完属于自己那一页的
+    # 每一种 kind，不能只挑 window 和 text。
+    ui.label("喂给模型多少正文（字）").classes("wb-path").style("margin-top:6px")
+    with ui.row().classes("w-full items-center gap-4"):
+        for spec in _specs(PAGE_COPY, "number"):
+            inputs[spec.key] = _number(spec.label, profile[spec.key], hint=spec.hint)
 
 
 def _estimate_label():
@@ -288,187 +307,6 @@ def _estimate(spec: FieldSpec, boxes, duration_boxes) -> tuple[str, bool]:
     return text, False
 
 
-def _number(label: str, value, *, hint: str = ""):
-    """一个整数输入框 / One integer field."""
-    box = (
-        ui.number(label, value=value, min=1, format="%.0f")
-        .props("outlined dense")
-        .classes("w-40")
-    )
-    if hint:
-        box.tooltip(hint)
-    return box
-
-
-def _window(label: str, value, *, unit: str) -> tuple:
-    """
-    一个区间的两个输入框 / The two fields of one window.
-
-    返回一对控件，取值时再组成列表——**不在这里合成**，因为改下限的那一刻
-    区间是写反的，此时组出来的值会被模型拒掉。
-    Returned as a pair and combined only on save: mid-edit the bounds are reversed.
-    """
-    low, high = value
-    with ui.column().classes("gap-0"):
-        ui.label(f"{label}（{unit}）").classes("wb-path")
-        with ui.row().classes("items-center gap-1 no-wrap"):
-            low_box = ui.number(value=low, min=1, format="%.0f").props(
-                "outlined dense"
-            ).classes("w-20")
-            ui.label("~").classes("wb-path")
-            high_box = ui.number(value=high, min=1, format="%.0f").props(
-                "outlined dense"
-            ).classes("w-20")
-    return (low_box, high_box)
-
-
-def _int(value) -> int:
-    try:
-        return int(value or 1)
-    except (TypeError, ValueError):
-        return 1
-
-
-# ---------------------------------------------------------------------------
-# TTS / the TTS tab
-# ---------------------------------------------------------------------------
-
-
-@dataclass
-class _TTSPage:
-    """这一页上要联动的控件 / The widgets that react to the mode switch."""
-
-    mode_box: object = None
-    gated: list = dc_field(default_factory=list)
-    """(field, box, 说明标签) —— 按 needs_mode 灰掉。"""
-
-
-def _render_tts(inputs: dict) -> None:
-    """画 TTS 那一页 / Render the TTS tab."""
-    ui.label(
-        "本地 TTS 全程零费用，但很慢（RTF≈2.5）。改完服务相关的项要重启 TTS 服务。"
-    ).classes("wb-path")
-
-    voices = actions.tts_voice_options()
-    if not voices:
-        ui.label(
-            "⚠️ TTS 服务离线，音色表取不到——音色只能按名字手填。"
-            "手打一个不存在的名字，要等几分钟的合成跑完才会报错。"
-        ).classes("wb-path").style("color: var(--wb-danger)")
-
-    page = _TTSPage()
-    for group, fields in actions.env_groups(PAGE_TTS):
-        ui.label(group).classes("wb-path").style(
-            "color: var(--wb-accent); margin-top:8px"
-        )
-        for f in fields:
-            box, note = _tts_row(f, voices)
-            inputs[f"env:{f.key}"] = box
-            if f.key == "TTS_MODE":
-                page.mode_box = box
-            if f.needs_mode:
-                page.gated.append((f, box, note))
-
-    if page.mode_box is not None:
-        page.mode_box.on_value_change(lambda _e: _apply_mode(page))
-        _apply_mode(page)
-
-
-def _tts_row(field, voices: list[str]):
-    """
-    TTS 页上的一项 / One TTS entry.
-
-    音色与参考音频不能只给一个输入框：一个填错的音色名要等几分钟的合成跑完
-    才报错，一个不存在的参考音频**根本不报错**——它静默退回内置音色，
-    于是「声音不对」成了唯一的现象。
-    """
-    if field.key in {"TTS_VOICE_HOST", "TTS_VOICE_GUEST"} and voices:
-        value = actions.env_display(field)
-        options = list(voices)
-        if value and value not in options:
-            options.append(value)
-        box = (
-            # `value or None`：**空字符串不是合法初值**，NiceGUI 只放过 None，
-            # 否则 `ValueError: Invalid value:` 会把整个设置面板打不开。
-            # 没配 TTS_VOICE_GUEST（很常见）+ 服务在线（音色表非空，走的就是这条分支）
-            # 就会撞上——用户实测踩到的是这个。
-            ui.select(options, value=value or None, label=field.label,
-                      new_value_mode="add-unique")
-            .props("outlined dense use-input input-debounce=0")
-            .classes("w-full max-w-[420px]")
-        )
-        note = _field_note(field, box)
-        return box, note
-
-    if field.key in {"TTS_REF_AUDIO", "TTS_REF_AUDIO_GUEST"}:
-        return _ref_audio_row(field)
-
-    box = _env_widget(field)
-    note = _field_note(field, box)
-    return box, note
-
-
-def _ref_audio_row(field):
-    """参考音频：候选下拉 + 就地试听 + 解析结果 / Candidates, preview, and resolution."""
-    value = actions.env_display(field)
-    options = actions.ref_audio_options()
-    if value and value not in options:
-        options.append(value)
-
-    box = (
-        # 同上：没配参考音频时 value 是空字符串，直接塞进去会抛 Invalid value
-        ui.select(options, value=value or None, label=field.label,
-                  new_value_mode="add-unique")
-        .props("outlined dense use-input input-debounce=0")
-        .classes("w-full max-w-[560px]")
-    )
-    box.tooltip(field.help.replace("**", ""))
-
-    resolved = ui.label("").classes("wb-path")
-    player = ui.audio("").props("controls").classes("w-full max-w-[560px]")
-
-    def _sync() -> None:
-        path = actions.ref_audio_file(str(box.value or ""))
-        if path is None:
-            # 不存在时**必须标红**：合成时它只写一条 warning 就退回内置音色，
-            # 界面上不说的话，唯一的现象是「声音不是我选的那把嗓子」。
-            resolved.text = f"⚠️ 找不到这个文件（相对路径按数据目录解析）：{box.value or '（空）'}"
-            resolved.style("color: var(--wb-danger)")
-            player.set_visibility(False)
-            return
-        resolved.text = f"解析到 {path}"
-        resolved.style("color: var(--wb-dim)")
-        player.set_source(path)
-        player.set_visibility(True)
-
-    box.on_value_change(lambda _e: _sync())
-    _sync()
-
-    if actions.env_shadowed(field):
-        box.disable()
-    return box, resolved
-
-
-def _apply_mode(page: _TTSPage) -> None:
-    """
-    按当前模式灰掉无关的项 / Grey out what this mode ignores.
-
-    服务端把「同时给 ref_audio 和音色名」当成互相冲突的参数**直接报错**。
-    灰掉的项不会被提交（`_save` 只收 `enabled` 的），所以 `.env` 里原来的值
-    原样留着——切回去还在，不用重填。
-    Disabled fields are not submitted, so their `.env` values survive a mode switch.
-    """
-    mode = str(getattr(page.mode_box, "value", "") or "")
-    for field, box, note in page.gated:
-        active = field.needs_mode == mode
-        if actions.env_shadowed(field):
-            continue  # 环境变量盖住的项本来就是禁用的，别把它放开
-        if active:
-            box.enable()
-        else:
-            box.disable()
-        if note is not None:
-            note.set_visibility(active)
 
 
 # ---------------------------------------------------------------------------
@@ -493,59 +331,6 @@ def _render_env(inputs: dict) -> None:
             inputs[f"env:{field.key}"] = box
 
 
-def _env_widget(field) -> object:
-    """一个 `.env` 项的控件 / The widget for one `.env` entry."""
-    value = actions.env_display(field)
-
-    if field.boolean:
-        box = ui.switch(field.label, value=str(value).lower() in {"1", "true", "yes", "on"})
-        box.props("dense")
-    elif field.options:
-        # 当前值不在预设选项里时先把它加进去（比如换过一个自定义模型名）——
-        # 否则下拉会显示成空的，看起来像「这一项没配」，一保存就把真值抹了。
-        # The live value is added to the options when missing: otherwise the dropdown looks
-        # empty, reads as unconfigured, and saving would wipe the real value.
-        options = list(field.options)
-        if value and value not in options:
-            options.append(value)
-        box = (
-            # 空字符串不是合法初值（只有 None 能过），没配的项会撞上
-            ui.select(options, value=value or None, label=field.label,
-                      new_value_mode="add-unique")
-            .props("outlined dense")
-            .classes("w-full max-w-[420px]")
-        )
-    else:
-        box = (
-            ui.input(field.label, value=value)
-            .props("outlined dense")
-            .classes("w-full max-w-[560px]")
-        )
-        if field.secret:
-            # 输入框里放的是打码值，`save_env` 会认出来并跳过——所以不用清空它。
-            # 清空反而更糟：看起来像「还没配」，人会重新去翻密钥。
-            # The box holds the mask, which `save_env` recognises and skips. Clearing it
-            # would look unconfigured and send the user hunting for the key again.
-            box.props('type=text autocomplete=off')
-
-    if field.help:
-        box.tooltip(field.help.replace("**", ""))
-    return box
-
-
-def _field_note(field, box):
-    """字段下面那行小字 / The line under a field；被环境变量盖住时标红并禁用。"""
-    if actions.env_shadowed(field):
-        # 标红 + 禁用，而不是只标红：能改的输入框会让人先改一遍才发现没用。
-        box.disable()
-        return ui.label(
-            f"⚠️ 当前值来自系统环境变量 {field.key}，改 .env 不生效"
-            "（要改就在系统环境变量里改，或者把它删掉）"
-        ).classes("wb-path").style("color: var(--wb-danger)")
-    if field.help:
-        return ui.label(field.help.replace("**", "")).classes("wb-path")
-    return None
-
 
 # ---------------------------------------------------------------------------
 # 保存 / saving
@@ -567,8 +352,6 @@ def _save(dialog, profile: dict, inputs: dict, *, on_saved) -> None:
         elif spec.kind == "window":
             low_box, high_box = box
             profile_updates[spec.key] = [_int(low_box.value), _int(high_box.value)]
-        elif spec.kind == "languages":
-            profile_updates[spec.key] = [str(x) for x in (box.value or ["zh"])]
         else:
             profile_updates[spec.key] = str(box.value or "")
 
@@ -592,7 +375,7 @@ def _save(dialog, profile: dict, inputs: dict, *, on_saved) -> None:
 
     try:
         message = actions.save_settings(changed, env_updates)
-    except Exception as exc:  # noqa: BLE001 - 校验消息原样给用户，它已经指明了哪个字段
+    except Exception as exc:
         ui.notify(f"保存失败：{exc}", type="negative", timeout=12000)
         return
 

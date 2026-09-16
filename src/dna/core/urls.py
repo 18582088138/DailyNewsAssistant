@@ -236,10 +236,30 @@ def _is_opaque(segment: str) -> bool:
     return len(segment) >= 12 and any(c.isupper() for c in segment)
 
 
+_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0"})  # noqa: S104
+
+
+def is_local_url(url: str) -> bool:
+    """
+    这个地址是不是指向本机 / Whether the URL points at this machine.
+
+    本机地址必须**绕过公司代理**：自建 RSSHub 在 localhost:1200、TTS 服务在
+    127.0.0.1:8300，走代理一律失败，而且报出来的错和代理毫无关系。
+
+    按 hostname 判，不按子串。`sources/http.py` 与 `tts/client.py` 曾各有一份实现，
+    其中子串那份会把 `http://localhost.example.com` 也认成本机 —— 两份语义不同的
+    同名函数，取决于谁 import 了谁。
+    Matched on the parsed hostname rather than a substring: the substring variant also
+    accepted `http://localhost.example.com` as local.
+    """
+    return (urlparse(url).hostname or "") in _LOCAL_HOSTS
+
+
 __all__ = [
     "canonicalize_url",
     "extract_urls",
     "host_of",
+    "is_local_url",
     "same_url",
     "title_from_url",
     "url_hash",
