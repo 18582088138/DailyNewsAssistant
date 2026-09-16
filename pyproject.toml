@@ -90,10 +90,28 @@ ignore = [
     "DTZ",
 ]
 
+[tool.ruff.lint.flake8-bugbear]
+# `def cmd(x: str = typer.Argument(...))` 是 typer 的标准写法，不是「默认值里调函数」
+# 那个坑：typer 靠这个对象拿到帮助文本与校验规则。按 B008 改写反而会让每个命令
+# 多出一段样板代码，且与 typer 文档不一致。
+extend-immutable-calls = ["typer.Argument", "typer.Option"]
+
 [tool.ruff.lint.per-file-ignores]
 # 这几个脚本的本职就是跑子进程
 "tools/*.py" = ["S603", "S607"]
 ".claude/hooks/*.py" = ["S603", "S607"]
+# 「打开产物目录」就是要调系统文件管理器（explorer / open / xdg-open）。
+# 路径不完整是故意的——装在哪由系统 PATH 决定；参数是本进程算出来的路径，不接受外部输入。
+"frontends/nicegui_app/actions/reveal.py" = ["S603", "S606", "S607"]
+# 拉起 TTS 服务是它的本职
+"src/dna/tts/supervisor.py" = ["S603", "S607"]
 # 本地 SQLite，WHERE 片段是模块内常量拼的，不接受外部输入
 "src/dna/store/ledger.py" = ["S608"]
-"tests/**/*.py" = ["S101"]
+"src/dna/store/production_queries.py" = ["S608"]
+# 测试里放行行宽，两个具体理由，不是图省事：
+#   1. 每个测试文件头部第 5 行是**完整复测命令**（CLAUDE.md 的要求），
+#      它必须能整行复制粘贴；折成两行就不能直接跑了。
+#   2. 断言里的中文样本是真实文案片段，折行会让「被测的到底是哪段字」变模糊。
+# 生产代码（src / frontends）仍然守 100 列。
+# S105/S106：测试里的「密钥」是 "fake-secret" 这类假值，不放行就得给每一处加 noqa
+"tests/**/*.py" = ["S101", "E501", "S105", "S106"]
