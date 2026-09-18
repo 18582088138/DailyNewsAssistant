@@ -115,3 +115,8 @@ extend-immutable-calls = ["typer.Argument", "typer.Option"]
 # 生产代码（src / frontends）仍然守 100 列。
 # S105/S106：测试里的「密钥」是 "fake-secret" 这类假值，不放行就得给每一处加 noqa
 "tests/**/*.py" = ["S101", "E501", "S105", "S106"]
+
+
+all = [
+    "dailynewsassistant[sources,pipeline,llm,render,tts,gui,inbox,scheduler,dev]",
+]

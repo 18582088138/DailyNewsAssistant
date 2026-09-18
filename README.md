@@ -40,7 +40,7 @@ core                                   ← 配置、数据模型、命名规则�
 
 ```bash
 conda activate ov_env_py312
-pip install -e .
+pip install -e ".[all]"
 
 cp .env.example .env      # 填入 API key
 dna doctor                # 环境自检
