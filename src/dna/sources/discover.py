@@ -84,7 +84,7 @@ def validate_feed(url: str, *, timeout: float = 20.0) -> FeedCandidate:
     """
     try:
         content = fetch_text(url, timeout=timeout, local=is_local_url(url))
-    except Exception as exc:  # noqa: BLE001 - 探测阶段任何失败都只是「这个地址不行」
+    except Exception as exc:
         return FeedCandidate(url=url, ok=False, reason=_short(exc))
 
     parsed = feedparser.parse(content)
@@ -186,7 +186,7 @@ def discover_feeds(
         html = fetch_text(url, timeout=timeout, local=is_local_url(url))
         for declared in find_declared_feeds(html, url):
             probe(declared)
-    except Exception as exc:  # noqa: BLE001 - 抓不到首页就跳过声明发现
+    except Exception as exc:
         logger.debug("读取页面声明失败：%s —— %s", url, exc)
 
     if any(c.ok for c in results):

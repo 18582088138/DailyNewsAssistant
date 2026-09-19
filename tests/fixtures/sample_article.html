@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<!--
+  测试样例：一篇典型的中文科技资讯页面 / A typical Chinese tech news page.
+  刻意包含真实世界里会遇到的干扰项 / Deliberately includes real-world noise:
+    - og:title 与 <title> 不同（<title> 带站点名后缀）
+    - 导航、侧栏、页脚（不应进入正文）
+    - 懒加载图片（真实地址在 data-src，src 是占位图）
+    - 图标 / logo / 追踪像素（不应被当作配图）
+    - 相对路径与协议相对路径的图片
+    - 一个 bilibili iframe（应识别为官方视频）
+-->
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <title>某公司发布新一代多模态大模型_科技前线</title>
+  <meta property="og:title" content="某公司发布新一代多模态大模型">
+  <meta property="og:image" content="https://cdn.example.com/cover.jpg">
+  <meta name="author" content="张三">
+  <meta property="article:published_time" content="2026-09-01T09:30:00Z">
+  <link rel="icon" href="/favicon.ico">
+</head>
+<body>
+  <header id="site-header">
+    <img src="/static/logo.png" alt="站点 logo" width="120" height="40">
+    <nav><a href="/">首页</a><a href="/ai">人工智能</a><a href="/about">关于我们</a></nav>
+  </header>
+
+  <article>
+    <h1>某公司发布新一代多模态大模型</h1>
+    <p>该公司今日正式发布新一代多模态大模型，支持图像、文本与语音三种模态的联合输入，
+       在多项公开评测中取得领先成绩。官方称，相较上一代产品，本次发布的模型在推理
+       成本上下降约四成。</p>
+    <figure>
+      <img src="/static/placeholder.gif"
+           data-src="https://cdn.example.com/figure1.jpg"
+           width="800" height="450">
+      <figcaption>模型架构示意图</figcaption>
+    </figure>
+    <p>技术层面，该模型采用了改进的注意力机制与稀疏激活策略，使得在同等参数规模下
+       实际激活的参数量显著降低。研究团队表示，这是推理成本下降的主要原因。</p>
+    <p>该公司同时宣布，模型权重将以开放许可发布，开发者可在商业场景中免费使用。
+       配套的推理框架也将在本月内开源。</p>
+    <img src="//cdn.example.com/chart.png" alt="性能对比图" width="600" height="400">
+    <img src="/static/icons/share-icon.png" alt="分享" width="24" height="24">
+    <img src="https://track.example.com/pixel.gif" alt="" width="1" height="1">
+    <iframe src="https://player.bilibili.com/player.html?bvid=BV1xx411c7XX"
+            width="640" height="360" allowfullscreen></iframe>
+  </article>
+
+  <aside class="sidebar">
+    <h3>相关推荐</h3>
+    <ul><li><a href="/a">推荐文章一</a></li><li><a href="/b">推荐文章二</a></li></ul>
+  </aside>
+
+  <footer>
+    <p>版权所有 © 2026 科技前线</p>
+  </footer>
+</body>
+</html>

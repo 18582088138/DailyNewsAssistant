@@ -18,88 +18,19 @@ and miss a step.
 from __future__ import annotations
 
 import json
-from collections.abc import Callable
-from dataclasses import dataclass, field
-from datetime import datetime
 
 from dna.core.config import Profile, Settings, SourceConfig, get_settings, safe_profile
 from dna.core.logging import get_logger
 from dna.core.models import RawItem, SourceKind
-from dna.core.urls import url_hash
-from dna.extract.article import fetch_article
 from dna.sources.filters import FilterOutcome, apply_filters, build_filter
 from dna.sources.registry import CollectResult, build_adapters, collect
 from dna.sources.user_link import items_from_text
-from dna.store.article_store import (
-    DEFAULT_MAX_IMAGES,
-    read_body,
-    read_title,
-    save_article,
-)
-from dna.store.ledger import ArticleRecord, FetchStatus, Ledger
-from dna.store.video_store import DEFAULT_MAX_VIDEOS
+from dna.store.article_render import read_body, read_title
+from dna.store.intake_engine import _ingest_items
+from dna.store.intake_models import IntakeProgressFn, IntakeResult
+from dna.store.ledger import ArticleRecord, Ledger
 
 logger = get_logger("store.intake")
-
-# 采集进度回调 `(第几篇, 共几篇, 这一篇的标题)` / progress callback
-#
-# 一批抓下来要几分钟，而界面上原来只有一个不动的转圈——「在跑」和「卡死了」
-# 长得一模一样。回调在**每篇抓取之前**触发，报的是正在处理的那一篇。
-# A batch takes minutes and a static spinner cannot distinguish running from hung.
-IntakeProgressFn = Callable[[int, int, str], None]
-
-
-@dataclass
-class IntakeResult:
-    """
-    一轮入库的结果 / The outcome of one intake run.
-
-    每一类计数都要能对上账：collected = filtered + skipped_existing + processed。
-    用户看到「今天只入了 6 条」时，应当能立刻知道其余的去哪了。
-    The counts must reconcile: collected = filtered + skipped_existing + processed.
-    When only six items are ingested the user should immediately see where the rest went.
-    """
-
-    collected: int = 0
-    filtered_out: int = 0
-    skipped_existing: int = 0
-    fetched_ok: int = 0
-    fetched_degraded: int = 0
-    failed: int = 0
-    article_ids: list[str] = field(default_factory=list)
-    filter_reasons: dict[str, int] = field(default_factory=dict)
-    source_failures: list[tuple[str, str]] = field(default_factory=list)
-    media_warnings: list[tuple[str, str]] = field(default_factory=list)
-    """
-    抓不下来的媒体文件 /media that could not be downloaded：`(article_id, 一行原因)`。
-
-    **不算失败**：正文已经入库，少一个视频不影响这篇文章可用。单独拎出来是因为
-    它以前只写进了 `references.md`，界面上完全看不见——人无从知道该去手工补哪一个。
-    Not counted as a failure: the article is in and usable without the clip. It is
-    surfaced separately because it previously only reached `references.md`, leaving the
-    user no way to know which one needs fetching by hand.
-    """
-
-    @property
-    def processed(self) -> int:
-        """本轮实际抓取的条数 / Items actually fetched this run."""
-        return self.fetched_ok + self.fetched_degraded + self.failed
-
-    def summary(self) -> str:
-        """一行摘要 / A one-line summary."""
-        parts = [f"采集 {self.collected}"]
-        if self.filtered_out:
-            parts.append(f"过滤 {self.filtered_out}")
-        if self.skipped_existing:
-            parts.append(f"已存在跳过 {self.skipped_existing}")
-        parts.append(f"新入库 {self.fetched_ok + self.fetched_degraded}")
-        if self.fetched_degraded:
-            parts.append(f"（其中降级 {self.fetched_degraded}）")
-        if self.failed:
-            parts.append(f"失败 {self.failed}")
-        if self.media_warnings:
-            parts.append(f"媒体未下载 {len(self.media_warnings)}")
-        return "，".join(parts)
 
 
 def intake_sources(
@@ -157,7 +88,7 @@ def intake_sources(
     kept: list[RawItem] = []
     for source_id, items in grouped.items():
         config = by_source.get(source_id)
-        rules = build_filter(config, prof) if config else build_filter(_dummy_config(source_id), prof)
+        rules = build_filter(config or _dummy_config(source_id), prof)
         if max_age_days is not None:
             rules = rules.model_copy(update={"max_age_days": max_age_days})
         outcome: FilterOutcome = apply_filters(items, rules)
@@ -354,137 +285,6 @@ def sync_manual_body(
 # 内部实现 / internals
 # ---------------------------------------------------------------------------
 
-
-def _ingest_items(
-    items: list[RawItem],
-    ledger: Ledger,
-    settings: Settings,
-    result: IntakeResult,
-    *,
-    extract: bool,
-    by_source: dict[str, SourceConfig] | None = None,
-    profile: Profile | None = None,
-    download_images: bool,
-    max_images: int | None,
-    download_videos: bool,
-    refetch: bool,
-    on_progress: IntakeProgressFn | None = None,
-) -> None:
-    """
-    逐条登记、抓取、落盘 / Register, fetch and persist each item in turn.
-
-    **逐条隔离**：任何一篇失败都记进台账并继续，不影响其余文章。
-    Per-item isolation: a failure is recorded in the ledger and the run continues.
-    """
-    total = len(items)
-    for index, item in enumerate(items, start=1):
-        # 报的是**正在处理的那一篇**，不是刚做完的那一篇：抓一篇要好几秒，
-        # 而人盯着进度条想知道的是「现在卡在谁身上」。
-        # The item about to be fetched, not the one just finished: a fetch takes seconds
-        # and the question being asked is "which one is it on now".
-        if on_progress is not None:
-            on_progress(index, total, item.title or item.url)
-
-        article_id, is_new = ledger.register(item)
-
-        if not is_new and not refetch:
-            existing = ledger.get(article_id)
-            if existing is not None and existing.status is not FetchStatus.PENDING:
-                result.skipped_existing += 1
-                continue
-
-        result.article_ids.append(article_id)
-
-        if not extract:
-            continue
-
-        try:
-            article = fetch_article(item.url, fallback_title=item.title)
-        except Exception as exc:  # noqa: BLE001 - 单篇失败不能中断整轮
-            logger.warning("抓取失败 %s：%s", item.url, exc)
-            ledger.record_failure(article_id, str(exc))
-            result.failed += 1
-            continue
-
-        saved = None
-        try:
-            saved = save_article(
-                article,
-                article_id,
-                root=settings.output_path,
-                download_images=download_images,
-                max_images=_resolve_max_images(item, max_images, by_source, profile),
-                download_videos_too=download_videos,
-                max_videos=_resolve_max_videos(item, by_source, profile),
-            )
-        except OSError as exc:
-            logger.warning("落盘失败 %s：%s", item.url, exc)
-            ledger.record_failure(article_id, f"落盘失败：{exc}")
-            result.failed += 1
-            continue
-
-        # 视频抓不下来只提醒，不算失败——正文已经入库，这篇文章照样能用
-        # A missing clip is a warning, not a failure: the article is in and usable.
-        for url, reason in saved.skipped_videos:
-            result.media_warnings.append((article_id, f"视频未下载（{url}）：{reason}"))
-
-        status = ledger.record_fetch(
-            article_id,
-            article,
-            store_dir=saved.directory.relative_to(settings.output_path).as_posix(),
-            image_count=saved.image_count,
-            video_count=saved.video_count,
-        )
-        if status is FetchStatus.OK:
-            result.fetched_ok += 1
-        else:
-            result.fetched_degraded += 1
-
-
-def _resolve_max_images(
-    item: RawItem,
-    override: int | None,
-    by_source: dict[str, SourceConfig] | None,
-    profile: Profile | None,
-) -> int:
-    """
-    定出这一条用多少张图的上限 / Work out this item's image cap.
-
-    优先级：**命令行显式指定 > 源级配置 > profile 全局 > 代码默认**。
-    命令行排最前是因为它是「就这一次，我知道自己在做什么」的表达；
-    源级排在全局前面，是因为 arXiv 摘要页根本没有配图、而微信长文可能有二十几张，
-    一个全局值伺候所有源要么浪费带宽要么漏素材。
-    Precedence: an explicit command-line value, then the per-source setting, then the
-    profile-wide one, then the code default. The command line wins because it expresses
-    "just this once, deliberately"; per-source beats global because an arXiv abstract has
-    no images while a long WeChat post may have twenty, and one number for both either
-    wastes bandwidth or misses material.
-    """
-    if override is not None:
-        return override
-
-    config = (by_source or {}).get(item.source_id)
-    if config is not None and config.max_images is not None:
-        return config.max_images
-
-    if profile is not None:
-        return profile.max_images_per_article
-
-    return DEFAULT_MAX_IMAGES
-
-
-def _resolve_max_videos(
-    item: RawItem,
-    by_source: dict[str, SourceConfig] | None,
-    profile: Profile | None,
-) -> int:
-    """定出这一条用多少个视频的上限 / Work out this item's video cap."""
-    config = (by_source or {}).get(item.source_id)
-    if config is not None and config.max_videos is not None:
-        return config.max_videos
-    if profile is not None:
-        return profile.max_videos_per_article
-    return DEFAULT_MAX_VIDEOS
 
 
 def _select_configs(source_ids: list[str] | None) -> list[SourceConfig]:

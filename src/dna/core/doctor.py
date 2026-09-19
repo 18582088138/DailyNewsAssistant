@@ -21,6 +21,7 @@ import os
 import shutil
 import sys
 import tempfile
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
@@ -142,7 +143,9 @@ def check_llm_config(settings: Settings) -> CheckResult:
 
     key = settings.api_key_for(provider)
     if key:
-        return CheckResult("LLM 配置", Status.OK, f"provider={provider}，API key 已配置（{key[:7]}…）")
+        return CheckResult(
+            "LLM 配置", Status.OK, f"provider={provider}，API key 已配置（{key[:7]}…）"
+        )
     return CheckResult(
         "LLM 配置",
         Status.FAIL,
@@ -182,59 +185,6 @@ def check_playwright() -> CheckResult:
     )
 
 
-def check_tts_service(settings: Settings) -> CheckResult:
-    """
-    TTS 服务在不在线 / Whether the TTS service is reachable.
-
-    先前这里检查的是**本机的模型目录与 `qwen_tts` 包**——那些东西现在都在
-    Agent_TTS_Module 那一侧，本项目一个模型文件都不需要。所以只剩一个问题：
-    那个地址上有没有一个活着的 TTS 服务。
-    This used to check local model directories; the models now live in the service, so
-    the only remaining question is whether the address answers.
-
-    **不在线不算阻塞（WARN）**，因为：
-      · 采集、日报、文案全都不需要它；
-      · 真要合成时会**自动拉起**（见 tts/supervisor.py），现在不在线是正常状态。
-    所以这一条要说清「能不能自动拉起」，而不只是「在不在」——
-    只报「不在线」会让人跑去手动开服务，而那一步本来是自动的。
-    Not blocking: nothing but audio needs it, and it gets started on demand. The check
-    therefore reports whether autostart is available, not merely whether it is up.
-    """
-    from dna.tts.client import TTSServiceClient, is_local_url
-
-    name = "TTS 服务"
-    url = (settings.tts_service_url or "").strip()
-    if not url:
-        return CheckResult(name, Status.WARN, "未配置 TTS_SERVICE_URL")
-
-    if TTSServiceClient(url).health():
-        # **「在线」只等于那个进程活着。**服务端的 `/health` 只回一个 ok，从不碰引擎，
-        # 而引擎要到第一次合成才加载模型——实测踩过一次：环境里 torchaudio 与 torch
-        # 的 ABI 不匹配，doctor 全绿、合成每段必失败。这里不真合成（模型冷启动几分钟，
-        # doctor 必须是秒级的），只把唯一有效的探针指出来。
-        # "Online" means the process answers; the engine loads on first synthesis.
-        return CheckResult(name, Status.OK, f"在线 @ {url}",
-                           hint="只探到进程；引擎能不能出声要跑 dna tts --say")
-
-    if not settings.tts_autostart:
-        return CheckResult(name, Status.WARN, f"不在线 @ {url}，且已关闭自动拉起",
-                           hint="TTS_AUTOSTART=true，或手动启动服务")
-    if not is_local_url(url):
-        return CheckResult(name, Status.WARN, f"不在线 @ {url}（远程地址，无法代为启动）",
-                           hint="到那台机器上跑 python -m agentic_tts.cli serve")
-
-    directory = (settings.tts_module_dir or "").strip()
-    if not directory:
-        return CheckResult(name, Status.WARN, f"不在线 @ {url}，且未配置 TTS_MODULE_DIR",
-                           hint="配上 Agent_TTS_Module 的目录，合成时会自动拉起")
-    if not (Path(directory) / "agentic_tts").is_dir():
-        return CheckResult(name, Status.WARN,
-                           f"TTS_MODULE_DIR 下没有 agentic_tts/：{directory}",
-                           hint="指向 Agent_TTS_Module 的仓库根目录")
-
-    return CheckResult(name, Status.OK, f"未运行，合成时自动拉起（{directory}）")
-
-
 def check_writable_dirs(settings: Settings) -> list[CheckResult]:
     """产物与数据目录是否可写 / Whether the output and data directories are writable."""
     results: list[CheckResult] = []
@@ -246,7 +196,10 @@ def check_writable_dirs(settings: Settings) -> list[CheckResult]:
             results.append(CheckResult(label, Status.OK, str(path)))
         except OSError as exc:
             results.append(
-                CheckResult(label, Status.FAIL, f"{path} 不可写：{exc}", hint="检查路径权限或改 .env 中的目录配置")
+                CheckResult(
+                    label, Status.FAIL, f"{path} 不可写：{exc}",
+                    hint="检查路径权限或改 .env 中的目录配置",
+                )
             )
     return results
 
@@ -338,7 +291,7 @@ def check_inbox(settings: Settings) -> CheckResult:
             "远程投递（飞书）",
             Status.FAIL,
             "白名单为空，将拒收全部消息（安全默认）",
-            hint="按 docs/08_feishu_bot_deployment.md §3.3 获取 open_id 并填入 FEISHU_ALLOWED_USERS",
+            hint="按 08_feishu_bot_deployment.md §3.3 取 open_id 填进 FEISHU_ALLOWED_USERS",
         )
 
     return CheckResult(
@@ -366,7 +319,7 @@ def check_proxy(settings: Settings) -> CheckResult:
             "代理配置",
             Status.FAIL,
             f"已配置代理 {settings.https_proxy}，但 NO_PROXY 未放行 localhost",
-            hint="在 .env 的 NO_PROXY 里加入 localhost,127.0.0.1，否则本地 Ollama / RSSHub 调用会失败",
+            hint="NO_PROXY 里加 localhost,127.0.0.1，否则本地 Ollama / RSSHub 会被代理拦",
         )
 
     return CheckResult(
@@ -395,7 +348,10 @@ def check_git() -> CheckResult:
 
 
 def run_all(
-    settings: Settings | None = None, *, env_file: Path = DEFAULT_ENV_FILE
+    settings: Settings | None = None,
+    *,
+    env_file: Path = DEFAULT_ENV_FILE,
+    extra: Sequence[Callable[[Settings], CheckResult]] = (),
 ) -> list[CheckResult]:
     """
     执行全部检查 / Run every check and return the results in display order.
@@ -417,7 +373,9 @@ def run_all(
     results.append(check_llm_config(s))
     results.append(check_prompts())
     results.append(check_playwright())
-    results.append(check_tts_service(s))
+    # 上层自己的检查插在这里（例如 TTS 服务在不在线，见 `dna/tts/doctor.py`）。
+    # core 不认识那些模块 —— 它们由前端交进来，这样铁律不用为了一条检查破例。
+    results.extend(check(s) for check in extra)
     results.extend(check_writable_dirs(s))
     results.append(check_proxy(s))
     results.append(check_inbox(s))
@@ -427,7 +385,7 @@ def run_all(
 
 def summarize(results: list[CheckResult]) -> dict[Status, int]:
     """按状态统计 / Count results by status."""
-    counts = {st: 0 for st in Status}
+    counts = dict.fromkeys(Status, 0)
     for r in results:
         counts[r.status] += 1
     return counts
@@ -450,7 +408,6 @@ __all__ = [
     "check_prompts",
     "check_proxy",
     "check_python",
-    "check_tts_service",
     "check_writable_dirs",
     "has_failure",
     "run_all",

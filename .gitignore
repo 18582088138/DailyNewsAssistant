@@ -4,7 +4,6 @@
 
 # ---- outputs & data 产物与数据 ----
 outputs/
-docs/issues/
 data/
 *.db
 *.sqlite3
@@ -39,5 +38,12 @@ Thumbs.db
 # ---- 本地 prompt 调试，不入库 ----
 verify_test/
 
-# ---- tests 仅本地测试，不入库 ----
-tests/
+# ---- 会话本地状态，不入库 ----
+# 解释器路径与「这一轮改了哪些包」都是本机的事；.claude/settings.json 与 hooks 入库。
+.claude/.dirty-packages
+.claude/hooks/python-path.txt
+.claude/settings.local.json
+
+# tests/ 与 docs/issues/ **入库**（2026-09-11 决定）：
+# 验收工具要随分支走，13 份 issues 是这个项目最值钱的经验资产；
+# 此前它们被忽略，导致 19 条已提交文档的链接在克隆后全是断链。

@@ -28,8 +28,8 @@ from dataclasses import dataclass, replace
 from dna.core.config import Settings, get_settings
 from dna.core.errors import ConfigError, ProviderError
 from dna.core.logging import get_logger
-from dna.llm.cache import CachedProvider
 from dna.llm.base import ChatMessage, ChatResult, LLMProvider, ProviderInfo
+from dna.llm.cache import CachedProvider
 from dna.llm.ollama_provider import OllamaProvider
 from dna.llm.openai_compat import OpenAICompatProvider
 from dna.llm.openvino_provider import OpenVINOProvider
@@ -317,8 +317,8 @@ def get_llm(
 
 __all__ = [
     "CLOUD_PROVIDERS",
-    "CachedProvider",
     "KNOWN_PROVIDERS",
+    "CachedProvider",
     "ResilientProvider",
     "RetryPolicy",
     "build_provider",

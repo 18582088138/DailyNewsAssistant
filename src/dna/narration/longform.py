@@ -35,16 +35,22 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from enum import StrEnum
-
-from pydantic import BaseModel, Field
-
 from dna.core.logging import get_logger
 from dna.core.models import Article
 from dna.core.prompts import load_prompt, render_prompt
 from dna.llm.base import LLMProvider, system, user
 from dna.narration.duration import estimate_seconds, prompt_char_budget
+from dna.narration.longform_models import (
+    MAX_SECTIONS,
+    MIN_SECTIONS,
+    SPEAKERS,
+    LongformMode,
+    LongformResult,
+    OutlinePlan,
+    SectionPlan,
+    SectionScript,
+    Turn,
+)
 from dna.narration.script_builder import article_block, instruction_block, rules_for
 
 logger = get_logger("narration.longform")
@@ -69,9 +75,6 @@ EXPANSION_RATIO = 1.2
 MIN_TARGET_SECONDS = 300.0   # 5 分钟：再短就不该叫「长文案」
 MAX_TARGET_SECONDS = 900.0   # 15 分钟：用户给的上限
 
-# 章节数量范围 / how many sections
-MIN_SECTIONS = 4
-MAX_SECTIONS = 8
 
 # 提示词正文在 `config/prompts/` / The prompt texts live under that directory
 #     longform_outline.md  主块 + `@shape.feature` / `@shape.interview`
@@ -86,95 +89,6 @@ PROMPT_OUTLINE = "longform_outline"
 PROMPT_SECTION = "longform_section"
 PROMPT_LANGUAGE_DIRECTIVE = "_shared/language_directive.en"
 
-
-class LongformMode(StrEnum):
-    """长文案形式 / Long-form mode."""
-
-    FEATURE = "feature"  # 专题：单角色
-    INTERVIEW = "interview"  # 访谈：双角色
-
-
-# 角色名 / speaker labels
-SPEAKERS = {
-    LongformMode.FEATURE: {"narrator": "旁白"},
-    LongformMode.INTERVIEW: {"host": "主持人", "guest": "嘉宾"},
-}
-
-
-class SectionPlan(BaseModel):
-    """提纲里的一节 / One section of the outline."""
-
-    title: str = Field(max_length=40, description="小节标题，用于人工核对结构，不会被念出来")
-    points: list[str] = Field(
-        min_length=1, max_length=5, description="本节要讲的要点，每条一句话"
-    )
-    # 上限跟着 prompt_char_budget 走：15 分钟的混排密度预算约 6000 字，
-    # 分 4 节就是每节 1500。上限压在 1200 会让模型的规划被 Schema 反复驳回，
-    # 白花修复重试的调用。
-    # The ceiling tracks `prompt_char_budget`: a fifteen-minute budget is around 6000
-    # characters at mixed density, or 1500 across four sections. Capping at 1200 makes the
-    # schema reject the model's own plan and burns repair retries.
-    target_chars: int = Field(ge=150, le=2000, description="本节目标字数")
-
-
-class OutlinePlan(BaseModel):
-    """长文案提纲 / The long-form outline."""
-
-    sections: list[SectionPlan] = Field(min_length=1, max_length=MAX_SECTIONS)
-
-
-class Turn(BaseModel):
-    """一次发言 / One speaker turn."""
-
-    speaker: str = Field(description="feature 模式固定 narrator；interview 模式为 host 或 guest")
-    text: str = Field(min_length=1)
-
-
-class SectionScript(BaseModel):
-    """一节展开后的稿子 / One expanded section."""
-
-    turns: list[Turn] = Field(min_length=1)
-
-
-@dataclass
-class LongformResult:
-    """一篇长文案的结果 / The result of one long-form script."""
-
-    mode: LongformMode
-    turns: list[Turn] = field(default_factory=list)
-    sections: list[SectionPlan] = field(default_factory=list)
-    calls: int = 0
-    seconds: float = 0.0
-
-    @property
-    def text(self) -> str:
-        """拼成人读的全文 / The whole script as a person reads it."""
-        labels = SPEAKERS[self.mode]
-        if self.mode is LongformMode.FEATURE:
-            return "\n\n".join(t.text for t in self.turns)
-        return "\n\n".join(
-            f"**{labels.get(t.speaker, t.speaker)}：** {t.text}" for t in self.turns
-        )
-
-    @property
-    def chars(self) -> int:
-        return sum(len(t.text) for t in self.turns)
-
-    def to_json_dict(self) -> dict:
-        """
-        导出给 TTS 的结构 / The structure the TTS stage consumes.
-
-        两种模式产出同一种结构，只是 speaker 取值不同——TTS 侧照着 speaker
-        分配音色即可，不必知道这篇是专题还是访谈。
-        Both modes emit the same shape and differ only in the speaker values, so the TTS
-        stage assigns voices without needing to know which mode produced the script.
-        """
-        return {
-            "mode": str(self.mode),
-            "speakers": SPEAKERS[self.mode],
-            "est_seconds": self.seconds,
-            "turns": [{"speaker": t.speaker, "text": t.text} for t in self.turns],
-        }
 
 
 def unit_word(lang: str) -> str:
@@ -200,7 +114,9 @@ def language_directive(lang: str) -> str:
     return "\n\n" + load_prompt(PROMPT_LANGUAGE_DIRECTIVE)
 
 
-def can_build_longform(article: Article) -> tuple[bool, str]:
+def can_build_longform(
+    article: Article, *, min_body_chars: int | None = None
+) -> tuple[bool, str]:
     """
     判断这篇能不能做长文案 / Whether this article can carry a long-form script.
 
@@ -210,9 +126,10 @@ def can_build_longform(article: Article) -> tuple[bool, str]:
     insufficient source can only yield padding, and this is the most expensive
     production there is.
     """
-    if len(article.text) < MIN_BODY_FOR_LONGFORM:
+    floor = min_body_chars or MIN_BODY_FOR_LONGFORM
+    if len(article.text) < floor:
         return False, (
-            f"正文只有 {len(article.text)} 字，不足 {MIN_BODY_FOR_LONGFORM} 字，"
+            f"正文只有 {len(article.text)} 字，不足 {floor} 字，"
             f"撑不起 10 分钟的长文案。强行生成只会得到注水稿。"
         )
     return True, ""
@@ -223,6 +140,7 @@ def plan_target_seconds(
     *,
     low: float = MIN_TARGET_SECONDS,
     high: float = MAX_TARGET_SECONDS,
+    expansion_ratio: float | None = None,
 ) -> float:
     """
     按正文体量推导目标时长 / Derive the target duration from the source.
@@ -243,7 +161,8 @@ def plan_target_seconds(
     beat fifteen padded ones, and padding is where vague filler comes from.
     """
     source_seconds = estimate_seconds(article.text)
-    return max(low, min(source_seconds * EXPANSION_RATIO, high))
+    ratio = expansion_ratio or EXPANSION_RATIO
+    return max(low, min(source_seconds * ratio, high))
 
 
 def plan_target_chars(
@@ -252,6 +171,7 @@ def plan_target_chars(
     low: float = MIN_TARGET_SECONDS,
     high: float = MAX_TARGET_SECONDS,
     lang: str = "zh",
+    expansion_ratio: float | None = None,
 ) -> int:
     """
     目标字数 / The character target handed to the prompt.
@@ -285,6 +205,8 @@ def build_longform(
     high: float = MAX_TARGET_SECONDS,
     lang: str = "zh",
     instructions: str = "",
+    expansion_ratio: float | None = None,
+    sections: tuple[int, int] | None = None,
 ) -> LongformResult:
     """
     生成长文案 / Build a long-form script.
@@ -302,18 +224,22 @@ def build_longform(
     if not ok:
         raise ValueError(reason)
 
-    total_target = plan_target_chars(article, low=low, high=high, lang=lang)
+    total_target = plan_target_chars(
+        article, low=low, high=high, lang=lang, expansion_ratio=expansion_ratio
+    )
     logger.info(
         "长文案开始：%s 模式 / %s，目标 %d 字（约 %.0f 分钟）",
         lang,
         mode,
         total_target,
-        plan_target_seconds(article, low=low, high=high) / 60,
+        plan_target_seconds(
+            article, low=low, high=high, expansion_ratio=expansion_ratio
+        ) / 60,
     )
 
     outline = _build_outline(
         article, llm, mode=mode, total_target=total_target, lang=lang,
-        instructions=instructions,
+        instructions=instructions, sections=sections,
     )
     result = LongformResult(mode=mode, sections=outline.sections, calls=1)
 
@@ -352,6 +278,7 @@ def _build_outline(
     total_target: int,
     lang: str = "zh",
     instructions: str = "",
+    sections: tuple[int, int] | None = None,
 ) -> OutlinePlan:
     """
     第一步：出提纲 / Step one: the outline.
@@ -370,8 +297,8 @@ def _build_outline(
         total_target=total_target,
         unit=unit_word(lang),
         shape=shape,
-        min_sections=MIN_SECTIONS,
-        max_sections=MAX_SECTIONS,
+        min_sections=(sections or (MIN_SECTIONS, MAX_SECTIONS))[0],
+        max_sections=(sections or (MIN_SECTIONS, MAX_SECTIONS))[1],
     )
     prompt += instruction_block(instructions, lang)
 

@@ -289,7 +289,7 @@ class LLMProvider(ABC):
         try:
             self.chat([user("ping")], max_tokens=8, timeout=timeout)
             return True
-        except Exception as exc:  # noqa: BLE001 - 探测失败原因不重要，只关心通不通
+        except Exception as exc:
             logger.info("%s 连通性探测失败：%s", self.info, exc)
             return False
 

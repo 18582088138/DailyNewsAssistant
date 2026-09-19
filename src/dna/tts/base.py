@@ -32,6 +32,7 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import Protocol, runtime_checkable
 
+from dna.core.config import Settings, field_default
 from dna.core.errors import DNAError
 
 # Qwen3-TTS 的输出采样率 / the sample rate Qwen3-TTS emits
@@ -51,7 +52,10 @@ DEFAULT_SAMPLE_RATE = 24_000
 # 界面的进度条上了 —— 这个常量只负责「点之前给个数量级」。
 # The constant gives an order of magnitude before the click; the accurate figure comes
 # from the service's per-piece progress, which the workbench already displays.
-RTF_ESTIMATE = 2.5
+#
+# **这里只是兜底值**：真正的取值来自 `TTS_RTF_ESTIMATE`（`.env`），换机器改配置就行。
+# 之前写死 2.5 的后果是界面预估少报五倍 —— 恰恰是它要防的那个「看起来卡死了」。
+DEFAULT_RTF_ESTIMATE: float = field_default(Settings, "tts_rtf_estimate")
 
 # 段与段之间的静音 / silence inserted between segments
 #
@@ -289,20 +293,20 @@ def wav_seconds(wav: bytes) -> float:
     return frames / rate if rate else 0.0
 
 
-def estimate_synthesis_seconds(script_seconds: float, *, rtf: float = RTF_ESTIMATE) -> float:
+def estimate_synthesis_seconds(script_seconds: float, *, rtf: float | None = None) -> float:
     """
     合成这段稿子大约要等多久 / How long synthesising this script will take.
 
     在按钮上显示，而不是让人对着转圈猜。
     Shown on the button rather than left for the spinner to imply.
     """
-    return max(0.0, script_seconds) * rtf
+    return max(0.0, script_seconds) * (rtf or DEFAULT_RTF_ESTIMATE)
 
 
 __all__ = [
+    "DEFAULT_RTF_ESTIMATE",
     "DEFAULT_SAMPLE_RATE",
     "PAUSE_SECONDS",
-    "RTF_ESTIMATE",
     "SPEAKER_CHANGE_PAUSE_SECONDS",
     "AudioClip",
     "ProgressFn",

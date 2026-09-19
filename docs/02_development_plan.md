@@ -86,7 +86,7 @@ DailyNewsAssistant/
 │   ├── narration/               # 【文案+音频公用层 · 新增】视频与播客共享
 │   │   ├── script_builder.py    # DigestEntry → 口播/播客脚本（单人/双人/短视频）
 │   │   ├── duration.py          # 中英文语速估算，校验 20~25s 约束
-│   │   └── voiceover.py         # 脚本 → 分段合成 → 拼接 → wav（zh/en 各一份）
+│   │                            # 音频合成不在这一层，实际落在 dna/tts/
 │   ├── apps/                    # 【三个发布应用，互不依赖】
 │   │   ├── base.py              # AppProducer ABC: produce(digest, lang, variant) -> ProduceResult
 │   │   ├── graphic_daily.py     # 场景1 图文版
@@ -142,44 +142,12 @@ DailyDigest  # date, entries[], trend_note_zh/en, stats  ← 三个应用唯一�
 
 ---
 
-## 4. 产物落盘规则（v3 修订）
+## 4. 产物落盘规则
 
-> ⚠️ **本节已被 [`05_output_spec.md`](05_output_spec.md) 取代，保留仅供追溯。**
-> 下面的 `topics/` 与 `_history/` 两套布局均已取消（见 §9.2 §9.3），
-> 条目资产的唯一位置是 `outputs/articles/<日期>/<slug>__<id8>/`。
+**落盘唯一权威是 [05_output_spec.md](05_output_spec.md)，这里不复述。**
 
-
-**期次目录命名：`YYYYMMDD-DailyNews`**（如 `20260901-DailyNews`）。
-去掉中间的 `daily/` 层——期次级产物按形态直接平铺，单条新闻资产收在 `topics/`。
-
-```
-outputs/20260901-DailyNews/
-├── _digest.json                     # 结构化事实源，可重放
-├── _references.md                   # 【参考链接汇总 · 独立文件】全部来源 + 图片/视频出处
-├── graphic/                         # 场景1 · 整期图文
-│   ├── daily.zh.md    daily.en.md
-│   ├── daily.zh.html  daily.en.html
-│   ├── longimage_wechat_zh.png    longimage_wechat_en.png
-│   └── longimage_xhs_zh_1..n.png
-├── podcast/                         # 场景3 · 整期播客
-│   ├── script_solo.zh.md   script_solo.en.md   （或 script_duo.*）
-│   └── podcast.zh.wav      podcast.en.wav
-├── topics/01_<标题slug>/            # 条目级 = 单条新闻的全部资产
-│   ├── article.md                   # 抽取正文
-│   ├── summary.zh.md  summary.en.md # 1~2 句总结
-│   ├── references.md                # 本条来源链接
-│   ├── images/  01_<src-host>.jpg + 同名 .json（来源 URL / 版权信息）
-│   ├── video/   official_*.mp4 / video_links.txt
-│   └── brief/                       # 场景2 · 仅 need_video=True
-│       ├── brief.zh.md  brief.en.md # 主副标题 + 20~25s 口播稿 + 1~2句短介绍
-│       └── narration.zh.wav  narration.en.wav
-└── _history/<时间戳>/               # 重做时旧产物移入此处，不覆盖
-```
-
-**命名规则**：
-- 期次目录 `YYYYMMDD-DailyNews`；`topics` 子目录 `<两位序号>_<标题slug>`
-- 语言后缀统一 `.zh` / `.en`
-- 重做产生的旧文件按原相对路径移入 `_history/<时间戳>/`，可追溯
+本节原先写的 `topics/<序号>_<slug>/` 与 `_history/<时间戳>/` 两套布局**均已取消**，
+取消的理由与替代方案见 §9.2、§9.3 —— 那两节是 `05_output_spec.md` 反向引用的裁决记录。
 
 ---
 
@@ -191,7 +159,7 @@ outputs/20260901-DailyNews/
 |---|---|
 | Pipeline | `translate.py` 一次产出 `title_zh/en` + `summary_zh/en` + `trend_note_zh/en`，写进同一份 Digest |
 | 文案 | `narration/script_builder.py` 按 `lang` 出脚本；视频（20~25s 短稿）与播客（长稿）**共用同一构建器**，只是模板与长度约束不同 |
-| 音频 | `narration/voiceover.py` 统一 `script → 分段 → TTS → 拼接`；Qwen3-TTS 原生支持中英，`language` 参数切换。**视频口播与播客音频走同一条代码路径** |
+| 音频 | `dna/tts/` 统一 `script → 分段 → TTS → 拼接`；Qwen3-TTS 原生支持中英，`language` 参数切换。**视频口播与播客音频走同一条代码路径** |
 | 长度校验 | `narration/duration.py`：中文约 4.5 字/秒、英文约 2.6 词/秒，视频稿超出 20~25s 自动回炉重写（最多 2 次） |
 
 默认只产 `zh`；`--lang zh,en` 或 GUI 勾选时产双份。**双语是渲染期参数，不是采集期参数**——已有 Digest 可随时补出英文版，不用重跑流水线。
@@ -214,7 +182,12 @@ outputs/20260901-DailyNews/
 | `productions` | id, digest_date, entry_id(NULL=期次级), **app**(graphic/video/podcast), **variant**(wechat_long/xhs/solo/duo), **lang**(zh/en), status, output_path, llm_provider, model, tokens, duration_ms, created_at, **redo_of_id** | **核心：做过哪些输出** |
 
 `productions` 回答了你要的两个问题——「哪些文章已经做过了」「都做了哪些方面的输出」。
-重做 = 新插一行、`redo_of_id` 指向旧行，旧产物移入 `_history/`，**历史可追溯不丢失**。
+重做 = 新插一行、`redo_of_id` 指向旧行，**历史可追溯不丢失**。
+（当初还规划了把旧产物移入 `_history/`，后来取消，见 §9.3。）
+
+> 表的实际列定义以 [07_db_schema.md](07_db_schema.md) 为准 —— 上面这一行是当初的设计，
+> 已经随实现漂移（`app` 后来叫 `kind`，`variant` 收窄成长文案专用，
+> 而 `(article_id, kind, lang)` 才是一份产物的完整标识）。
 
 ### 6.2 后台控制台（NiceGUI 页面 `console.py`）
 
@@ -337,8 +310,8 @@ class LLMProvider(ABC):
 | **P3** | Pipeline 核心：clean → dedup → score → summarize → **translate(双语)** → trend → `run_daily()` | 产出 `_digest.json`（含 zh/en） | 每节点一份；聚类用构造样本验证合并 |
 | **P4** | 落盘 + **台账 DB**：`store/output` 目录规则、`_references.md`、`db`/`ledger`/`stats` | 完整 outputs 树 + `data/dna.db` | `test_output_layout` `test_ledger` `test_history` |
 | **P5** | **场景1 图文版**：md/html 中英双语 + Playwright 长图（公众号长图 / 小红书竖图） | 可发布图文稿 + PNG | `test_graphic_daily`（尺寸与关键文本快照） |
-| **P6** | **场景2 视频版** + **narration 公用层**：need_video 判定、主副标题、20~25s 口播稿（时长校验）、素材归集、短介绍、`voiceover` 中英音频 | `brief.zh/en.md` + `narration.*.wav` + 素材目录 | `test_duration`（时长落在 20~25s）`test_video_brief` `test_tts`(`@slow`) |
-| **P7** | **场景3 播客版**（复用 P6 的 script_builder/voiceover）：单人/双人脚本 + 整期音频 | `script.*.md` + `podcast.*.wav` | `test_podcast_script`（离线）+ `@slow` 音频 |
+| **P6** | **场景2 视频版** + **narration 公用层**：need_video 判定、主副标题、20~25s 口播稿（时长校验）、素材归集、短介绍、`dna/tts/` 中英音频 | `brief.zh/en.md` + `narration.*.wav` + 素材目录 | `test_duration`（时长落在 20~25s）`test_video_brief` `test_tts`(`@slow`) |
+| **P7** | **场景3 播客版**（复用 P6 的 script_builder 与 `dna/tts/`）：单人/双人脚本 + 整期音频 | `script.*.md` + `podcast.*.wav` | `test_podcast_script`（离线）+ `@slow` 音频 |
 | **P8** | 前端：CLI 全命令 + NiceGUI 主界面 + **后台台账控制台（产出矩阵/筛选/重做/统计）** | 可交互使用 | `test_cli` `test_redo`；GUI 走人工审阅 |
 | **P9** | **远程投递接口**（飞书机器人长连接 + 白名单 + hashtag 指令 + 即时回执 + 交互卡片）+ APScheduler 定时。**公司电脑只交付代码与离线测试**，联调在私人电脑 | 可运行的 `dna.inbox.service` + 部署文档 | `test_inbox_parse` `test_inbox_whitelist` `test_inbox_commands`（构造事件，零网络）；真连接测试标 `@live` 默认跳过 |
 | **P10** | 自建 RSSHub 接入 + E2E + 打包（~~OpenVINO LLM~~ 随本地 LLM 一并冻结，解冻后另行排期） | 端到端一键日报 | `test_e2e`（`@slow`） |
@@ -440,25 +413,11 @@ test_dedup.py — 去重与聚类单元测试 / Dedup & clustering unit tests
 
 ## 11. 文档留存清单（要求 5、6）
 
-| 文件 | 内容 | 更新时机 |
-|---|---|---|
-| `docs/00_STAGE_SUMMARY.md` | 原则、环境、进度表、问题台账 | 每阶段 |
-| `docs/01_research.md` | 调研报告 | 已完成 |
-| `docs/02_development_plan.md` | 本文档 | 方案变更时 |
-| `docs/03_unit_tests.md` | 每个单元测试的用途/命令/预期 | 每模块 |
-| `docs/04_architecture.md` | 架构图（Mermaid）+ 业务流 | P3 后 |
-| `docs/05_output_spec.md` | **产物落盘规范**：两棵树、命名规则、两级只引用不复制、两个 references 各管什么、已作废布局 | ✅ **已完成**（P4） |
-| `docs/06_prompt_spec.md` | 各节点提示词与调优记录 | P3 起持续 |
-| `docs/07_db_schema.md` | 台账表结构与统计口径 | ✅ **已完成**（P3.5） |
-| `docs/08_feishu_bot_deployment.md` | 飞书机器人 + 长连接**部署指南**：后台配置、权限、发布、open_id 获取、私人电脑部署、Windows 常驻、验证清单、排错表 | ✅ **已完成** |
-| `docs/09_packaging.md` | 部署/打包 | P10 |
-| `docs/10_sources_guide.md` | **添加信息源指南**：`dna probe` 用法、验证步骤、找不到 feed 的出路、当前源清单状态 | ✅ **已完成** |
-| `docs/11_article_store_guide.md` | **文章总表与落盘指南**：`dna list/show/add/refetch/stats`、状态含义、落盘目录结构、后续功能如何取用 | ✅ **已完成** |
-| `docs/issues/NNN-*.md` | 现象 + 复现脚本 + 精确命令 + 结论 | 随时 |
-| `docs/git_commands.md` | 各阶段 git 命令汇总（**你手动执行**） | 每阶段 |
+清单与「什么时候该读哪一份」见 [00_INDEX.md](00_INDEX.md)，不在这里重复一遍——
+两份清单必然会漂移，而漂移的那份没人会发现。
 
-项目专属资产（要求 4）：Skill `~/.claude/skills/dailynews-dev/SKILL.md`（P0 建）；
-Memory `~/.claude/projects/c--Users-test-Downloads-xkd/memory/`。
+更新时机的规矩在 [../CLAUDE.md](../CLAUDE.md)：bug 修复只写 `issues/NNN`；
+新功能只动它自己那一份 guide；阶段收尾才动 `00_STAGE_SUMMARY` 与 `03_unit_tests`。
 
 ---
 

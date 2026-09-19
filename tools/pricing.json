@@ -1,0 +1,39 @@
+{
+  "_说明": [
+    "单价（美元 / 百万 token）。转写文件里没有金额字段，所以费用是这里的单价算出来的。",
+    "按你的实际账单改这四个数就行；token 明细是精确的，只有单价是假设。",
+    "cache_write 指 5 分钟缓存的写入价；会话空闲超过 5 分钟，下一轮要按这个价重新灌一遍。"
+  ],
+  "default": {
+    "input": 15.0,
+    "output": 75.0,
+    "cache_write": 18.75,
+    "cache_read": 1.5
+  },
+  "models": {
+    "claude-opus-5": {
+      "input": 15.0,
+      "output": 75.0,
+      "cache_write": 18.75,
+      "cache_read": 1.5
+    },
+    "claude-opus-4-8": {
+      "input": 15.0,
+      "output": 75.0,
+      "cache_write": 18.75,
+      "cache_read": 1.5
+    },
+    "claude-sonnet-5": {
+      "input": 3.0,
+      "output": 15.0,
+      "cache_write": 3.75,
+      "cache_read": 0.3
+    },
+    "claude-haiku-4-5-20251001": {
+      "input": 1.0,
+      "output": 5.0,
+      "cache_write": 1.25,
+      "cache_read": 0.1
+    }
+  }
+}

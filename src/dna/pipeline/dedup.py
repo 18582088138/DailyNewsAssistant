@@ -24,9 +24,11 @@ once while keeping every source link.
 from __future__ import annotations
 
 import hashlib
+import itertools
 import re
 from dataclasses import dataclass, field
 
+from dna.core.config import Tuning, field_default
 from dna.core.logging import get_logger
 from dna.core.models import Cluster, NewsItem
 
@@ -34,7 +36,7 @@ logger = get_logger("pipeline.dedup")
 
 # SimHash 位数与判重阈值 / SimHash width and the near-duplicate threshold
 SIMHASH_BITS = 64
-DEFAULT_HAMMING_THRESHOLD = 3
+DEFAULT_HAMMING_THRESHOLD: int = field_default(Tuning, "hamming_threshold")
 """
 64 位 SimHash 上，汉明距离 ≤3 视为近重复。
 
@@ -42,7 +44,13 @@ DEFAULT_HAMMING_THRESHOLD = 3
 也不要错合并（把两件不同的事混成一条，读者会被误导且无从察觉）。
 Conservative on purpose: missing a merge shows two similar items the reader can spot,
 whereas a wrong merge fuses two different events into one and misleads invisibly.
+
+**兜底值而已**：真正的取值来自 `profile.tuning.hamming_threshold`。
 """
+
+# 指纹取样长度的兜底值；真正的取值来自 `profile.tuning.simhash_sample_chars`。
+# 它和阈值一样决定判重松紧 —— 写死在代码里，判重口味就调不动了。
+DEFAULT_SAMPLE_CHARS: int = field_default(Tuning, "simhash_sample_chars")
 
 # 分词：中文按字，英文与数字按词 / tokenisation: CJK by character, latin by word
 _TOKEN_RE = re.compile(r"[a-zA-Z0-9]+|[一-鿿]")
@@ -116,7 +124,7 @@ def simhash(text: str, *, bits: int = SIMHASH_BITS) -> int:
     if not tokens:
         return 0
 
-    grams = [f"{a}{b}" for a, b in zip(tokens, tokens[1:], strict=False)] or tokens
+    grams = [f"{a}{b}" for a, b in itertools.pairwise(tokens)] or tokens
 
     vector = [0] * bits
     for gram in grams:
@@ -153,6 +161,7 @@ def dedup(
     items: list[NewsItem],
     *,
     threshold: int = DEFAULT_HAMMING_THRESHOLD,
+    sample_chars: int = DEFAULT_SAMPLE_CHARS,
     use_embeddings: bool = False,
     embedding_threshold: float = 0.86,
 ) -> DedupResult:
@@ -182,7 +191,7 @@ def dedup(
     groups: list[list[NewsItem]] = list(by_url.values())
 
     # -- 第二级：SimHash 近重复 --------------------------------------------
-    fingerprints: list[int] = [simhash(_signature(g[0])) for g in groups]
+    fingerprints: list[int] = [simhash(_signature(g[0], sample_chars)) for g in groups]
     merged: list[list[NewsItem]] = []
     merged_prints: list[int] = []
 
@@ -205,7 +214,7 @@ def dedup(
     return result
 
 
-def _signature(item: NewsItem) -> str:
+def _signature(item: NewsItem, sample_chars: int = DEFAULT_SAMPLE_CHARS) -> str:
     """
     参与相似度比较的文本 / The text used for similarity comparison.
 
@@ -215,7 +224,7 @@ def _signature(item: NewsItem) -> str:
     reposts routinely append different promotional material at the end, which pushes
     otherwise identical articles apart. The opening is the least-modified part.
     """
-    return f"{item.title}\n{item.text[:500]}"
+    return f"{item.title}\n{item.text[:sample_chars]}"
 
 
 def _find_near(prints: list[int], candidate: int, threshold: int) -> int | None:
@@ -254,7 +263,7 @@ def _merge_by_embeddings(
     """
     try:
         embeddings = _encode([_signature(g[0]) for g in groups])
-    except Exception as exc:  # noqa: BLE001 - 向量层不可用不该中断流水线
+    except Exception as exc:
         logger.warning("语义聚类不可用，仅使用 URL 与 SimHash 去重：%s", exc)
         return groups, 0
 
@@ -288,8 +297,9 @@ def _encode(texts: list[str]) -> list[list[float]]:
     Imported lazily: sentence-transformers takes seconds to load and most commands never
     need it. A top-level import would slow down every CLI invocation.
     """
-    from dna.core.config import get_settings
     from sentence_transformers import SentenceTransformer
+
+    from dna.core.config import get_settings
 
     model = _load_model(get_settings().embedding_model, SentenceTransformer)
     return [list(map(float, v)) for v in model.encode(texts, normalize_embeddings=True)]
@@ -298,7 +308,7 @@ def _encode(texts: list[str]) -> list[list[float]]:
 _MODEL_CACHE: dict[str, object] = {}
 
 
-def _load_model(name: str, factory):  # noqa: ANN001, ANN202 - 类型来自可选依赖
+def _load_model(name: str, factory):
     """
     加载并缓存向量模型 / Load the embedding model once and reuse it.
 

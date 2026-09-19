@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from nicegui import ui
 
-from dna.core.config import get_settings
+from dna.core.config import apply_proxy_env, get_settings
 from dna.core.logging import setup_logging
 from dna.produce import DISPLAY_ORDER
 from dna.store import Ledger
@@ -39,7 +39,7 @@ def build() -> None:
     """装配页面 / Assemble the page."""
 
     @ui.page("/")
-    def index() -> None:  # noqa: ANN202 - NiceGUI 页面函数
+    def index() -> None:
         _render_page()
 
 
@@ -93,7 +93,7 @@ def _render_page() -> None:
         try:
             status = await actions.tts_start()
             ui.notify(status.detail, type="positive")
-        except Exception as exc:  # noqa: BLE001 - 原因原样显示，里面写了怎么排查
+        except Exception as exc:
             ui.notify(f"TTS 服务启动失败：{exc}", type="negative", timeout=12000,
                       multi_line=True, close_button=True)
         finally:
@@ -165,7 +165,7 @@ def _render_page() -> None:
         state["page"] = 1
         refresh()
 
-    def _sync_pagination(view) -> None:  # noqa: ANN001 - actions.PageView
+    def _sync_pagination(view) -> None:
         """
         把页码控件对齐到刚画出来的这一页 / Align the control with the drawn page.
 
@@ -187,7 +187,11 @@ def _render_page() -> None:
 
     # -- 筛选栏 / filter bar --------------------------------------------------
     with ui.row().classes("wb-filters w-full items-center gap-3 px-4 pt-3 no-wrap"):
-        search_input = ui.input(placeholder="搜索标题或链接").props("dense outlined clearable").classes("w-64")
+        search_input = (
+            ui.input(placeholder="搜索标题或链接")
+            .props("dense outlined clearable")
+            .classes("w-64")
+        )
         search_input.on(
             "keydown.enter", lambda: go_filter(search=search_input.value or None)
         )
@@ -328,7 +332,14 @@ def run(*, host: str = "127.0.0.1", port: int = 8080, show: bool = True) -> None
     # The page compresses backend errors into one line while the reasons go to the log;
     # without a file they scroll past in a terminal nobody is watching.
     settings = get_settings()
-    setup_logging(level="INFO", log_dir=settings.data_path / "logs", log_file="dna.log")
+    # `.env` 里的代理必须在这里接进 os.environ，否则界面上那三个代理框是摆设
+    apply_proxy_env(settings)
+    # `LOG_LEVEL` 填了就听它；留空才用 INFO（见 core/config.py 上那段注释）
+    setup_logging(
+        level=settings.log_level or "INFO",
+        log_dir=settings.data_path / "logs",
+        log_file="dna.log",
+    )
     build()
     ui.run(host=host, port=port, show=show, reload=False, title=PAGE_TITLE, favicon="📰")
 

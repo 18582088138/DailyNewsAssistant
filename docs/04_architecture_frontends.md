@@ -24,7 +24,7 @@
 
 ---
 
-## `frontends/cli/` —— 命令行（1060 行，18 个命令）
+## `frontends/cli/` —— 命令行
 
 ### 命令 → 后端 → 费用
 
@@ -61,7 +61,7 @@
   照常走的话重做会拿回一模一样的旧答案
 - `longform` **不在 `--all` 里**（一篇 5~9 次调用），必须显式 `-k longform`
 - `--lang en` 也不在 `--all` 里：多数文章不需要英文版，跟着批量跑等于每篇翻倍
-- 三种 `*_audio` 是本地 TTS，一分钱不花但很花时间（RTF ≈ 2.5），同样不进 `--all`
+- 三种 `*_audio` 是本地 TTS，一分钱不花但很花时间，同样不进 `--all`
   ——理由是时间不是钱
 
 **`digest`**
@@ -96,22 +96,22 @@
 
 ### 文件职责
 
-| 文件 | 行数 | 职责 |
-|---|---|---|
-| `main.py` | 327 | 装配页面：顶栏（含 TTS 状态芯片）+ 筛选 + 表格 + 分页；`run()` 启服务 |
-| `ledger_table.py` | 1005 | 表格：勾选列、表头、行、产物格、格子状态与配色、批量条、发起生成、操作后回到原位 |
-| `detail_panel.py` | 411 | 展开面板：语言开关、这一版的元信息、修改指令、下载/合成/操作台/重做 |
-| `actions.py` | 1335 | **界面动作**：读数据、跑生成、批量重抓/删除、配置读写、TTS 状态/分段/生成/写回稿子、打开文件 |
-| `tts_panel.py` | 696 | **TTS 操作台**：可编辑分段、三态与缓存、逐段生成/重掷/插事件、整体合成（走 `produce(segments=..., rendered=...)`） |
-| `voice_controls.py` | 362 | 一组声音配置控件（**三种模式**/音色/语气或音色描述/参考音频/上传）；**统一配置与每段的单独配置是同一个类的两个实例** |
-| `import_dialog.py` | 137 | 链接导入对话框 |
-| `source_dialog.py` | 156 | **从订阅导入**：选源 + 最近几天 + 每源上限，不调 LLM |
-| `settings_dialog.py` | 612 | **设置面板**：四个子页（内容偏好 / 文案 → `profile.yaml`；TTS / 运行设置 → `.env`） |
-| `audio_progress.py` | 129 | 音频合成的进度浮窗 |
-| `intake_progress.py` | 59 | 批量采集的进度提示条（工作线程写字典、UI 轮询） |
-| `theme.py` | 410 | 主题与列宽；`short_title()` / `short_url()` 截断 |
+| 文件 | 职责 |
+|---|---|
+| `main.py` | 装配页面：顶栏（含 TTS 状态芯片）+ 筛选 + 表格 + 分页；`run()` 启服务 |
+| `ledger_table.py` | 表格：勾选列、表头、行、产物格、格子状态与配色、批量条、发起生成、操作后回到原位 |
+| `detail_panel.py` | 展开面板：语言开关、这一版的元信息、修改指令、下载/合成/操作台/重做 |
+| `actions.py` | **界面动作**：读数据、跑生成、批量重抓/删除、配置读写、TTS 状态/分段/生成/写回稿子、打开文件 |
+| `tts_panel.py` | **TTS 操作台**：可编辑分段、三态与缓存、逐段生成/重掷/插事件、整体合成（走 `produce(segments=..., rendered=...)`） |
+| `voice_controls.py` | 一组声音配置控件（**三种模式**/音色/语气或音色描述/参考音频/上传）；**统一配置与每段的单独配置是同一个类的两个实例** |
+| `import_dialog.py` | 链接导入对话框 |
+| `source_dialog.py` | **从订阅导入**：选源 + 最近几天 + 每源上限，不调 LLM |
+| `settings_dialog.py` | **设置面板**：四个子页（内容偏好 / 文案 → `profile.yaml`；TTS / 运行设置 → `.env`） |
+| `audio_progress.py` | 音频合成的进度浮窗 |
+| `intake_progress.py` | 批量采集的进度提示条（工作线程写字典、UI 轮询） |
+| `theme.py` | 主题与列宽；`short_title()` / `short_url()` 截断 |
 
-操作台的后端能力在 `src/dna/tts/console.py`（118 行）：音色表、参考音频候选与解析、
+操作台的后端能力在 `src/dna/tts/console.py`：音色表、参考音频候选与解析、
 单段试听。**这三件都不能在前端自己算** —— 音色表在服务端，参考音频的相对路径按
 `data_dir` 解析（不是仓库根），前端另写一套的结果是「界面上看着有、合成时找不到」。
 
@@ -123,7 +123,7 @@
 |---|---|
 | `load_rows()` | 读表格数据：一次查一页，**产物矩阵一次查完**（逐格查是几百次往返） |
 | `run_production()` | **在后台线程里**跑生成（`run.io_bound`） |
-| `audio_estimate_seconds()` | 这一格音频要等多久（RTF ≈ 2.5，长文案约 37 分钟） |
+| `audio_estimate_seconds()` | 这一格音频要等多久。**倍率必须从配置读、一处定义**，实测值见 [14_tts_guide.md](14_tts_guide.md) |
 | `last_instructions()` | 上一版是带着什么额外要求生成的 |
 | `preview_links()` / `import_links()` | 粘贴一段文本 → 认出链接 → 入库 |
 | `production_text()` / `production_file()` / `production_sidecar()` | 读回产物供预览与下载 |

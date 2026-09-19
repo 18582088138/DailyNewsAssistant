@@ -32,7 +32,12 @@ from pathlib import Path
 from nicegui import ui
 
 from dna.produce import ProductionKind, spec
-from dna.produce.tasks import DEFAULT_LANGUAGE, LANGUAGE_LABELS, LANGUAGES
+from dna.produce.tasks import (
+    LANGUAGE_LABELS,
+    LANGUAGES,
+    default_language,
+    normalize_lang,
+)
 from frontends.nicegui_app import actions
 from frontends.nicegui_app.actions import RowView
 from frontends.nicegui_app.tts_panel import open_panel as open_tts_panel
@@ -45,15 +50,20 @@ def render(
     *,
     on_change,
     on_redo,
-    lang: str = DEFAULT_LANGUAGE,
+    lang: str = "",
 ) -> None:
     """
     把某个产物的详情画进容器 / Draw one production's detail into the container.
 
     参数 / Args:
         on_redo: 重做的发起函数，由表格层提供（长文案要先弹形式选择框）
-        lang:    当前显示哪个语言版本
+        lang:    当前显示哪个语言版本；空串表示「按配置的默认语言」
     """
+    # 这一层往下，`lang` 会当字典键（`row.production`）、当 `LANGUAGE_LABELS` 的下标、
+    # 还会跟 `default_language()` 比较——**哨兵空串在这三处都是错的**：
+    # 前者查不到（库里只有 `zh` / `en`），中者直接 KeyError 把整个面板打不开。
+    lang = normalize_lang(lang)
+
     container.clear()
     record = row.production(kind, lang)
     task = spec(kind)
@@ -251,7 +261,7 @@ def _render_actions(
             )
         else:
             hint = f"调用 LLM 生成{task.label}，约 {task.approx_calls} 次调用"
-            if lang != DEFAULT_LANGUAGE:
+            if lang != default_language():
                 hint += f"（{LANGUAGE_LABELS[lang]}版，单独计费）"
             button.tooltip(hint)
 
@@ -402,7 +412,7 @@ def _reveal(path: str | Path) -> None:
         ui.notify(error, type="warning")
 
 
-def _render_empty(record, label: str, lang: str) -> None:  # noqa: ANN001
+def _render_empty(record, label: str, lang: str) -> None:
     """还没有产物时显示什么 / What to show before anything exists."""
     if record is not None and not record.ok:
         # 失败原因**原样显示**：人要据此判断是重试、改配置，还是这篇本来就不该做

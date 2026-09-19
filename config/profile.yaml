@@ -35,15 +35,25 @@ video_keywords:
   - release
   - launch
 
-# 输出语言 / output languages: zh | en
-languages:
-  - zh
-
 # 每期日报最多收录条数 / max entries per issue
 digest_max_entries: 15
 
-# 每条总结的句数上限 / max sentences per summary
-summary_max_sentences: 2
+# 超出字数区间时最多回炉几次 / rewrite rounds for an out-of-range draft
+# 摘要每条都跑，回炉一次成本就翻倍；文案单篇按需跑，多给一次机会划得来。
+copy_max_rewrites: 2
+summary_max_rewrites: 1
+
+# 喂给模型的正文上限（字）/ how much body text each node sends
+# 两个数不一样是刻意的：摘要每条都跑，上限乘以条目数；文案单篇按需跑，宽一点只影响这一次。
+# 截短是有代价的——实测一篇 4069 字的技术稿，被切掉的尾部含采样参数和一条关键局限，
+# 而那正是「必须说局限」要用的料（见 docs/issues/008）。
+summary_body_chars: 3000
+script_body_chars: 6000
+
+# 删掉的两项（都是「配了没用」）/ removed because nothing ever read them:
+#   languages            —— 全仓无人读取；语言是每次生成时的参数（--lang），不是全局偏好
+#   summary_max_sentences —— summarize.py 全文不引用；句数约束实际写在
+#                            config/prompts/summarize.md 的提示词里
 
 # ------------------------------------------------------------
 # 媒体抓取上限 / media caps per article
@@ -91,6 +101,43 @@ longform_duration_seconds: [300, 900]   # 长文案，约 2025~6075 字（按需
 # 这是账号品牌，换栏目就改这里；提示词里只留「结尾用这句」的规则。
 # ------------------------------------------------------------
 cta_line: "关注我，下期分享 AI 行业最新进展"
+
+# ------------------------------------------------------------
+# 进阶旋钮 / advanced tuning
+#
+# 这一节**不出现在设置面板里**，只在这个文件里改——它们要懂后果才该动。
+# 下面全部是注释状态：**不写就是用默认值**（默认值定义在
+# src/dna/core/config.py 的 Tuning 模型上，这里不抄一份，抄了必然漂移）。
+# 要改哪一项，把那一行取消注释再改值。
+#
+# 它们此前全都写死在代码里。按优先级 env > config > docs > code，
+# 凡是影响「日报收录什么、一篇花多少钱、稿子多长」的值都必须能在这里调。
+# ------------------------------------------------------------
+# tuning:
+#   # 选题打分（五个权重合计 1.0；改一个记得调别的，否则总分跑出 0~1）
+#   weight_keyword: 0.35        # 命中关注词
+#   weight_multi_source: 0.25   # 几家媒体都报了
+#   weight_freshness: 0.20      # 新鲜度
+#   weight_substance: 0.12      # 正文篇幅
+#   weight_media: 0.08          # 有没有配图
+#   source_saturation: 4        # 几家报道算满分
+#   substance_saturation: 1500  # 正文多少字算满分
+#   freshness_window_hours: 48  # 新鲜度衰减到零的小时数
+#   video_scan_chars: 600       # 视频关键词只在正文前这么多字里扫
+#   focus_scan_chars: 2000      # 关注关键词同上；窗口太小会让靠后的词命不中
+#
+#   # 判重：保守一点。漏合并读者看得见，错合并看不见。
+#   hamming_threshold: 3
+#   simhash_sample_chars: 500
+#
+#   # 长文案（最贵的产物，每节一次调用）
+#   longform_min_body_chars: 800    # 正文不足这么长就直接拒绝，不发请求
+#   longform_expansion_ratio: 1.2   # 目标字数 = 原文 × 此值
+#   longform_min_sections: 4
+#   longform_max_sections: 8        # 这就是单篇的费用上限
+#
+#   # 趋势综述：条目太少时不写，省一次调用
+#   min_entries_for_trend: 4
 
 # ------------------------------------------------------------
 # 工作台里的「NEW」标识没有配置项 / the "NEW" badge has no setting

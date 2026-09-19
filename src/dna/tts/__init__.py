@@ -21,8 +21,8 @@ second copy of the same thing guarantees the two drift apart.
 """
 
 from dna.tts.base import (
+    DEFAULT_RTF_ESTIMATE,
     DEFAULT_SAMPLE_RATE,
-    RTF_ESTIMATE,
     AudioClip,
     SpeechSegment,
     TTSError,
@@ -38,15 +38,15 @@ from dna.tts.factory import PROVIDERS, get_tts, reset_cache, voice_for_role
 from dna.tts.preprocess import PreparedSpeech, prepare_for_speech
 from dna.tts.segment import clean_for_speech, split_for_speech
 from dna.tts.service import DEFAULT_GUEST_SPEAKER, DEFAULT_SPEAKER, PROVIDER_NAME
-from dna.tts.supervisor import ServiceStatus, ensure_gui, ensure_service, gui_url
+from dna.tts.supervisor import ServiceStatus, ensure_service
 
 __all__ = [
     "DEFAULT_GUEST_SPEAKER",
+    "DEFAULT_RTF_ESTIMATE",
     "DEFAULT_SAMPLE_RATE",
     "DEFAULT_SPEAKER",
     "PROVIDERS",
     "PROVIDER_NAME",
-    "RTF_ESTIMATE",
     "AudioClip",
     "PreparedSpeech",
     "ServiceStatus",
@@ -58,10 +58,8 @@ __all__ = [
     "VoiceSpec",
     "clean_for_speech",
     "encode_wav",
-    "ensure_gui",
     "ensure_service",
     "estimate_synthesis_seconds",
-    "gui_url",
     "get_tts",
     "prepare_for_speech",
     "reset_cache",

@@ -330,7 +330,10 @@ def _render_references(digest: DailyDigest, links: list[EntryLink]) -> str:
         f"# 来源 / References — {digest.date:%Y-%m-%d} 每日 AI 资讯",
         "",
         f"> 本期 {len(digest.entries)} 条，生成于 {digest.generated_at:%Y-%m-%d %H:%M}。",
-        "> 条目资产（正文·配图·视频·文案）在 `outputs/articles/` 下，本文件**按 id 引用，不复制文件**。",
+        (
+            "> 条目资产（正文·配图·视频·文案）在 `outputs/articles/` 下，"
+            "本文件**按 id 引用，不复制文件**。"
+        ),
         "> 每篇下载下来的文件名见各条目目录里的 `references.md`。",
         "",
     ]

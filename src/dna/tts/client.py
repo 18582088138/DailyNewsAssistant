@@ -10,8 +10,6 @@ Wire-level only: requests, status codes and JSON. No policy lives here.
     GET  /info                    引擎、设备、精度（记进台账）
     GET  /voices                  可用音色
     POST /tts/synthesize          **单段**合成，`encoding=base64` 直接回音频
-    POST /gui/handoff             把稿子交给 TTS 图形界面精修
-    GET  /gui/handoff/{token}     查那张交接单（生成完会写回产物清单）
     GET  /outputs/{run}/{file}    取产物
 
 为什么本机地址要关掉代理 / Why the proxy is bypassed for local addresses:
@@ -27,9 +25,9 @@ from __future__ import annotations
 import base64
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from dna.core.logging import get_logger
+from dna.core.urls import is_local_url
 from dna.tts.base import TTSError
 
 logger = get_logger("tts.client")
@@ -38,12 +36,7 @@ logger = get_logger("tts.client")
 # Liveness must be fast; the UI cannot wait twenty seconds to learn the service is down.
 HEALTH_TIMEOUT = 3.0
 
-_LOCAL_HOSTS = frozenset({"127.0.0.1", "localhost", "::1", "0.0.0.0"})
-
-
-def is_local_url(url: str) -> bool:
-    """这个地址是不是本机 / Whether the address is on this machine."""
-    return (urlparse(url).hostname or "") in _LOCAL_HOSTS
+# `is_local_url` 搬到了 `core/urls.py`（两层共用一份），这里转发。
 
 
 class TTSServiceClient:
@@ -67,7 +60,7 @@ class TTSServiceClient:
         """在线吗 / Is it up? 任何异常都算不在线（这就是这个方法要回答的问题）。"""
         try:
             return self._get("/health", timeout=timeout).get("status") == "ok"
-        except Exception:  # noqa: BLE001 - 连不上、超时、502 都只说明「不在线」
+        except Exception:
             return False
 
     def info(self) -> dict[str, Any]:
@@ -166,56 +159,6 @@ class TTSServiceClient:
         return ref_audio
 
     # ------------------------------------------------- 交接给界面 / hand-off
-
-    def handoff(
-        self,
-        segments: list[str],
-        *,
-        title: str = "",
-        source: str = "DailyNewsAssistant",
-        voice: str | None = None,
-        instruct: str | None = None,
-        return_url: str = "",
-        meta: dict[str, Any] | None = None,
-    ) -> dict[str, Any]:
-        """
-        把稿子交给 TTS 图形界面 / Hand the script to the TTS workbench.
-
-        返回 `{"token", "gui_url"}`：打开那个 URL，文本已经填在多段界面里。
-
-        `return_url` 是**调用方自己的页面地址**：界面生成完会照着它跳回来
-        （关不掉标签页时才退回跳转）。不给的话人得自己找回原来那个标签页。
-        """
-        return self._post("/gui/handoff", {
-            "segments": segments, "title": title, "source": source,
-            "voice": voice, "instruct": instruct,
-            "return_url": return_url, "meta": meta or {},
-        }, timeout=30.0)
-
-    def handoff_state(self, token: str) -> dict[str, Any]:
-        """查交接单 / Poll one hand-off record（`status` 变 `done` 就有产物了）。"""
-        return self._get(f"/gui/handoff/{token}", timeout=30.0)
-
-    def download(self, relative: str, dest: Path) -> Path:
-        """
-        取一个产物 / Fetch one produced file，`relative` 形如 `gui-xxx/merged.wav`。
-
-        走 HTTP 而不是直接读盘：服务可能在另一台机器上，那边的路径在这里不存在。
-        Over HTTP rather than by path: the service may be on another machine.
-        """
-        import httpx
-
-        url = f"{self.base_url}/outputs/{relative.lstrip('/')}"
-        dest.parent.mkdir(parents=True, exist_ok=True)
-        try:
-            with httpx.Client(timeout=120.0, trust_env=self.trust_env) as http:
-                response = http.get(url)
-                response.raise_for_status()
-                dest.write_bytes(response.content)
-        except Exception as exc:  # noqa: BLE001 - 统一成 TTSError 交给上层显示
-            raise TTSError(f"取产物失败 {relative}：{exc}") from exc
-        return dest
-
     # ------------------------------------------------------ 内部 / internals
 
     def _get(self, path: str, *, timeout: float) -> dict[str, Any]:
@@ -262,4 +205,4 @@ def _detail(response: Any) -> str:
         return response.text[:300]
 
 
-__all__ = ["HEALTH_TIMEOUT", "TTSServiceClient", "is_local_url"]
+__all__ = ["HEALTH_TIMEOUT", "TTSServiceClient"]

@@ -20,6 +20,7 @@ import httpx
 
 from dna.core.errors import SourceError
 from dna.core.logging import get_logger
+from dna.core.urls import is_local_url
 
 logger = get_logger("sources.http")
 
@@ -126,17 +127,8 @@ def fetch_bytes(
         raise SourceError(f"请求失败：{url} —— {exc}") from exc
 
 
-def is_local_url(url: str) -> bool:
-    """
-    是否指向本机服务 / Whether the URL points at a service on this machine.
-
-    自建 RSSHub 跑在 localhost:1200，必须绕过公司代理。
-    The self-hosted RSSHub listens on localhost:1200 and must bypass the proxy.
-    """
-    lowered = url.lower()
-    return any(
-        marker in lowered for marker in ("://localhost", "://127.0.0.1", "://0.0.0.0", "://[::1]")
-    )
+# `is_local_url` 的唯一实现在 `core/urls.py`（这里曾经有一份子串版，
+# 会把 http://localhost.example.com 也认成本机）。这里只做转发，保持调用点不变。
 
 
 __all__ = ["DEFAULT_HEADERS", "DEFAULT_TIMEOUT", "fetch_bytes", "fetch_text", "is_local_url"]

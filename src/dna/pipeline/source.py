@@ -138,7 +138,9 @@ def _read_persisted(
     for raw in data.get("media") or []:
         try:
             media.append(MediaAsset.model_validate(raw))
-        except Exception:  # noqa: BLE001 - 单个媒体项损坏不影响正文
+        except Exception as exc:
+            # 单条媒体记录坏掉不该毁掉整篇正文；但要留个痕，否则「图少了」查不到原因
+            logger.debug("跳过一条无法解析的媒体记录：%s", exc)
             continue
 
     return body, media

@@ -26,13 +26,12 @@ standing rule here, and it also means the two cannot break differently.
     article and therefore never joins the batch.
 """
 
+from dna.produce.badges import is_new_article
+from dna.produce.generate import read_production
+from dna.produce.results import ProduceResult
 from dna.produce.service import (
-    ProduceResult,
-    import_audio,
-    is_new_article,
     produce,
     produce_all,
-    read_production,
     save_script_text,
     speech_segments_for,
 )
@@ -52,10 +51,9 @@ __all__ = [
     "ProduceResult",
     "ProductionKind",
     "TaskSpec",
-    "import_audio",
-    "is_new_article",
     "batch_kinds",
     "estimate_calls",
+    "is_new_article",
     "produce",
     "produce_all",
     "read_production",

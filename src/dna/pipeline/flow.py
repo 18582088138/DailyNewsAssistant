@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from datetime import date as Date
 from datetime import datetime
 
-from dna.core.config import Profile, Settings, get_settings, safe_profile
+from dna.core.config import Profile, Settings, safe_profile
 from dna.core.logging import get_logger
 from dna.core.models import (
     Cluster,
@@ -110,14 +110,18 @@ def run_daily(
     ordering can be inspected before any money is spent.
     """
     started = time.perf_counter()
-    s = settings or get_settings()
     prof = profile or safe_profile()
     report = PipelineReport()
 
     limit = max_entries if max_entries is not None else prof.digest_max_entries
 
     # -- 无 LLM 的前半段 / the free half -------------------------------------
-    report.dedup_result = dedup(items, use_embeddings=use_embeddings)
+    report.dedup_result = dedup(
+        items,
+        threshold=prof.tuning.hamming_threshold,
+        sample_chars=prof.tuning.simhash_sample_chars,
+        use_embeddings=use_embeddings,
+    )
     report.ranked = rank_clusters(report.dedup_result.clusters, prof, limit=limit)
 
     if dry_run:
@@ -137,7 +141,11 @@ def run_daily(
 
     # -- 调用 LLM 的后半段 / the billed half ---------------------------------
     clusters = [c for c, _, _ in report.ranked]
-    summary_results = summarize.summarize_all(clusters, llm, chars=prof.summary_chars)
+    summary_results = summarize.summarize_all(
+        clusters, llm, chars=prof.summary_chars,
+        max_rewrites=prof.summary_max_rewrites,
+        body_chars=prof.summary_body_chars,
+    )
     report.summaries_degraded = sum(1 for r in summary_results if r.degraded)
 
     digest = _assemble(
@@ -148,7 +156,9 @@ def run_daily(
     )
 
     note, trend_keywords = trend.build_trend(
-        [(e.title_zh, e.summary_zh) for e in digest.entries], llm
+        [(e.title_zh, e.summary_zh) for e in digest.entries],
+        llm,
+        min_entries=prof.tuning.min_entries_for_trend,
     )
     digest.trend_note_zh = note
 

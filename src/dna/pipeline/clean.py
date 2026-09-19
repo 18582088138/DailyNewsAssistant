@@ -60,7 +60,10 @@ _SPACE_RUN_RE = re.compile(r"[ \t 　]+")
 
 # 成稿门槛 / minimum viable content
 MIN_TITLE_CHARS = 4
-MIN_BODY_CHARS = 40
+
+# 这里曾经有一个 `MIN_BODY_CHARS = 40`，**从来没有被任何代码读过**，
+# 但它和 `extract/article.py` 里那个 80 同名 —— 两个不同的门槛长着同一个名字，
+# 谁读到哪一个全看 import 了谁。删掉它，抽取那一侧改叫 `MIN_EXTRACTED_CHARS`。
 
 
 # 需要折成半角的全角字符 / full-width characters folded to their ASCII form
@@ -203,7 +206,6 @@ def clean_all(records: list[dict]) -> list[NewsItem]:
 
 
 __all__ = [
-    "MIN_BODY_CHARS",
     "MIN_TITLE_CHARS",
     "clean_all",
     "clean_text",

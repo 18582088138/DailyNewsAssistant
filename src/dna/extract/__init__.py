@@ -7,11 +7,11 @@
 Extraction failures degrade to "title and link only" rather than raising; see article.py.
 """
 
-from dna.extract.article import MIN_BODY_CHARS, extract_article, fetch_article
+from dna.extract.article import MIN_EXTRACTED_CHARS, extract_article, fetch_article
 from dna.extract.media import extract_media, looks_like_image_url
 
 __all__ = [
-    "MIN_BODY_CHARS",
+    "MIN_EXTRACTED_CHARS",
     "extract_article",
     "extract_media",
     "fetch_article",

@@ -53,6 +53,9 @@ The GUI is mounted on the service: one process, one copy of the weights.
 | `TTS_REF_AUDIO_GUEST` / `_TEXT_GUEST` | 空 | 嘉宾的参考音频；空 = 嘉宾用内置音色 |
 | `TTS_VOICE_HOST` / `TTS_VOICE_GUEST` | 空 | 内置音色，空 = `Serena` / `Uncle_Fu` |
 
+> 引擎 ABI 与操作台交互上踩过的坑，根因见
+> [issues/012](issues/012-tts-engine-abi-and-console.md)。
+>
 > `TTS_REQUEST_TIMEOUT` 别往小改。CPU 上实测 RTF≈13，一段 120 字要三四分钟，
 > 默认的 20 秒超时会在**服务正常工作时**把请求掐掉 —— 那是最难查的一类失败。
 
@@ -335,6 +338,6 @@ dna gui                             # 展开口播格 → 「合成音频」或�
 
 | 限制 | 说明 |
 |---|---|
-| `RTF_ESTIMATE = 2.5` 只是数量级 | 那是 0.6B OpenVINO 核显上量的；服务侧换 1.7B 后 CPU 实测 ≈13，**按钮上的预估会少报五倍**。准确值来自合成时逐段回报的进度 |
+| `RTF_ESTIMATE = 2.5` 只是数量级 | 那是 0.6B OpenVINO 核显上量的；服务侧换 1.7B 后 CPU 实测 ≈13，**按钮上的预估会少报五倍**。准确值来自合成时逐段回报的进度。这个倍率**应当从配置读、一处定义**，见 [issues/009](issues/009-tts-speaking-rate.md) |
 | 音色设计不可复现 | 同一段描述每次采样出的声音不完全一样；要稳定复用就录下来当参考音频走克隆 |
 | 服务重启会丢正在跑的那一条 | 已完成的段落仍在服务端 outputs/ 里 |

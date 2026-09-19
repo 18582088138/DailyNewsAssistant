@@ -140,7 +140,7 @@ def collect(
             logger.warning("信息源 %s 采集失败：%s", adapter.id, exc)
             result.failures.append(SourceFailure(adapter.id, adapter.name, str(exc)))
             continue
-        except Exception as exc:  # noqa: BLE001 - 兜底：任何异常都不能中断整轮采集
+        except Exception as exc:
             logger.exception("信息源 %s 抛出未预期异常", adapter.id)
             result.failures.append(
                 SourceFailure(adapter.id, adapter.name, f"未预期异常 {type(exc).__name__}: {exc}")

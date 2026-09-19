@@ -26,6 +26,7 @@ from dataclasses import dataclass
 
 from pydantic import BaseModel, Field
 
+from dna.core.config import Profile, field_default
 from dna.core.length import char_feedback
 from dna.core.logging import get_logger
 from dna.core.models import Cluster
@@ -37,7 +38,8 @@ logger = get_logger("pipeline.summarize")
 # 喂给模型的正文上限 / how much body text is sent
 # 3000 字足够写出准确摘要，再多只是线性增加 input token 费用。
 # 3000 characters is plenty for an accurate summary; more only scales the input bill.
-MAX_BODY_CHARS = 3000
+# 指向模型字段，不再自己写一遍数字（同一个参数两处写死是本项目反复出过的问题）
+SUMMARY_BODY_LIMIT: int = field_default(Profile, "summary_body_chars")
 
 # 提示词正文在 `config/prompts/summarize.md` / The prompt text lives in that file.
 PROMPT_NAME = "summarize"
@@ -48,7 +50,10 @@ PROMPT_NAME = "summarize"
 # 整期成本翻倍。文案是单篇按需跑的，多试一次只影响那一篇。
 # Summaries run for every entry, so one rewrite already doubles an issue's cost, while a
 # script is produced one article at a time on request.
-MAX_REWRITES = 1
+#
+# 兜底值而已：真正的取值来自 `Profile.summary_max_rewrites`（`config/profile.yaml`），
+# 因为它直接决定一期的账单，属于该让人调的旋钮。
+DEFAULT_MAX_REWRITES: int = field_default(Profile, "summary_max_rewrites")
 
 # 为什么要给指标排优先级 / Why the metrics are ranked
 #
@@ -129,6 +134,7 @@ def build_messages(
     *,
     instructions: str = "",
     chars: tuple[int, int] | None = None,
+    body_chars: int | None = None,
 ) -> list[ChatMessage]:
     """
     构造提示词 / Build the prompt.
@@ -140,7 +146,7 @@ def build_messages(
     the model said — and costs nothing.
     """
     item = cluster.canonical
-    body = item.text[:MAX_BODY_CHARS].strip()
+    body = item.text[: body_chars or SUMMARY_BODY_LIMIT].strip()
 
     lines = [f"标题：{item.title}"]
 
@@ -168,6 +174,8 @@ def summarize_cluster(
     *,
     instructions: str = "",
     chars: tuple[int, int] | None = None,
+    max_rewrites: int | None = None,
+    body_chars: int | None = None,
 ) -> SummaryResult:
     """
     为一个事件生成摘要 / Summarise one event.
@@ -179,15 +187,19 @@ def summarize_cluster(
     失败时降级为标题，**不抛异常**——理由见模块文档。
     Failures degrade to the title rather than raising; see the module docstring.
     """
-    messages = build_messages(cluster, instructions=instructions, chars=chars)
+    messages = build_messages(
+        cluster, instructions=instructions, chars=chars, body_chars=body_chars
+    )
     calls = 0
     summary = ""
     tags: list[str] = []
 
-    for attempt in range(MAX_REWRITES + 1):
+    cap = DEFAULT_MAX_REWRITES if max_rewrites is None else max(0, max_rewrites)
+
+    for attempt in range(cap + 1):
         try:
             out = llm.chat_json(messages, SummaryOut, temperature=0.3)
-        except Exception as exc:  # noqa: BLE001 - 单条失败不能毁掉整期日报
+        except Exception as exc:
             if calls:
                 # 回炉那一次失败了，但上一稿还在手里：**用上一稿，不要退回标题**。
                 # 长度不达标的摘要仍然是一条真摘要，比标题有信息量得多。
@@ -211,7 +223,7 @@ def summarize_cluster(
         if feedback is None:
             return SummaryResult(summary=summary, tags=tags, calls=calls)
 
-        if attempt == MAX_REWRITES:
+        if attempt == cap:
             # 差几个字不值得再花一次调用。**返回它并标记**，让调用方知道没达标。
             logger.info(
                 "摘要 %d 字未落入 %d~%d 字，按现状返回：%s",
@@ -229,6 +241,8 @@ def summarize_all(
     llm: LLMProvider,
     *,
     chars: tuple[int, int] | None = None,
+    max_rewrites: int | None = None,
+    body_chars: int | None = None,
 ) -> list[SummaryResult]:
     """
     批量生成摘要 / Summarise a batch.
@@ -239,7 +253,10 @@ def summarize_all(
     429s and retries rather than speed, while making cost and logs harder to follow. A
     few dozen entries per issue is perfectly acceptable serially.
     """
-    results = [summarize_cluster(c, llm, chars=chars) for c in clusters]
+    results = [
+        summarize_cluster(c, llm, chars=chars, max_rewrites=max_rewrites, body_chars=body_chars)
+        for c in clusters
+    ]
     degraded = sum(1 for r in results if r.degraded)
     off_target = sum(1 for r in results if not r.within_target)
     if off_target:
@@ -253,9 +270,9 @@ def summarize_all(
 
 __all__ = [
     "DEFAULT_CHARS",
-    "MAX_BODY_CHARS",
-    "MAX_REWRITES",
+    "DEFAULT_MAX_REWRITES",
     "PROMPT_NAME",
+    "SUMMARY_BODY_LIMIT",
     "SummaryOut",
     "SummaryResult",
     "build_messages",

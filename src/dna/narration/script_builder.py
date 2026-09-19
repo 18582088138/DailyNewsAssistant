@@ -34,43 +34,26 @@ Short-video (25–35 s) and voice-over (1–2 min) scripts. The long-form script
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-
 from pydantic import BaseModel, Field
 
 from dna.core.logging import get_logger
 from dna.core.models import Article
 from dna.core.prompts import load_prompt, render_prompt
-from dna.llm.base import ChatMessage, LLMProvider, assistant, system, user
+from dna.llm.base import LLMProvider
 from dna.narration.duration import (
-    char_feedback,
-    count_units,
-    estimate_seconds,
     prompt_char_budget,
     unit_window,
+)
+from dna.narration.script_engine import (
+    DEFAULT_MAX_REWRITES,
+    SCRIPT_BODY_LIMIT,
+    ScriptResult,
+    _generate,
+    article_block,
 )
 
 logger = get_logger("narration.script_builder")
 
-# 喂给模型的正文上限 / how much body text is sent
-#
-# 比摘要节点的 3000 字宽一倍，因为两者的成本结构完全不同 / Twice the summariser's
-# 3000, because the cost structures differ:
-#     摘要是**每条都跑**的，一期几十条，正文上限直接乘以条目数；
-#     文案是**单篇按需**跑的，宽一点只影响这一次调用。
-#     Summarisation runs per entry — dozens per issue — so the cap is multiplied by the
-#     entry count. Scripts are produced one article at a time on request, where a wider
-#     cap costs one call's input.
-#
-# 3000 字为什么不够：实测一篇 4069 字的技术稿，被切掉的最后 1069 字里有采样参数
-# （temperature / top_p / Think Max 需要 384K 上下文）和一条关键局限——官方没给
-# Jinja chat template，「能跑」和「跑对」是两回事。这些正是「必须说局限」要用的料，
-# 而模型根本没看到。
-# A measured 4069-character article lost sampling parameters and a key caveat — no
-# official Jinja chat template, so "runs" and "runs correctly" differ — in the truncated
-# tail. That is precisely the material the "state the limitations" rule needs, and the
-# model never saw it.
-MAX_BODY_CHARS = 6000
 
 # 视频稿结尾的引导语默认值 / default sign-off for video scripts
 # 实际取值来自 `Profile.cta_line`，这里只是不传参时的兜底，让构建器保持可单测。
@@ -78,12 +61,6 @@ MAX_BODY_CHARS = 6000
 # builders unit-testable without config.
 DEFAULT_CTA = "关注我，下期分享 AI 行业最新进展"
 
-# 回炉重写次数上限 / how many rewrites are allowed
-# 每次重写都是一次计费调用。两次之后仍不达标就接受现状——模型对这篇的长度
-# 判断已经稳定，再试下去是在烧钱换一点点字数。
-# Each rewrite is a billed call. After two the model's sense of length for this piece has
-# settled, and further attempts spend money for a handful of characters.
-MAX_REWRITES = 1
 
 # 提示词正文都在 `config/prompts/` / Every prompt text lives under that directory
 #     shortvideo.zh.md · shortvideo.en.md · narration.zh.md · narration.en.md
@@ -160,28 +137,6 @@ def _window(
     return prompt_char_budget(low, lang=lang), prompt_char_budget(high, lang=lang)
 
 
-@dataclass
-class ScriptResult:
-    """
-    一次文案生成的结果 / The result of one script generation.
-
-    带上 `seconds` 与 `calls`：前者让调用方知道是否达标，后者让费用可见——
-    回炉两次意味着这一篇花了三次调用。
-    `seconds` tells the caller whether the target was met; `calls` keeps the cost
-    visible, since two rewrites mean this piece cost three calls.
-    """
-
-    text: str
-    seconds: float
-    calls: int = 1
-    within_target: bool = True
-    title: str = ""
-    subtitle: str = ""
-
-    @property
-    def chars(self) -> int:
-        return len(self.text)
-
 
 class ShortVideoOut(BaseModel):
     """短视频文案的结构化输出 / Structured output of a short-video script."""
@@ -211,6 +166,8 @@ def build_short_video(
     cta: str = DEFAULT_CTA,
     lang: str = "zh",
     instructions: str = "",
+    max_rewrites: int | None = None,
+    body_chars: int | None = None,
 ) -> ScriptResult:
     """
     生成短视频文案 / Build a short-video script.
@@ -232,7 +189,9 @@ def build_short_video(
     """
     if lang != "zh":
         return _build_english_short_video(
-            article, llm, low=low, high=high, chars=chars, instructions=instructions
+            article, llm, low=low, high=high, chars=chars, instructions=instructions,
+            max_rewrites=max_rewrites,
+        body_chars=body_chars,
         )
 
     lo_chars, hi_chars = _window(chars, low, high, "zh")
@@ -255,6 +214,8 @@ def build_short_video(
         low_units=lo_chars,
         high_units=hi_chars,
         label="短视频",
+        max_rewrites=max_rewrites,
+        body_chars=body_chars,
     )
 
 
@@ -266,6 +227,8 @@ def _build_english_short_video(
     high: float,
     chars: tuple[int, int] | None,
     instructions: str,
+    max_rewrites: int | None = None,
+    body_chars: int | None = None,
 ) -> ScriptResult:
     """
     英文版短视频稿 / The English short-video script.
@@ -295,6 +258,8 @@ def _build_english_short_video(
         low_units=lo_words,
         high_units=hi_words,
         label="short video",
+        max_rewrites=max_rewrites,
+        body_chars=body_chars,
         lang="en",
     )
 
@@ -309,6 +274,8 @@ def build_narration(
     cta: str = DEFAULT_CTA,
     lang: str = "zh",
     instructions: str = "",
+    max_rewrites: int | None = None,
+    body_chars: int | None = None,
 ) -> ScriptResult:
     """
     生成口播文案 / Build a voice-over script.
@@ -326,7 +293,9 @@ def build_narration(
     """
     if lang != "zh":
         return _build_english_narration(
-            article, llm, low=low, high=high, chars=chars, instructions=instructions
+            article, llm, low=low, high=high, chars=chars, instructions=instructions,
+            max_rewrites=max_rewrites,
+        body_chars=body_chars,
         )
 
     lo_chars, hi_chars = _window(chars, low, high, "zh")
@@ -350,6 +319,8 @@ def build_narration(
         low_units=lo_chars,
         high_units=hi_chars,
         label="口播",
+        max_rewrites=max_rewrites,
+        body_chars=body_chars,
     )
 
 
@@ -361,6 +332,8 @@ def _build_english_narration(
     high: float,
     chars: tuple[int, int] | None,
     instructions: str,
+    max_rewrites: int | None = None,
+    body_chars: int | None = None,
 ) -> ScriptResult:
     """英文版口播稿 / The English voice-over script（原生写，理由同短视频）。"""
     lo_words, hi_words = _window(chars, low, high, "en")
@@ -383,130 +356,21 @@ def _build_english_narration(
         low_units=lo_words,
         high_units=hi_words,
         label="voice-over",
+        max_rewrites=max_rewrites,
+        body_chars=body_chars,
         lang="en",
     )
 
 
-# ---------------------------------------------------------------------------
-# 共用骨架 / the shared skeleton
-# ---------------------------------------------------------------------------
-
-
-def _generate(
-    llm: LLMProvider,
-    *,
-    system_prompt: str,
-    article: Article,
-    schema: type[BaseModel],
-    extract,  # noqa: ANN001 - 各 schema 字段不同，由调用方给取值函数
-    low_units: int,
-    high_units: int,
-    label: str,
-    lang: str = "zh",
-) -> ScriptResult:
-    """
-    生成 + 数字数 + 回炉 / Generate, count, and rewrite if the length misses.
-
-    **验收看字数，秒数只记账。** 提示词里要求的单位与这里检查的单位是同一个，
-    所以差值是减法。先前验收看秒数，而提示词说的是字数——同一个字数在中英比例
-    不同的稿子上实测差 50%，于是合格的稿子被反复回炉，偏短的稿子静静通过。
-    Acceptance is on the unit count while the duration is only recorded. The prompt and
-    this check speak one unit, so the delta is a subtraction. Gating on seconds while
-    prompting in characters sent compliant drafts back and let short ones through.
-
-    回炉时把**上一稿原文**作为 assistant 消息带回去，再附上具体差值。
-    只发一句「太长了」而不给上一稿，模型会从头重写一篇完全不同的稿子，
-    上一稿里写对的部分也一起丢了。
-    The previous draft is sent back as an assistant message alongside the concrete delta.
-    Saying only "too long" without the draft makes the model start over from scratch,
-    discarding the parts that were already right.
-    """
-    messages = [system(system_prompt), user(article_block(article))]
-    calls = 0
-    result: ScriptResult | None = None
-
-    for attempt in range(MAX_REWRITES + 1):
-        out = llm.chat_json(messages, schema, temperature=0.6)
-        calls += 1
-
-        text, title, subtitle = extract(out)
-        # 单位随语言走：中文数字符、英文数词。混用会得出「上一稿 900 字符，
-        # 请删掉 300 words」这种自相矛盾的指令。
-        # The unit follows the language; mixing them yields a self-contradicting delta.
-        units = count_units(text, lang=lang)
-        seconds = estimate_seconds(text)
-        result = ScriptResult(
-            text=text.strip(),
-            seconds=seconds,
-            calls=calls,
-            within_target=True,
-            title=title.strip(),
-            subtitle=subtitle.strip(),
-        )
-
-        feedback = char_feedback(units, low_units, high_units, lang=lang)
-        if feedback is None:
-            logger.info(
-                "%s文案完成：%d 字（目标 %d~%d），约 %.0f 秒，%d 次调用",
-                label, units, low_units, high_units, seconds, calls,
-            )
-            return result
-
-        if attempt == MAX_REWRITES:
-            # 试到上限仍不达标：**返回它而不是报错**。差十几个字的稿子仍然可用，
-            # 人手动删两句就行；为此让整篇产物失败是不划算的。
-            # Still off after the last attempt: return it rather than fail — a draft a
-            # dozen characters out is usable with a manual trim.
-            result.within_target = False
-            logger.warning(
-                "%s文案 %d 次仍未落入 %d~%d 字（实际 %d 字，约 %.0f 秒），按现状返回",
-                label, calls, low_units, high_units, units, seconds,
-            )
-            return result
-
-        logger.debug(
-            "%s文案 %d 字，超出 %d~%d，回炉重写", label, units, low_units, high_units
-        )
-        messages = [*messages, assistant(text), user(feedback)]
-
-    return result  # pragma: no cover - 循环必然返回
-
-
-def article_block(article: Article) -> str:
-    """
-    把文章组织成提示词里的输入块 / Lay the article out as the prompt's input block.
-
-    **`longform.py` 也用这一份。** 先前两个模块各写了一份，而 longform 那份
-    漏掉了「正文为空时禁止编造」这条——两份同样的东西一定会漂移，
-    漂移的方向还偏偏是把安全约束丢掉。
-    Shared with `longform.py`. The two modules previously kept separate copies and the
-    long-form one had lost the "do not fabricate when the body is empty" clause: two
-    copies of the same thing drift, and this one drifted by dropping a safety rule.
-
-    正文截到 `MAX_BODY_CHARS`（6000 字）——上限的取值理由见该常量旁的注释。
-    The body is capped at `MAX_BODY_CHARS`; see that constant for why it sits where it does.
-    """
-    lines = [f"标题：{article.title}"]
-    if article.author:
-        lines.append(f"作者：{article.author}")
-
-    body = article.text[:MAX_BODY_CHARS].strip()
-    if body:
-        lines.append(f"\n正文：\n{body}")
-    else:
-        lines.append("\n（正文抓取失败，只有标题可用——请基于标题写，不要编造任何细节与数字）")
-
-    return "\n".join(lines)
-
 
 __all__ = [
     "DEFAULT_CTA",
-    "MAX_BODY_CHARS",
-    "MAX_REWRITES",
+    "DEFAULT_MAX_REWRITES",
     "PROMPT_INSTRUCTION_BLOCK",
     "PROMPT_NARRATION",
     "PROMPT_RULES",
     "PROMPT_SHORTVIDEO",
+    "SCRIPT_BODY_LIMIT",
     "NarrationOut",
     "ScriptResult",
     "ShortVideoOut",

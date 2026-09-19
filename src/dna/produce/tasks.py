@@ -65,7 +65,12 @@ if TYPE_CHECKING:  # 只为类型标注，运行期不引入 config / typing onl
 # Chinese is the default: the English edition is an optional second version rather than a
 # co-equal one, and generating it bills like anything else.
 LANGUAGES: tuple[str, ...] = ("zh", "en")
-DEFAULT_LANGUAGE = "zh"
+
+# 兜底值，只在 `.env` 没配或配了不认识的值时用到。
+# **默认语言的真正来源是 `DEFAULT_LANGUAGE`（.env）**，见 `default_language()`：
+# 这里曾经是一个写死的 "zh"，于是界面上那个「默认语言」下拉、`.env` 里那一行
+# 都是摆设——改了永远没反应，而 `dna config` 还照样把它显示出来。
+FALLBACK_LANGUAGE = "zh"
 
 LANGUAGE_LABELS = {"zh": "中文", "en": "English"}
 
@@ -153,9 +158,10 @@ class TaskSpec:
     matching audio kind, which is how the workbench knows where to offer synthesis.
     """
 
-    def filename_for(self, lang: str = DEFAULT_LANGUAGE) -> str:
+    def filename_for(self, lang: str = "") -> str:
         """某个语言版本的文件名 / The file name of one language edition."""
-        return lang_suffix_name(self.stem, normalize_lang(lang), self.extension)
+        lang = normalize_lang(lang)
+        return lang_suffix_name(self.stem, lang, self.extension)
 
     audio_of: ProductionKind | None = None
     """
@@ -259,17 +265,30 @@ DISPLAY_ORDER: tuple[ProductionKind, ...] = (
 )
 
 
+def default_language() -> str:
+    """
+    默认输出语言，从 `.env` 的 `DEFAULT_LANGUAGE` 读 / The configured default language.
+
+    每次调用都现读（`get_settings()` 自己有进程内缓存），不在导入时定住 ——
+    定住的话测试里改了配置也不生效，而这正是它原先失效的方式。
+    """
+    from dna.core.config import get_settings
+
+    value = str(get_settings().default_language).strip().lower()
+    return value if value in LANGUAGES else FALLBACK_LANGUAGE
+
+
 def normalize_lang(lang: str | None) -> str:
     """
     归一化语言代码，不认识的退回默认 / Normalise a language code, falling back to default.
 
-    退回而不是报错：语言来自界面开关与命令行参数，写错了应该出中文版，
+    退回而不是报错：语言来自界面开关与命令行参数，写错了应该出配置里的那个语言，
     而不是让整次生成失败。
     Falls back rather than raising: the value comes from a switch and a flag, and a typo
     should yield the default edition rather than abort the run.
     """
-    value = (lang or DEFAULT_LANGUAGE).strip().lower()
-    return value if value in LANGUAGES else DEFAULT_LANGUAGE
+    value = (lang or "").strip().lower()
+    return value if value in LANGUAGES else default_language()
 
 
 def prerequisite(kind: ProductionKind | str, lang: str) -> tuple[ProductionKind, str] | None:
@@ -317,7 +336,7 @@ _CHAR_WINDOW_FIELDS: dict[ProductionKind, str] = {
 }
 
 
-def char_window(kind: ProductionKind | str, profile: "Profile") -> tuple[int, int] | None:
+def char_window(kind: ProductionKind | str, profile: Profile) -> tuple[int, int] | None:
     """
     这种产物的字数区间 / The character window this kind is accepted against.
 
@@ -360,15 +379,16 @@ def audio_kind(kind: ProductionKind | str) -> ProductionKind | None:
     return AUDIO_OF.get(ProductionKind(kind))
 
 
-def json_sidecar(spec_: TaskSpec, lang: str = DEFAULT_LANGUAGE) -> str | None:
+def json_sidecar(spec_: TaskSpec, lang: str = "") -> str | None:
     """
     该产物是否额外产出一份 JSON / Whether this kind writes a JSON sibling.
 
     只有长文案有：它要按发言人切成 turns 给 TTS 分配音色。
     Only the long-form script does: the TTS stage needs it split into speaker turns.
     """
+    lang = normalize_lang(lang)
     if spec_.kind is ProductionKind.LONGFORM:
-        return lang_suffix_name(spec_.stem, normalize_lang(lang), "json")
+        return lang_suffix_name(spec_.stem, lang, "json")
     return None
 
 
@@ -377,9 +397,9 @@ __all__ = [
     "BATCH_ORDER",
     "DISPLAY_ORDER",
     "TASKS",
-    "audio_kind",
     "ProductionKind",
     "TaskSpec",
+    "audio_kind",
     "batch_kinds",
     "char_window",
     "estimate_calls",

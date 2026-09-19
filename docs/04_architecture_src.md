@@ -41,7 +41,7 @@ frontends ─→ produce ─→ narration ─┐
 
 谁都可以依赖它，它不依赖任何人。
 
-### `core/config.py`（552 行）
+### `core/config.py`
 
 **职责**：`.env` → `Settings`；`config/*.yaml` → `SourceConfig` / `Profile`。
 
@@ -58,7 +58,7 @@ frontends ─→ produce ─→ narration ─┐
   所有 `store_dir` 指向空处且不报错（issue 006-A）。
 - OS 环境变量**覆盖** `.env`；`dna doctor` 显示的是真正生效的那份。
 
-### `core/models.py`（288 行）
+### `core/models.py`
 
 **职责**：贯穿全流程的数据模型，按加工阶段递进。
 
@@ -89,7 +89,15 @@ RawItem（采集，无正文）→ Article（抽取后）→ NewsItem（清洗�
   这类字面量，用 `str.format` 就得让改提示词的人记转义规则。
 - **缺文件不降级。** 空 system prompt 照样发请求、照样计费。
 
-### `core/naming.py`（106 行）· `core/urls.py`（246 行）
+### `core/config_edit.py`
+
+设置面板写 `config/profile.yaml` 与 `.env` 的**唯一入口**。
+
+- **按行 patch，不用 `yaml.safe_dump` 重写整个文件。** `profile.yaml` 里大半是注释
+  （为什么用字数而不是秒数验收、为什么多存图），整体回写会把它们全抹掉。
+- `mask_secret()` 在这里，CLI 那份是复制品（批次 2 合并）。
+
+### `core/naming.py`· `core/urls.py`
 
 `slugify()` / `issue_dir_name()` / `lang_suffix_name()`：目录名必须在 Windows 上活下来——
 剥 `<>:"/\|?*`、避开 `CON`/`PRN`/`COM1`…、结尾不留点和空格。
@@ -98,7 +106,7 @@ RawItem（采集，无正文）→ Article（抽取后）→ NewsItem（清洗�
 去追踪参数、生成稳定 id。抓取失败的文章标题**由 URL 推导**而不是用固定字符串——
 否则每篇失败的都同名同目录，而那些恰恰是最需要人工处理的（issue 005-E）。
 
-### `core/doctor.py`（392 行 + 新增 `check_prompts`）· `core/logging.py` · `core/errors.py`
+### `core/doctor.py`· `core/logging.py` · `core/errors.py`
 
 `run_all()` 按显示顺序跑全部检查，每项返回 `CheckResult` 而不打印，
 所以 CLI 能渲染成表格、单测能直接断言。
@@ -131,7 +139,7 @@ RawItem（采集，无正文）→ Article（抽取后）→ NewsItem（清洗�
   用 `parsed.version`：真 feed 是 `'rss20'`/`'atom10'`，否则是 `''`/`None`（issue 003-A）。
 - `collect()` 的**逐源隔离必须保留**——日报每天无人值守跑，feed 天天挂。
 
-### `sources/filters.py`（144 行）
+### `sources/filters.py`
 
 `build_filter()` 合并全局与源级规则，`apply_filters()` 返回 `kept` + `dropped`（带原因）。
 
@@ -139,7 +147,7 @@ RawItem（采集，无正文）→ Article（抽取后）→ NewsItem（清洗�
 全局 `exclude` 到处生效；`include`（必须命中）**只能按源配**——
 一个全局的「必须命中」会丢掉大量正常资讯。
 
-### `sources/discover.py`（249 行）· `sources/http.py`（142 行）
+### `sources/discover.py`· `sources/http.py`
 
 `discover_feeds()` 探测网站的 RSS（先读页面声明，再试常见路径），
 `suggest_yaml()` 生成可直接粘进 `config/sources.yaml` 的片段（`dna probe` 用）。
@@ -151,7 +159,7 @@ RawItem（采集，无正文）→ Article（抽取后）→ NewsItem（清洗�
 
 ## `extract/` —— HTML → 正文 + 媒体
 
-### `extract/article.py`（269 行）
+### `extract/article.py`
 
 `extract_article(html, url)` → `Article`；`fetch_article(url)` 抓取加抽取。
 trafilatura 优先，失败退启发式（`_heuristic_body`）。
@@ -159,13 +167,13 @@ trafilatura 优先，失败退启发式（`_heuristic_body`）。
 **改这里要注意**：抽取失败**降级为「标题 + 链接」，从不抛异常**——
 只有链接的条目仍然值得发布。`MIN_BODY_CHARS = 80` 以下算降级。
 
-### `extract/media.py`（407 行）
+### `extract/media.py`
 
 `extract_media(html, url)` → 配图 + 官方视频，每个都带 `source_url` 与 `credit`。
 
 | 常量 | 值 | 说明 |
 |---|---|---|
-| `DEFAULT_MAX_IMAGES` | 10 | **另有一个同名常量在 `store/article_store.py`** |
+| `DEFAULT_MAX_IMAGES` | **另有一个同名常量在 `store/article_store.py`** |
 | `MIN_IMAGE_WIDTH/HEIGHT` | 200 / 120 | 声明尺寸过小的丢掉 |
 
 **改这里要注意**：
@@ -181,7 +189,7 @@ trafilatura 优先，失败退启发式（`_heuristic_body`）。
 
 ## `llm/` —— 统一的 LLM 抽象
 
-### `llm/base.py`（381 行）
+### `llm/base.py`
 
 `LLMProvider` 是唯一接口。子类只实现 `_complete()` 与 `info`。
 
@@ -202,7 +210,7 @@ trafilatura 优先，失败退启发式（`_heuristic_body`）。
 - 小模型会把 Schema 原样抄回来（`_SchemaEchoError` 自动纠正），
   但新提示词仍要明确说「给数据，不要照抄 Schema」。
 
-### `llm/cache.py`（239 行）
+### `llm/cache.py`
 
 `CachedProvider` 给任意 provider 套一层磁盘缓存，**套在最外层**——命中就跳过重试层。
 
@@ -211,14 +219,14 @@ trafilatura 优先，失败退启发式（`_heuristic_body`）。
 **失败从不入缓存；损坏的条目算 miss，不算错误。**
 实测：5 条日报第一次 6 次调用 / 10.7 秒，重跑 **0 次调用 / 0.1 秒**。
 
-### `llm/factory.py`（327 行）
+### `llm/factory.py`
 
 `get_llm()` 是**唯一的入口**——业务代码永远不要 import 具体 provider。
 `ResilientProvider` 套重试与降级，`RetryPolicy` 指数退避。
 `KNOWN_PROVIDERS = ("deepseek", "openrouter", "vllm", "ollama", "openvino")`，
 其中 DeepSeek 是默认且是后续全部工作的基准。
 
-### `llm/openai_compat.py`（283 行）· `ollama_provider.py` · `openvino_provider.py` · `parsing.py`
+### `llm/openai_compat.py`· `ollama_provider.py` · `openvino_provider.py` · `parsing.py`
 
 `_translate_error()` 把 SDK / 网络异常翻译成本项目的异常类型；
 `_empty_content_error()` 在正文为空时给出**能指到根因**的报错（推理模型把思维链
@@ -246,14 +254,14 @@ trafilatura 优先，失败退启发式（`_heuristic_body`）。
 
 ## `store/` —— 落盘与台账
 
-### `store/db.py`（211 行）
+### `store/db.py`
 
 `connect()` / `open_db()`；`SCHEMA_VERSION = 4`。
 
 **改这里要注意**：迁移走 `PRAGMA user_version`，**加新分支，绝不改 `_SCHEMA_V1`**——
 否则已有的数据库缺列。schema v4 把「语言」做成产物的一个维度，不是新的 kind。
 
-### `store/ledger.py`（657 行）
+### `store/ledger.py`
 
 `data/dna.db` 是主表：标题、链接、抓取状态、正文长度、图片数、落盘路径。
 它是后续每个功能的选择依据，也是跨天去重发生的地方。
@@ -272,7 +280,7 @@ trafilatura 优先，失败退启发式（`_heuristic_body`）。
   一秒内两次重做时间戳相同。
 - `production_matrix()` 一次查一整页；逐格查会是几百次往返，界面明显卡。
 
-### `store/article_store.py`（499 行）
+### `store/article_store.py`
 
 `save_article()` 把一篇文章落盘：`article.md` + `meta.json` + `references.md` +
 `images/` + `videos/`。`read_body()` / `read_title()` 从 `article.md` 读回。
@@ -290,10 +298,11 @@ trafilatura 优先，失败退启发式（`_heuristic_body`）。
   **和 `# ` 标题**回写进 `meta.json` 与台账，把这行提升为 `ok`。
   **没有这次回写，这行永远是「0 字 / degraded」，后续每个阶段都当它是空的**（issue 005）。
 
-### `store/intake.py`（453 行）· `issue_store.py`（433 行）· `video_store.py`（246 行）· `migrate_layout.py`（290 行）
+### `store/intake.py`· `issue_store.py`· `video_store.py`· `delete.py`· `migrate_layout.py`
 
 | 模块 | 职责 |
 |---|---|
+| `delete.py` | 删一篇：台账行 + `outputs/articles/<日期>/<目录>/` 下全部产物。两条护栏见文件头 |
 | `intake.py` | 采集→过滤→抓取→落盘→登记的完整入库流程；`refetch_article()` / `sync_manual_body()` |
 | `issue_store.py` | 期次目录：`_digest.json` + `_references.md` + `graphic/` + `podcast/` |
 | `video_store.py` | 视频落盘：直链 HTTP，其余走 yt-dlp |
@@ -319,7 +328,7 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 
 `run_daily(dry_run=True)` 停在这条线上。
 
-### `pipeline/clean.py`（214 行）
+### `pipeline/clean.py`
 
 `clean_text()` = 归一化 + 去样板；`is_publishable()` 判断够不够格进流水线。
 
@@ -327,7 +336,7 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 产出混合宽度的标点，在每种发布形态里都读着像机器翻译。
 只显式折全角字母数字（issue 006-B）。
 
-### `pipeline/dedup.py`（333 行）
+### `pipeline/dedup.py`
 
 三级去重：URL → SimHash（Hamming ≤ 3）→ 句向量（可选）。
 
@@ -338,7 +347,7 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 - 阈值保守（≤3）：漏合并读者看得见，错合并看不见。
 - 句向量是**可选**第三级，缺了前两级照常работа，只是合得少一些。
 
-### `pipeline/score.py`（290 行）
+### `pipeline/score.py`
 
 规则打分，不用 LLM。权重：关键词 .35 / 多源 .25 / 新鲜度 .20 / 篇幅 .12 / 媒体 .08。
 
@@ -368,7 +377,7 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 - `summarize_all` 是**串行不是并发**：DeepSeek 有速率限制，并发换来的是 429 与重试。
 - 每个 LLM 节点都**降级不抛异常**——日报无人值守跑。
 
-### `pipeline/source.py`（147 行）· `pipeline/flow.py`（267 行）
+### `pipeline/source.py`· `pipeline/flow.py`
 
 `load_candidates()` 从台账取候选；正文**从 `meta.json` 读回，不从台账读**——
 台账负责索引与状态，不是内容库。
@@ -385,7 +394,7 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 | narration | 1~2 分钟 | 370~540 | 1~3（回炉） |
 | longform | 5~15 分钟，专题（1 角色）/ 访谈（2 角色） | 1350~4050 | 5~9 |
 
-### `narration/duration.py`（269 行）
+### `narration/duration.py`
 
 `count_units()` 数长度（中文数字符、英文数词）、`estimate_seconds()` 估时长（参照用）、
 `unit_window()` 把配置的中文字数折算成英文词数、`seconds_for_units()` 反过来估秒数。
@@ -399,7 +408,7 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 实测差 50%，拿它当验收标准会把合格的稿子反复回炉、让偏短的稿子静静通过。
 长文案仍按**时长**推导目标（它的长度跟原文体量走，不是固定窗口，见 issue 007-C）。
 
-### `narration/script_builder.py`（584 行）
+### `narration/script_builder.py`
 
 `build_short_video()` / `build_narration()`，中英各一条路径；共用骨架 `_generate()`：
 生成 → 量时长 → 超区间**带着具体差值和上一稿**回炉 → 最多 `MAX_REWRITES = 2` 次。
@@ -420,7 +429,7 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 - `instruction_block("")` 返回**空串**，让提示词与不带这个功能时逐字节相同——
   否则每篇都因为多一个空标题错开 LLM 缓存。
 
-### `narration/longform.py`（519 行）
+### `narration/longform.py`
 
 三步：出提纲（1 次）→ 逐节展开（每节 1 次，带上一节结尾）→ 拼装（不做全文重写）。
 `MIN_BODY_FOR_LONGFORM = 800`、`EXPANSION_RATIO = 1.2`、
@@ -442,7 +451,7 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 
 ## `produce/` —— 单篇产物
 
-### `produce/tasks.py`（350 行）
+### `produce/tasks.py`
 
 产物注册表。`ProductionKind` 枚举 + `TaskSpec`（文件名、依赖、是否进 `--all`、
 预估调用次数、最小正文长度、是否要念）。**不含生成函数**——那在 `service.py`。
@@ -450,7 +459,7 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 **改这里要注意**：`longform` **绝不进 `--all`**：一篇 5~9 次调用，
 是其余三项加起来的两倍多，一次误触就是一个数量级的账单。
 
-### `produce/service.py`（922 行）
+### `produce/service.py`
 
 `produce()` 是唯一入口，CLI 与 GUI 都调它，所以两个前端不会各坏一套。
 
@@ -479,7 +488,7 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 **改这里要注意**：`run()` **不写文件也不记台账**——调试跑十次不该留十份垃圾，
 也不该搅乱台账的产物历史（那本账记的是「发布用的那一版是谁写的」）。
 
-### `produce/documents.py`（127 行）
+### `produce/documents.py`
 
 `front_matter()` 抬头、`script_block()` 正文排版、`spoken_text()` 从产物文件里
 **只取要念的那部分**（靠 `SPOKEN_MARKER`）、`longform_turns()` 读回 JSON 附件。
@@ -501,16 +510,16 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 | `preprocess.py` | **朗读友好化**：一次 LLM 调用（型号、公式、多音字、断句） |
 | `segment.py` | `clean_for_speech()` 去 Markdown 与网址 · `split_for_speech()` 分段 |
 | `subtitle.py` | SRT 导出，与音频同名同目录 |
+| `console.py` | 操作台的后端能力：音色表、参考音频候选、某个路径解析到哪个文件。**这三件不能在前端自己算**——参考音频按 `data_dir` 解析（不是仓库根），前端另写一套就会「界面上看着有、合成时找不到」 |
 
-**改这里要注意**：
+**改这里要注意**（完整的七条硬约束与实测速度在 [14_tts_guide.md](14_tts_guide.md)，
+那份是 TTS 的唯一权威，这里只留改代码时最容易踩的两条）：
+
 - **顺序不能反**：先朗读友好化，再分段。预处理会调整断句与停顿标记，
   先切好再改写，切点就落在改写前的位置上了。
-- **TTS service 是纯 TTS，它自己从不调 LLM。** 「什么写法念得顺」是文案层的判断，
-  所以那一次调用属于本项目，在交出去之前做完。合成本身仍记 `calls=0`。
-- 预处理**失败、超时、返回明显不对时一律退回原文**（长度偏离 0.6~1.8 倍即拒）。
-  音频能不能出来，不该取决于一次可选的润色。`TTS_PREPROCESS=false` 可彻底关掉。
 - 时长**从波形实测**，不按估算累加——字幕漂移会累积。
-- 全程本地、零费用，但很慢（RTF ≈ 2.5：口播约 4 分钟，长文案约 37 分钟）。
+- 全程本地、零费用，但很慢；**速度不要在这里写死一个倍率**，
+  界面预估曾因此少报五倍（见 [issues/009](issues/009-tts-speaking-rate.md)）。
 
 ---
 

@@ -86,7 +86,7 @@ articles ──1:N──> productions
 ledger.production_matrix([r.id for r in records])   # {article_id: {kind: record}}
 ```
 
-工作台一页 50 行 × 5 种产物，逐格查库是 250 次往返，界面会肉眼可见地卡。
+工作台一页几十条 × 5 种产物，逐格查库是几百次往返，界面会肉眼可见地卡。
 子查询用 `MAX(id) GROUP BY article_id, kind` 只取每种产物的最新版。
 
 ---

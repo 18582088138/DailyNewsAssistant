@@ -81,7 +81,7 @@ def _stamp(seconds: float) -> str:
     total = max(0.0, seconds)
     hours, rest = divmod(int(total), 3600)
     minutes, secs = divmod(rest, 60)
-    millis = int(round((total - int(total)) * 1000))
+    millis = round((total - int(total)) * 1000)
     if millis == 1000:                      # 四舍五入到整秒，别写出 ,1000
         secs, millis = secs + 1, 0
     return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"

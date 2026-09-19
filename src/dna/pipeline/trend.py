@@ -21,6 +21,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
+from dna.core.config import Tuning, field_default
 from dna.core.logging import get_logger
 from dna.core.prompts import load_prompt
 from dna.llm.base import ChatMessage, LLMProvider, system, user
@@ -31,7 +32,7 @@ logger = get_logger("pipeline.trend")
 # 两三条新闻谈不上「趋势」，硬写只会得到一段把标题重述一遍的废话。
 # Two or three items are not a trend; forcing it yields a paragraph that merely restates
 # the headlines.
-MIN_ENTRIES_FOR_TREND = 4
+MIN_ENTRIES_FOR_TREND: int = field_default(Tuning, "min_entries_for_trend")
 
 # 提示词正文在 `config/prompts/trend.md` / The prompt text lives in that file.
 PROMPT_NAME = "trend"
@@ -77,7 +78,12 @@ def build_messages(entries: list[tuple[str, str]]) -> list[ChatMessage]:
     ]
 
 
-def build_trend(entries: list[tuple[str, str]], llm: LLMProvider) -> tuple[str | None, list[str]]:
+def build_trend(
+    entries: list[tuple[str, str]],
+    llm: LLMProvider,
+    *,
+    min_entries: int | None = None,
+) -> tuple[str | None, list[str]]:
     """
     生成当日主线提炼 / Produce the day's trend note.
 
@@ -90,13 +96,13 @@ def build_trend(entries: list[tuple[str, str]], llm: LLMProvider) -> tuple[str |
     a trend note is still a valid digest: the note is a bonus, not a requirement, and
     failing the whole issue over it would be unreasonable.
     """
-    if len(entries) < MIN_ENTRIES_FOR_TREND:
+    if len(entries) < (min_entries or MIN_ENTRIES_FOR_TREND):
         logger.info("条目仅 %d 条，不足以提炼主线，跳过综述", len(entries))
         return None, []
 
     try:
         out = llm.chat_json(build_messages(entries), TrendOut, temperature=0.5)
-    except Exception as exc:  # noqa: BLE001 - 综述失败不影响日报主体
+    except Exception as exc:
         logger.warning("主线提炼失败，本期日报将没有开篇综述：%s", exc)
         return None, []
 
