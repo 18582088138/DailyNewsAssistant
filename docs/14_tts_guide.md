@@ -309,7 +309,8 @@ The GUI is mounted on the service: one process, one copy of the weights.
 ## 7 · 界面上的动态效果
 
 音频合成时右下角一个浮窗（`frontends/nicegui_app/audio_progress.py`）：
-**秒表 + 进度条 + 已产出秒数 + 按实测速度推的剩余时间**。
+**秒表 + 进度条 + 已产出秒数 + 按实测速度推的剩余时间**。并行的任务各一张，
+在右下角的任务坞（`jobs.py`）里往上叠；表格刷新、关掉操作台都不影响它们。
 
 一个静止的转圈图标只能回答「在跑吗」，而且回答得并不可信 ——
 卡死的页面上转圈照样在转（那是 CSS 动画，不是程序还活着的证据）。
