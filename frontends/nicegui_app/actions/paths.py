@@ -121,18 +121,27 @@ def body_file(record: ArticleRecord) -> Path | None:
     return path if path.is_file() else None
 
 
-def media_target(record: ArticleRecord) -> Path | None:
+def media_targets(record: ArticleRecord) -> list[Path]:
     """
-    媒体格该打开哪个目录 / Which directory the media cell opens.
+    媒体格该打开哪些目录 / Which directories the media cell opens。
 
-    有图开 `images/`，否则有视频开 `videos/`，都没有返回 None。
-    **配图优先**：绝大多数文章只有配图，视频是少数；而两者都有时人要看的
-    通常是配图（它进图文版），视频还在展开面板里另有入口。
-    Images win when both exist: they are what almost every article has and what the
-    graphic edition uses, while videos keep their own entry in the detail panel.
+    图、视频都有就两个都开，只有一种就开一个，都没有返回空列表（格子不可点）。
     """
-    folders = media_folders(record)
-    return folders.get("配图") or folders.get("视频")
+    return list(media_folders(record).values())
+
+
+def cell_seconds(record: ProductionRecord) -> float:
+    """
+    格子上显示的估算时长 / The estimated duration a cell shows。
+
+    台账里有 `est_seconds` 就用；没有（总结、旧产物）按字数现算，
+    这样四种产物的格子都能显示「字数 + 估算时长」。
+    """
+    from dna.narration.duration import seconds_for_units
+
+    if record.est_seconds:
+        return record.est_seconds
+    return seconds_for_units(record.chars or 0, lang=record.lang or "zh")
 
 
 def over_target(
