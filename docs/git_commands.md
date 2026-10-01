@@ -37,8 +37,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ## ② 后端：人工编辑写回（工作台与 TTS 操作台共用）
 
 ```bash
-git add src/dna/produce/editing.py src/dna/produce/__init__.py src/dna/produce/service.py \
-  tests/produce/test_service.py
+git add src/dna/produce/editing.py src/dna/produce/__init__.py src/dna/produce/service.py  tests/produce/test_service.py
 git commit -m "feat(produce): save_production_text 统一人工编辑写回，字数与估算时长重算
 
 - 口播类按 spoken_text 数字数、估时长并刷新「口播（约 N 秒 · M 字）」行；
@@ -76,8 +75,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ## ⑤ 任务登记表 + 任务坞：运行动效与并行任务
 
 ```bash
-git add $F/jobs.py $F/audio_progress.py $F/ledger_table/run.py \
-  $F/tts_panel/shell.py $F/tts_panel/synth.py
+git add $F/jobs.py $F/audio_progress.py $F/ledger_table/run.py  $F/tts_panel/shell.py $F/tts_panel/synth.py
 git apply --cached $P/05.patch
 git commit -m "feat(gui): 任务登记表与页面级任务坞，支持并行任务与格子运行动效
 
@@ -116,8 +114,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 ## ⑧ 文档
 
 ```bash
-git add docs/13_workbench_guide.md docs/14_tts_guide.md docs/00_STAGE_SUMMARY.md \
-  docs/git_commands.md
+git add docs/13_workbench_guide.md docs/14_tts_guide.md docs/00_STAGE_SUMMARY.md  docs/git_commands.md
 git commit -m "docs: 同步工作台与 TTS 指南；阶段看板记 opt_gui 进度
 
 Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
