@@ -40,6 +40,7 @@ from dna.produce.tasks import (
 )
 from frontends.nicegui_app import actions
 from frontends.nicegui_app.actions import RowView
+from frontends.nicegui_app.text_editor import render_body
 from frontends.nicegui_app.tts_panel import open_panel as open_tts_panel
 
 
@@ -107,8 +108,7 @@ def render(
         # Read on open: loading every cell up front would be hundreds of disk reads for
         # content nobody has asked to see.
         text = actions.production_text(row.article.id, kind, lang)
-        with ui.element("div").classes("wb-body w-full"):
-            ui.markdown(text or "_（文件读不到，可能被移动或删除）_")
+        render_body(row.article.id, kind, lang, text, on_saved=on_change)
 
 
 def _render_language_toggle(row: RowView, kind: ProductionKind, lang: str, *, on_switch) -> None:
