@@ -28,7 +28,8 @@ frontends → produce → pipeline → narration → store → extract → sourc
 1. **先给计划、验收标准、成本估算，再动手。** 验收标准说不清就先问，不要边做边猜。
 2. **每个 feature / bug fix 必须给出验收手段**：一个会从红变绿的 pytest 节点，
    或一条带预期输出的命令。给不出来，说明需求还没定义清楚。
-3. **报告完成前必须跑 `python tools/check.py`**（ruff + 全量测试 + `dna doctor`）。
+3. **平时每批只跑相关的测试包，整个任务收尾时跑一次 `python tools/check.py`**
+   （ruff + 全量测试 + `dna doctor`）。不做真机全功能测试。
    「我觉得没问题」不是验收，退出码才是。
 4. **搜索交给子代理**：要翻很多文件才能回答的问题，派子代理去翻，只要结论。
    主上下文每多一个文件，之后每一轮都要为它重复付费。
