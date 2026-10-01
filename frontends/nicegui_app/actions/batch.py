@@ -1,10 +1,14 @@
-"""批量重抓与批量删除 / Batch refetch and delete。"""
+"""批量重抓、批量删除与批量生成的预算 / Batch refetch, delete and generation planning。"""
 
 from __future__ import annotations
+
+from dataclasses import dataclass, field
 
 from nicegui import run
 
 from dna.core.logging import get_logger
+from dna.produce import ProductionKind, estimate_calls, spec
+from dna.produce.tasks import normalize_lang
 from dna.store import FetchStatus, IntakeResult
 from dna.store.ledger import ArticleRecord
 
@@ -123,3 +127,52 @@ async def batch_delete(article_ids: list[str], *, remove_files: bool = True) -> 
         # 概括成「删除失败」的话人不知道该做什么。
         message += "　·　" + "；".join(f"{i[:8]} {r}" for i, r in plan.errors[:3])
     return message
+
+
+@dataclass
+class ProducePlan:
+    """批量生成的预算 / What a batch generation would do and cost。"""
+
+    todo: list[tuple[str, ProductionKind]] = field(default_factory=list)
+    reused: dict[ProductionKind, int] = field(default_factory=dict)
+    not_applicable: dict[ProductionKind, int] = field(default_factory=dict)
+
+    @property
+    def calls(self) -> int:
+        return estimate_calls([kind for _, kind in self.todo])
+
+
+def plan_batch_produce(
+    article_ids: list[str], kinds: list[ProductionKind], *, lang: str = ""
+) -> ProducePlan:
+    """
+    先算后跑 / Plan a batch generation before running it。
+
+    **已经生成过的复用、不重做**（不 force）——批量是补缺口，不是整批重来；
+    正文太短撑不起的产物直接剔掉，免得每篇都跑一趟只拿回一条报错。
+    调用次数在确认框里报给人，长文案一篇 5~9 次，选上它之前要看见这个数。
+    """
+    from dna.core.config import get_settings
+    from dna.store.ledger import Ledger
+
+    lang = normalize_lang(lang)
+    settings = get_settings()
+    ledger = Ledger(settings.db_file)
+    plan = ProducePlan()
+    for article_id in article_ids:
+        record = ledger.get(article_id)
+        if record is None or not record.store_dir:
+            continue
+        for kind in kinds:
+            task = spec(kind)
+            if task.min_body_chars and record.text_len < task.min_body_chars:
+                plan.not_applicable[kind] = plan.not_applicable.get(kind, 0) + 1
+                continue
+            existing = ledger.latest_production(article_id, str(kind), lang)
+            output = settings.output_path / record.store_dir / task.filename_for(lang)
+            # 和 `produce()` 的复用判据一致：台账说有、文件也在，才算已生成
+            if existing is not None and existing.ok and output.exists():
+                plan.reused[kind] = plan.reused.get(kind, 0) + 1
+                continue
+            plan.todo.append((article_id, kind))
+    return plan

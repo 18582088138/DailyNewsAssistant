@@ -29,7 +29,7 @@ test_workbench.py —— 工作台界面单元测试 / Workbench UI unit tests
    13. `short_url` 剥协议头、**从中间截**（从右边切会让同源的几行看起来一样）
    14. 「全选本页」三态，中间那一态不能省
    15. 勾选跨刷新保留，且顺序 = 勾选顺序
-   16. `body_file` / `media_target` 缺文件时返回 None（格子据此不可点）
+   16. `body_file` 缺文件时返回 None、`media_targets` 返回空列表（格子据此不可点）
    17. `over_target` **两端都判**、跟 profile 走、不按字数验收的产物永远不标超长
    18. 设置面板：白名单与界面字段表**双向对齐**、密钥不回显、环境变量遮盖能识别
    19. 设置面板覆盖 `Profile` 的**每一个**字段（「全开」是确认过的范围）
@@ -495,28 +495,23 @@ def test_body_file_is_none_until_the_body_exists(settings: Settings, monkeypatch
     assert actions.body_file(record) == directory / "article.md"
 
 
-def test_media_target_prefers_images(settings: Settings, monkeypatch, patch_actions_settings) -> None:
-    """
-    媒体格优先开配图目录，两者都没有时返回 None。
-
-    绝大多数文章只有配图；两者都有时人要看的通常也是配图（它进图文版），
-    视频在展开面板里另有入口。
-    """
+def test_media_targets_opens_every_non_empty_folder(settings: Settings, monkeypatch, patch_actions_settings) -> None:
+    """媒体格：图、视频都有就开两个目录，只有一种开一个，都没有返回空列表。"""
     from frontends.nicegui_app import actions
 
     patch_actions_settings(settings)
     article_id, directory = _seed(settings)
     record = Ledger(settings.db_file).get(article_id)
 
-    assert actions.media_target(record) is None
+    assert actions.media_targets(record) == []
 
     (directory / "videos").mkdir()
     (directory / "videos" / "01.mp4").write_bytes(b"x")
-    assert actions.media_target(record).name == "videos"
+    assert [p.name for p in actions.media_targets(record)] == ["videos"]
 
     (directory / "images").mkdir()
     (directory / "images" / "01.jpg").write_bytes(b"x")
-    assert actions.media_target(record).name == "images"
+    assert [p.name for p in actions.media_targets(record)] == ["images", "videos"]
 
 
 def test_open_in_file_manager_accepts_a_file(tmp_path: Path, monkeypatch) -> None:

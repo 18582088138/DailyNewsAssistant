@@ -6,7 +6,7 @@ from nicegui import ui
 
 from dna.produce import ProductionKind, spec
 from dna.produce.tasks import normalize_lang
-from frontends.nicegui_app import actions, theme
+from frontends.nicegui_app import actions, jobs, theme
 from frontends.nicegui_app.actions import RowView
 from frontends.nicegui_app.tts_panel.model import (
     _Panel,
@@ -45,7 +45,8 @@ def open_panel(
     script_label = spec(script_kind).label if script_kind else spec(kind).label
     panel.editable = actions.script_is_editable(kind, lang=lang)
 
-    with ui.dialog() as dialog, ui.card().classes("w-[1080px] wb-dialog").style(
+    # 挂在任务坞上：别的任务结束重画表格时，开着的操作台不能被一起删掉
+    with jobs.anchor(), ui.dialog() as dialog, ui.card().classes("w-[1080px] wb-dialog").style(
         "background: var(--wb-panel); border: 1px solid var(--wb-line-strong)"
     ):
         with ui.row().classes("w-full items-center justify-between no-wrap"):
@@ -107,5 +108,8 @@ def open_panel(
             return
         _render(panel, segments, body, footer, dialog, on_change=on_change)
 
+    # 关掉（含点别处）就删：已提交的合成任务挂在任务坞上，不依赖这个对话框
+    dialog.on("hide", dialog.delete)
     dialog.open()
-    ui.timer(0.01, _load, once=True)
+    with dialog:
+        ui.timer(0.01, _load, once=True)

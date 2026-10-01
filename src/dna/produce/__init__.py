@@ -27,6 +27,7 @@ standing rule here, and it also means the two cannot break differently.
 """
 
 from dna.produce.badges import is_new_article
+from dna.produce.editing import is_editable, save_production_text
 from dna.produce.generate import read_production
 from dna.produce.results import ProduceResult
 from dna.produce.service import (
@@ -53,10 +54,12 @@ __all__ = [
     "TaskSpec",
     "batch_kinds",
     "estimate_calls",
+    "is_editable",
     "is_new_article",
     "produce",
     "produce_all",
     "read_production",
+    "save_production_text",
     "save_script_text",
     "spec",
     "speech_segments_for",

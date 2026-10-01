@@ -30,10 +30,13 @@ module's boundary. The split exists to make edits cheap, not to move the seam.
 """
 
 from frontends.nicegui_app.actions.batch import (
+    ProducePlan,
     batch_delete,
     batch_refetch,
     plan_batch_delete,
+    plan_batch_produce,
 )
+from frontends.nicegui_app.actions.editing import production_editable, save_production
 from frontends.nicegui_app.actions.env import (
     ENV_FIELDS,
     EnvField,
@@ -55,8 +58,9 @@ from frontends.nicegui_app.actions.intake import (
 from frontends.nicegui_app.actions.paths import (
     article_directory,
     body_file,
+    cell_seconds,
     media_folders,
-    media_target,
+    media_targets,
     over_target,
     production_file,
     production_sidecar,
@@ -99,6 +103,7 @@ __all__ = [
     "SCAN_CAP",
     "EnvField",
     "PageView",
+    "ProducePlan",
     "RowView",
     "TTSStatus",
     "article_directory",
@@ -108,6 +113,7 @@ __all__ = [
     "batch_refetch",
     "body_file",
     "cache_status",
+    "cell_seconds",
     "env_display",
     "env_groups",
     "env_shadowed",
@@ -117,12 +123,14 @@ __all__ = [
     "load_rows",
     "longform_estimate",
     "media_folders",
-    "media_target",
+    "media_targets",
     "open_in_file_manager",
     "over_target",
     "plan_batch_delete",
+    "plan_batch_produce",
     "preview_links",
     "preview_voice",
+    "production_editable",
     "production_file",
     "production_sidecar",
     "production_text",
@@ -131,6 +139,7 @@ __all__ = [
     "ref_audio_options",
     "resplit_text",
     "run_production",
+    "save_production",
     "save_script",
     "save_settings",
     "script_is_editable",

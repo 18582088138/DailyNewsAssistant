@@ -43,12 +43,11 @@ def _render(
         panel.shared = VoiceControls(
             voices=panel.voices, base=segments[0].voice, on_change=lambda: _refresh(panel)
         )
-        with ui.row().classes("w-full items-center gap-3 no-wrap"):
-            panel.uniform_box = ui.checkbox(
-                "统一声音配置", value=True, on_change=lambda _e: _apply_uniform(panel)
-            ).tooltip("取消勾选后，每段可以在「单独配置」里各自选模式与音色")
-            with ui.column().classes("flex-grow gap-1"):
-                panel.shared.render()
+        panel.uniform_box = ui.checkbox(
+            "统一声音配置", value=True, on_change=lambda _e: _apply_uniform(panel)
+        ).tooltip("取消勾选后，每段可以在「单独配置」里各自选模式与音色")
+        with ui.column().classes("w-full gap-1"):
+            panel.shared.render()
 
         if not panel.voices:
             ui.label(
@@ -84,12 +83,16 @@ def _render(
                       on_click=lambda: _fill_script(panel)).props(
                 "flat dense no-caps size=sm"
             ).tooltip("把下面各段拼起来写回这个框（在分段里改完、想整篇再读一遍时用）")
-        panel.script_box = (
-            ui.textarea(value=panel.loaded_text)
-            .props("outlined dense autogrow")
-            .classes("w-full")
-            .style("font-size: 12.5px; max-height: 22vh; overflow-y: auto")
-        )
+        # 和分段共用同一套三列网格（`wb-tts-line`），全文框与各段文本框左右对齐
+        with ui.element("div").classes("wb-tts-line"):
+            ui.label("全文").classes("wb-path")
+            panel.script_box = (
+                ui.textarea(value=panel.loaded_text)
+                .props("outlined dense autogrow")
+                .classes("w-full")
+                .style("font-size: 12.5px; max-height: 22vh; overflow-y: auto")
+            )
+            ui.element("div")
 
         ui.separator().style("background: var(--wb-line)")
 
@@ -178,14 +181,14 @@ def _render_piece(panel: _Panel, piece: _Piece, *, text: str) -> None:
         "border-top: 1px solid var(--wb-line)"
     ) as container:
         piece.container = container
-        with ui.row().classes("w-full items-start gap-2 no-wrap"):
-            with ui.column().classes("items-center gap-0").style("width: 34px"):
+        with ui.element("div").classes("wb-tts-line"):
+            with ui.column().classes("items-center gap-0"):
                 piece.number_label = ui.label("").classes("wb-path")
                 piece.icon = ui.label(STATE_NEW).classes("wb-path")
             piece.text_box = (
                 ui.textarea(value=text, on_change=lambda _e: _refresh(panel))
                 .props("outlined dense autogrow")
-                .classes("flex-grow")
+                .classes("w-full")
                 .style("font-size: 12.5px")
             )
             with ui.column().classes("items-end gap-0"):
@@ -207,7 +210,7 @@ def _render_piece(panel: _Panel, piece: _Piece, *, text: str) -> None:
                     ).tooltip("删掉这一段")
 
         with ui.row().classes("w-full items-center gap-1 no-wrap").style(
-            "padding-left: 34px"
+            "padding-left: 42px"
         ):
             for label, marker, hint in EVENT_MARKERS:
                 ui.button(label, on_click=lambda m=marker, p=piece: _insert(panel, p, m)) \
@@ -221,7 +224,7 @@ def _render_piece(panel: _Panel, piece: _Piece, *, text: str) -> None:
 
         piece.own_box = ui.expansion("单独配置", icon="tune").props("dense").classes(
             "w-full"
-        ).style("padding-left: 34px")
+        ).style("padding-left: 42px")
         with piece.own_box:
             piece.own = VoiceControls(
                 voices=panel.voices, base=piece.base, uploads=False,

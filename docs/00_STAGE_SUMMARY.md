@@ -7,7 +7,10 @@
 
 ## 〇、进行中
 
-**当前分支 `DNA_v0.1`：全面优化（减少后续开发成本 + 去冗余）。**
+**当前分支 `opt_gui`：GUI 易用性优化。** 计划正文 `~/.claude/plans/opt-gui.md`
+（不随仓库走；新会话先读它）。批次 A~F ✅，提交命令在 `docs/git_commands.md`（待人工执行）。
+
+**上一分支 `DNA_v0.1`：全面优化（减少后续开发成本 + 去冗余）。**
 计划正文在 `~/.claude/plans/sequential-fluttering-wren.md`（不随仓库走，
 新会话先读它再动手 —— 这一行存在的理由就是上次 `/clear` 后主线找不回来）。
 

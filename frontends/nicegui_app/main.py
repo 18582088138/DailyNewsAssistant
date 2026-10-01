@@ -26,6 +26,7 @@ from dna.store import Ledger
 from frontends.nicegui_app import (
     actions,
     import_dialog,
+    jobs,
     ledger_table,
     settings_dialog,
     source_dialog,
@@ -242,11 +243,11 @@ def _render_page() -> None:
             on_click=lambda: settings_dialog.open_dialog(on_saved=refresh),
         ).props("flat dense round").tooltip("设置：内容偏好与运行配置")
 
-    # 图例 + 批量操作条同占一行：批量条只在有勾选时出现，平时这一行就是纯图例。
-    # 放在这里而不是表格上方另起一行，是为了不让表格在勾选时上下跳。
-    # They share the row so the table does not jump when a selection appears.
+    # 批量条单独一行，图例 + 翻页在下一行：批量条有了「批量生成」那一排之后，
+    # 和图例、翻页挤在一行放不下（用户实测反馈）。没勾选时这一行是空的、不占高度；
+    # 代价是勾选时表格下移一行，换来的是两行都不挤。
+    batch_container = ui.row().classes("w-full items-center gap-2 px-4 no-wrap")
     with ui.row().classes("w-full items-center gap-4 px-4 py-2 no-wrap"):
-        batch_container = ui.row().classes("items-center gap-2 no-wrap")
         with ui.row().classes("items-center gap-1 no-wrap"):
             ui.label("NEW").classes("wb-new-badge")
             ui.label("刚导入，未调用 LLM").classes("wb-path")
@@ -298,6 +299,7 @@ def _render_page() -> None:
     # The container must exist before the filter bar (the callbacks close over it) yet
     # appear after it; NiceGUI lays out in creation order, so it is moved into place.
     table_container.move(target_index=-1)
+    jobs.mount_dock()
     refresh()
 
 

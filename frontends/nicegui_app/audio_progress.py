@@ -40,17 +40,19 @@ class AudioProgress:
     """
 
     def __init__(self, label: str, *, expected_seconds: float = 0.0,
-                 hint: str = "", on_cancel=None, action: str = "合成中") -> None:
+                 hint: str = "", on_cancel=None, action: str = "合成中",
+                 detail: str = "正在连接 TTS 服务…", unit: str = "段") -> None:
         self.progress: dict = {}
         """工作线程写、这里读 / written by the worker, read here."""
 
         self._label = label
+        self._unit = unit
         self._expected = max(0.0, expected_seconds)
         self._started = time.perf_counter()
 
-        # 右下角固定，不挡表格 / pinned bottom-right, clear of the table
+        # 定位交给任务坞（`jobs.py`，右下角）：并行时一张张往上叠，而不是叠在同一处
         self._card = ui.card().style(
-            "position: fixed; right: 18px; bottom: 18px; z-index: 3000; width: 320px;"
+            "width: 320px;"
             "background: var(--wb-panel); border: 1px solid var(--wb-line-strong);"
             "box-shadow: 0 8px 28px rgba(0,0,0,.45)"
         ).classes("p-3 gap-2")
@@ -73,7 +75,7 @@ class AudioProgress:
             self._bar = ui.linear_progress(value=0.0, show_value=False, size="6px")
             self._bar.props("color=green track-color=grey-9")
 
-            self._detail = ui.label("正在连接 TTS 服务…").classes("wb-path")
+            self._detail = ui.label(detail).classes("wb-path")
             if not hint:
                 hint = "服务不在线会自动拉起（首次要等权重加载）"
                 if self._expected >= 60:
@@ -103,8 +105,9 @@ class AudioProgress:
         self._bar.props(remove="indeterminate")
         self._bar.set_value(min(1.0, done / total))
         seconds = self.progress.get("seconds", 0.0)
+        produced = f"　已产出 {seconds:.0f} 秒音频" if self._unit == "段" else ""
         self._detail.set_text(
-            f"第 {done}/{total} 段　已产出 {seconds:.0f} 秒音频"
+            f"第 {done}/{total} {self._unit}{produced}"
             + (f"　剩约 {self._remaining(done, total, elapsed) / 60:.0f} 分钟"
                if done else "")
         )

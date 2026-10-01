@@ -6,7 +6,7 @@ from nicegui import ui
 
 from dna.produce import DISPLAY_ORDER, ProductionKind, spec
 from dna.store.ledger import ProductionRecord
-from frontends.nicegui_app import actions, detail_panel, theme
+from frontends.nicegui_app import actions, detail_panel, jobs, theme
 from frontends.nicegui_app.actions import RowView
 from frontends.nicegui_app.ledger_table.run import _launch
 from frontends.nicegui_app.ledger_table.state import (
@@ -199,19 +199,19 @@ def _render_media_cell(row: RowView) -> None:
     """
     媒体格 / The media cell.
 
-    点开配图目录（没有配图时是视频目录）。数量为 0 时不可点：
-    `media_target` 只返回**真实存在且非空**的目录。
-    Opens the images folder, or the videos folder when there are no images. Never
-    clickable when empty, since `media_target` only returns non-empty directories.
+    配图、视频都有就两个文件夹都打开，只有一种就开一个。数量为 0 时不可点：
+    `media_targets` 只返回**真实存在且非空**的目录。
+    Opens every non-empty media folder; never clickable when there is none.
     """
-    target = actions.media_target(row.article)
-    cell = ui.element("div").classes("wb-num" + (" clickable" if target else ""))
+    targets = actions.media_targets(row.article)
+    cell = ui.element("div").classes("wb-num" + (" clickable" if targets else ""))
     with cell:
         ui.label(row.media_label)
-    if target is None:
+    if not targets:
         return
-    cell.tooltip(f"在文件管理器里打开　·　{target.name}/")
-    cell.on("click", lambda p=target: _reveal(p))
+    names = "　".join(f"{p.name}/" for p in targets)
+    cell.tooltip(f"在文件管理器里打开　·　{names}")
+    cell.on("click", lambda ps=targets: [_reveal(p) for p in ps])
 
 
 def _reveal(path) -> None:
@@ -244,6 +244,10 @@ def _render_kind_cell(row: RowView, kind: ProductionKind, *, on_open) -> ui.elem
         return cell
 
     glyph, value, tone = _cell_state(record, kind)
+    job = jobs.running_in_cell(row.article.id, kind)
+    if job is not None:
+        glyph, value = "◐", "合成中…" if job.audio else "生成中…"
+        tone += " wb-running"
     cell = ui.element("div").classes(f"wb-kind {tone}")
     with cell:
         ui.label(glyph).classes("glyph")
@@ -275,10 +279,10 @@ def _cell_state(
     Glyph and colour always travel together: colour alone fails for colour-blind users and
     in greyscale screenshots.
 
-    已生成的显示**时长而不是「已完成」**：时长决定这个产物能不能用，
+    已生成的显示**「字数 (约时长)」而不是「已完成」**：这两个数决定产物能不能用，
     而「已完成」不比一个填满的格子多说任何东西。
-    A filled cell shows its duration rather than the word "done", because the duration is
-    what decides usability and "done" adds nothing the fill does not already say.
+    A filled cell shows "chars (≈duration)" rather than the word "done", because those
+    numbers decide usability and "done" adds nothing the fill does not already say.
 
     超出字数区间的仍然是 `●`，只换颜色 / An over-length cell keeps the filled glyph:
         它确实生成了、文件就在盘上、也确实能发——只是可能要手删两句。
@@ -292,11 +296,11 @@ def _cell_state(
     if not record.ok:
         return "▲", "失败", "wb-fail"
 
-    if record.est_seconds:
-        minutes = record.est_seconds / 60
-        value = f"{record.est_seconds:.0f}s" if minutes < 1.5 else f"{minutes:.0f}min"
-    else:
-        value = f"{record.chars}字"
+    # 字数为主、时长是估算：人改过稿子后两者都跟着台账里的新一行变
+    seconds = actions.cell_seconds(record)
+    minutes = seconds / 60
+    duration = f"{seconds:.0f}s" if minutes < 1.5 else f"{minutes:.0f}min"
+    value = f"{record.chars}字 (约{duration})"
     return "●", value, "wb-over" if actions.over_target(record, kind) else "wb-ok"
 
 

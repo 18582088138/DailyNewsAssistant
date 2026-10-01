@@ -1135,3 +1135,71 @@ def test_subtitles_follow_the_console_split(settings: Settings) -> None:
     body = srt.read_text(encoding="utf-8-sig")
     assert [line for line in body.splitlines() if line and "-->" not in line
             and not line.isdigit()] == texts
+
+
+# --- 工作台就地编辑 / in-place editing on the workbench ---------------------------
+
+
+def test_edit_refreshes_chars_and_seconds(settings: Settings) -> None:
+    """
+    编辑后台账的字数与估算时长都按新文本重算，标记行也跟着改。
+
+    反向：TTS 操作台的校对以前不写 `est_seconds`，改完稿子格子上的时长就没了。
+    """
+    from dna.narration.duration import estimate_seconds
+    from dna.produce.documents import spoken_text
+    from dna.produce.service import save_production_text, save_script_text
+
+    article_id = seed(settings)
+    _write_script(settings, article_id, ProductionKind.SHORTVIDEO, "原来的一句。")
+    ledger = Ledger(settings.db_file)
+    path = settings.output_path / ledger.get(article_id).store_dir / spec(
+        ProductionKind.SHORTVIDEO
+    ).filename_for("zh")
+
+    edited = path.read_text(encoding="utf-8").replace("原来的一句。", "改过的稿子，长了一些。" * 3)
+    save_production_text(article_id, ProductionKind.SHORTVIDEO, edited, settings=settings)
+
+    document = path.read_text(encoding="utf-8")
+    spoken = spoken_text(document)
+    record = ledger.latest_production(article_id, str(ProductionKind.SHORTVIDEO))
+    assert record.chars == len(spoken) == 33
+    assert record.est_seconds == pytest.approx(estimate_seconds(spoken))
+    assert "· 33 字）" in document, "标记行的字数要跟着正文变"
+    assert record.calls == 0 and not record.llm_model
+    assert "https://e.com/1" in document
+
+    save_script_text(article_id, ProductionKind.SHORTVIDEO_AUDIO, "短。", settings=settings)
+    record = ledger.latest_production(article_id, str(ProductionKind.SHORTVIDEO))
+    assert record.chars == 2 and record.est_seconds, "操作台校对也要刷新时长"
+
+
+def test_edit_summary_keeps_header_and_adds_no_spoken_marker(settings: Settings) -> None:
+    """总结没有「口播」那一行：写回时不能给它凭空补一行标记。"""
+    from dna.produce.service import save_production_text
+
+    article_id = seed(settings)
+    ledger = Ledger(settings.db_file)
+    directory = settings.output_path / ledger.get(article_id).store_dir
+    directory.mkdir(parents=True, exist_ok=True)
+    text = "# 标题\n\n> 总结　·　来源：https://e.com/1\n\n改过的总结正文。"
+
+    save_production_text(article_id, ProductionKind.SUMMARY, text, settings=settings)
+
+    document = (directory / spec(ProductionKind.SUMMARY).filename_for("zh")).read_text(
+        encoding="utf-8"
+    )
+    assert document.strip() == text
+    assert "口播（" not in document
+    record = ledger.latest_production(article_id, str(ProductionKind.SUMMARY))
+    assert record.chars == len("改过的总结正文。")
+
+
+def test_longform_is_read_only_on_the_workbench(settings: Settings) -> None:
+    from dna.produce import is_editable
+    from dna.produce.service import save_production_text
+
+    assert is_editable(ProductionKind.SUMMARY) and is_editable(ProductionKind.NARRATION)
+    assert not is_editable(ProductionKind.LONGFORM)
+    with pytest.raises(ValueError, match="TTS 操作台"):
+        save_production_text(seed(settings), ProductionKind.LONGFORM, "x", settings=settings)

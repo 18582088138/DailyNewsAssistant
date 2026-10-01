@@ -43,6 +43,8 @@ verify_test/
 .claude/.dirty-packages
 .claude/hooks/python-path.txt
 .claude/settings.local.json
+# 上一分支的优化要求原文，留作经验参考，不入库
+.claude/optimization_brief.md
 
 # tests/ 与 docs/issues/ **入库**（2026-09-11 决定）：
 # 验收工具要随分支走，13 份 issues 是这个项目最值钱的经验资产；
