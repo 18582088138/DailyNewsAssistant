@@ -1,10 +1,11 @@
-"""批量操作条：重新抓取与删除 / The batch bar。"""
+"""批量操作条：重新抓取、删除与批量生成 / The batch bar。"""
 
 from __future__ import annotations
 
 from nicegui import ui
 
 from frontends.nicegui_app import actions, theme
+from frontends.nicegui_app.ledger_table.batch_produce import render_produce_row
 from frontends.nicegui_app.ledger_table.state import (
     clear_selection,
     selected_ids,
@@ -34,7 +35,10 @@ def render_batch_bar(container: ui.element, *, on_done) -> None:
     if not ids:
         return
 
-    with container, ui.row().classes("wb-batch items-center gap-2 no-wrap"):
+    # 两行：上面是管理（重抓 / 删除），下面是花钱的批量生成——分开放，免得误点
+    with container:
+        bar = ui.column().classes("wb-batch gap-0")
+    with bar, ui.row().classes("items-center gap-2 no-wrap"):
         ui.label(f"已选 {len(ids)} 篇").classes("count")
         ui.button(
             "重新抓取",
@@ -49,6 +53,8 @@ def render_batch_bar(container: ui.element, *, on_done) -> None:
         ui.button(
             "清空选择", on_click=lambda: (clear_selection(), on_done())
         ).props("flat dense no-caps").style("color: var(--wb-dim)")
+    with bar:
+        render_produce_row(ids, on_done=on_done)
 
 
 def _dialog_card():
