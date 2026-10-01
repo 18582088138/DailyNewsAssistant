@@ -53,6 +53,13 @@ MODE_HINTS = {
     MODE_CLONE: "克隆参考音频里的那个人；没有参考原话时只能走「只用音色向量」。",
 }
 
+# 指令框在三种模式下含义不同：设计模式里它就是音色描述（必填）
+_INSTRUCT_LABELS = {
+    MODE_BUILTIN: ("语气指令（可选）", "如「沉稳，语速稍慢」"),
+    MODE_DESIGN: ("音色描述（必填）", "如「三十岁左右的女声，温和、吐字清楚」"),
+    MODE_CLONE: ("语气指令（可选）", "如「沉稳，语速稍慢」"),
+}
+
 BASE_SEED = 20260907
 """重掷种子的基准 / the base for a re-rolled seed.
 
@@ -216,11 +223,13 @@ class VoiceControls:
     def render(self) -> None:
         """在当前容器里画出这组控件 / Draw into the current container."""
         mode = self.base.mode if self.base.mode in MODE_LABELS else MODE_BUILTIN
-        with ui.row().classes("items-center gap-3 no-wrap"):
-            self.mode_box = ui.radio(
-                MODE_LABELS, value=mode, on_change=lambda _e: self._changed()
-            ).props("inline dense")
+        self.mode_box = ui.radio(
+            MODE_LABELS, value=mode, on_change=lambda _e: self._changed()
+        ).props("inline dense")
 
+        # 三种模式各一行配置，按所选模式只显示那一行（`apply_mode`）；指令框三种都用
+        self.builtin_row = ui.row().classes("items-center gap-2 no-wrap w-full")
+        with self.builtin_row:
             # 音色表取不到时退成自由文本框：服务离线不该让面板用不了
             voice_options, voice_value = voice_choice(self.voices, self.base)
             self.voice_box = (
@@ -228,24 +237,16 @@ class VoiceControls:
                     voice_options,
                     # 空字符串不是合法初值（NiceGUI 只放过 None）
                     value=voice_value or None,
+                    label="音色",
                     new_value_mode="add-unique",
                     on_change=lambda _e: self._changed(),
                 )
                 .props("outlined dense use-input input-debounce=0")
-                .classes("w-[170px]")
-            )
-            self.instruct_box = (
-                ui.input(
-                    value=self.base.instruct,
-                    placeholder="语气指令，如「沉稳，语速稍慢」",
-                    on_change=lambda _e: self._changed(),
-                )
-                .props("outlined dense")
-                .classes("flex-grow")
-                .tooltip("自然语言描述语气；音色设计模式下这里就是「音色描述」，必填")
+                .classes("w-[220px]")
             )
 
-        with ui.row().classes("items-center gap-2 no-wrap w-full"):
+        self.clone_row = ui.row().classes("items-center gap-2 no-wrap w-full")
+        with self.clone_row:
             ref_options, ref_value = ref_choice(actions.ref_audio_options(), self.base)
             self.ref_box = (
                 ui.select(
@@ -265,8 +266,16 @@ class VoiceControls:
                     on_upload=self._upload,
                 ).props("flat dense accept=.wav,.mp3,.flac,.m4a").classes("w-[240px]")
 
-        # 灰掉的控件说明「这个模式不看它」，这行说明「这个模式看哪个」——
-        # 音色设计的必填项藏在「语气指令」那个框里，不说没人找得到。
+        self.instruct_box = (
+            ui.input(
+                value=self.base.instruct,
+                on_change=lambda _e: self._changed(),
+            )
+            .props("outlined dense")
+            .classes("w-full")
+        )
+
+        # 这行说明「这个模式看哪个」——音色设计的必填项是指令框，不说没人找得到
         self.mode_hint = ui.label("").classes("wb-path")
 
         self.apply_mode()
@@ -297,21 +306,19 @@ class VoiceControls:
 
     def apply_mode(self) -> None:
         """
-        按模式灰掉无关控件 / Grey out what this mode ignores.
+        按模式只显示它用得到的配置 / Show only what the selected mode uses.
 
-        灰掉而不是隐藏：隐藏会让人以为「这个功能没有」，
-        灰掉说的是「这个模式下它不生效」。
+        三种模式的控件同时摆出来时，人分不清哪个框在这个模式下生效（用户实测反馈）。
+        藏起来的控件**值保留**：切回去还在，`voice_from` 按模式只取它要的字段。
         """
         mode = self.mode
-        clone = mode == MODE_CLONE
-        for box, wanted in ((self.ref_box, clone), (self.xvec_box, clone),
-                            (self.voice_box, mode == MODE_BUILTIN)):
-            if box is None:
-                continue
-            if wanted:
-                box.enable()
-            else:
-                box.disable()
+        for row, wanted in ((getattr(self, "builtin_row", None), mode == MODE_BUILTIN),
+                            (getattr(self, "clone_row", None), mode == MODE_CLONE)):
+            if row is not None:
+                row.set_visibility(wanted)
+        if self.instruct_box is not None:
+            label, placeholder = _INSTRUCT_LABELS.get(mode, _INSTRUCT_LABELS[MODE_BUILTIN])
+            self.instruct_box.props(f'label="{label}" placeholder="{placeholder}"')
         if getattr(self, "mode_hint", None) is not None:
             self.mode_hint.set_text(MODE_HINTS.get(mode, ""))
 
