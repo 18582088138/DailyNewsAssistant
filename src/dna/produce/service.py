@@ -52,6 +52,7 @@ from dna.produce.audio import _build_segments, _generate_audio
 from dna.produce.documents import (
     replace_spoken,
 )
+from dna.produce.editing import save_production_text
 from dna.produce.generate import generate_text, load_article, read_production
 from dna.produce.results import Generated, ProduceResult
 from dna.produce.tasks import (
@@ -400,25 +401,16 @@ def save_script_text(
     except OSError:
         markdown = ""
 
-    body = text.strip()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(replace_spoken(markdown, body, lang=lang), encoding="utf-8")
-
-    logger.info("稿子已按人工校对写回：%s（%d 字）", path.name, len(body))
-    return Ledger(s.db_file).record_production(
+    # 字数、时长、标记行的重算与台账写入只有一处：和工作台编辑共用
+    return save_production_text(
         article_id,
-        str(task.kind),
-        status="ok",
+        task.kind,
+        replace_spoken(markdown, text.strip(), lang=lang),
         lang=lang,
         instructions="人工校对（TTS 操作台）",
-        output_path=path.relative_to(s.output_path).as_posix(),
-        chars=len(body),
-        # 人改的稿子没有模型，也没有调用 —— 这两个字段留空不是偷懒，
-        # 是台账上「这一版不是 LLM 写的」的唯一标记。
-        llm_provider=None,
-        llm_model=None,
-        calls=0,
+        settings=s,
     )
+
 
 __all__ = [
     "Generated",
@@ -426,6 +418,7 @@ __all__ = [
     "produce",
     "produce_all",
     "read_production",
+    "save_production_text",
     "save_script_text",
     "speech_segments_for",
 ]
