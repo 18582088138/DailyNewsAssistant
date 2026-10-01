@@ -32,7 +32,7 @@ COL_PICK = 40
 COL_TITLE_MIN = 260
 COL_BODY = 78
 COL_MEDIA = 88
-COL_KIND = 108
+COL_KIND = 124  # 放得下「8000字 (约30min)」
 
 # 原文链接最多显示多少个字符 / how many characters of a source URL are shown
 # 比标题短：它是第二行的小字，长了会把「来源 + 状态」那一行挤到换行。
@@ -301,6 +301,24 @@ body::before {
 }
 .wb-detail .wb-body h1, .wb-detail .wb-body h2 { font-size: 15px; color: var(--wb-accent); }
 .wb-detail .wb-body strong { color: #e6eef8; }
+.wb-detail .wb-body.editable { cursor: text; }
+.wb-detail .wb-body.editable:hover { border-color: var(--wb-accent); }
+.wb-detail .wb-editor textarea { font-size: 13px; line-height: 1.75; }
+.wb-hint { font-size: 11px; color: var(--wb-faint); }
+/* TTS 操作台：全文与分段同一套列宽 —— 序号 | 文本 | 按钮 */
+.wb-tts-line {
+  display: grid; grid-template-columns: 34px minmax(0, 1fr) 132px;
+  gap: 8px; align-items: start; width: 100%;
+}
+.wb-dock {
+  position: fixed; right: 18px; bottom: 18px; z-index: 3000;
+  flex-direction: column-reverse; pointer-events: none;
+}
+.wb-dock > * { pointer-events: auto; }
+.wb-kind.wb-running { animation: wb-pulse 1.2s ease-in-out infinite; color: var(--wb-accent); }
+.wb-kind.wb-running .glyph { animation: wb-spin 1s linear infinite; display: inline-block; }
+@keyframes wb-pulse { 50% { background: rgba(61,220,151,.16); } }
+@keyframes wb-spin { to { transform: rotate(360deg); } }
 .wb-path {
   font-family: var(--wb-mono); font-size: 10.5px; color: var(--wb-faint);
   word-break: break-all;
@@ -341,6 +359,7 @@ body::before {
 /* 减少动效偏好 / respect reduced motion */
 @media (prefers-reduced-motion: reduce) {
   .wb-row, .wb-kind, .wb-num.clickable { transition: none; }
+  .wb-kind.wb-running, .wb-kind.wb-running .glyph { animation: none; }
   /* 关掉呼吸动画，但**保留颜色与文字**——标识本身不能因为关动效而消失
      The pulse stops but the badge stays: the marker itself must not depend on motion. */
   .wb-new-badge { animation: none; }
