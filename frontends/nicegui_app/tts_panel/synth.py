@@ -8,7 +8,7 @@ from nicegui import ui
 
 from dna.produce import spec
 from dna.tts.base import VoiceSpec
-from frontends.nicegui_app import actions
+from frontends.nicegui_app import actions, jobs
 from frontends.nicegui_app.audio_progress import AudioProgress
 from frontends.nicegui_app.tts_panel.model import (
     STATE_DONE,
@@ -152,21 +152,28 @@ def _synthesise(panel: _Panel, dialog, on_change) -> None:
 
     label = spec(panel.kind).label
     edited = panel.script_text() != panel.loaded_text
-    progress = AudioProgress(
-        label,
-        expected_seconds=actions.audio_estimate_seconds(
-            panel.row.article, panel.kind, panel.lang
-        ),
-        hint=f"复用 {len(rendered)} 段，本次合成 {len(segments) - len(rendered)} 段"
-        if rendered else "音色按操作台里选的那套",
-    )
+    job = jobs.begin(panel.row.article.id, panel.kind, panel.lang, label)
+    if job is None:
+        ui.notify(f"{label} 已经在合成中，不会重复提交", type="info")
+        return
+    # 文本在启动时就取好了：之后关掉对话框（点别处）任务照样在后台跑
+    script_text = panel.script_text()
+    with jobs.anchor():
+        progress = AudioProgress(
+            label,
+            expected_seconds=actions.audio_estimate_seconds(
+                panel.row.article, panel.kind, panel.lang
+            ),
+            hint=f"复用 {len(rendered)} 段，本次合成 {len(segments) - len(rendered)} 段"
+            if rendered else "音色按操作台里选的那套",
+        )
 
     async def _go() -> None:
         try:
             if edited and panel.editable:
                 try:
                     await actions.save_script(
-                        panel.row.article.id, panel.kind, panel.script_text(),
+                        panel.row.article.id, panel.kind, script_text,
                         lang=panel.lang,
                     )
                 except Exception as exc:
@@ -181,8 +188,10 @@ def _synthesise(panel: _Panel, dialog, on_change) -> None:
             )
         finally:
             progress.close()
+            jobs.finish(job)
 
-        dialog.close()
+        if not dialog.is_deleted:
+            dialog.close()
         if not result.ok:
             ui.notify(f"{label} 合成失败：{result.error}", type="negative",
                       timeout=12000, multi_line=True, close_button=True)
@@ -199,4 +208,7 @@ def _synthesise(panel: _Panel, dialog, on_change) -> None:
         if on_change is not None:
             on_change()
 
-    ui.timer(0.01, _go, once=True)
+    with jobs.anchor():
+        ui.timer(0.01, _go, once=True)
+    if on_change is not None:
+        on_change()

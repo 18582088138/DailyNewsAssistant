@@ -6,7 +6,7 @@ from nicegui import ui
 
 from dna.produce import ProductionKind, spec
 from dna.produce.tasks import default_language, normalize_lang
-from frontends.nicegui_app import actions, theme
+from frontends.nicegui_app import actions, jobs, theme
 from frontends.nicegui_app.actions import RowView
 from frontends.nicegui_app.audio_progress import AudioProgress
 from frontends.nicegui_app.ledger_table.state import (
@@ -184,24 +184,10 @@ def _run(
     label = task.label if lang == default_language() else f"{task.label}（EN）"
     is_audio = task.audio_of is not None
 
-    # 音频与文本的等待完全不是一个量级，提示也不该是同一种。
-    #
-    # 音频：几分钟到几十分钟，用右下角的**进度浮窗**（秒表 + 进度条 + 已产出秒数，
-    #   见 `audio_progress.py`）—— 一个不动的转圈无法区分「在跑」和「卡死了」。
-    # 文本：十几秒，一条带转圈的提示条足够，多摆一个浮窗反而吵。
-    # The two waits differ by orders of magnitude, so the feedback differs too.
-    panel = None
-    notification = None
-    progress: dict = {}
-    if is_audio:
-        panel = AudioProgress(
-            label,
-            expected_seconds=actions.audio_estimate_seconds(row.article, kind, lang),
-        )
-        progress = panel.progress
-    else:
-        notification = ui.notification(f"{label} 生成中…（调用 LLM，请稍候）",
-                                       spinner=True, timeout=None)
+    job = jobs.begin(row.article.id, kind, lang, label)
+    if job is None:
+        ui.notify(f"{label} 已经在执行中，不会重复调用", type="info")
+        return
 
     async def _go() -> None:
         try:
@@ -215,10 +201,8 @@ def _run(
                 progress=progress,
             )
         finally:
-            if panel is not None:
-                panel.close()
-            if notification is not None:
-                notification.dismiss()
+            panel.close()
+            jobs.finish(job)
 
         if result.ok and result.skipped:
             ui.notify(f"{label}：已存在，未重新生成", type="info")
@@ -261,4 +245,18 @@ def _run(
 
         on_change()
 
-    ui.timer(0.01, _go, once=True)
+    # 进度浮窗与计时器挂在任务坞上：别的任务结束重画表格时，这一个不能跟着被删。
+    # 音频是几分钟到几十分钟，浮窗里有秒表和进度条；文本十几秒，同一张浮窗只走秒表。
+    with jobs.anchor():
+        if is_audio:
+            panel = AudioProgress(
+                label,
+                expected_seconds=actions.audio_estimate_seconds(row.article, kind, lang),
+            )
+        else:
+            panel = AudioProgress(label, action="生成中", detail="调用 LLM，请稍候…",
+                                  hint="点别处不影响，任务在后台继续")
+        progress = panel.progress if is_audio else {}
+        ui.timer(0.01, _go, once=True)
+    # 立刻重画一次，让格子亮起「执行中」
+    on_change()
