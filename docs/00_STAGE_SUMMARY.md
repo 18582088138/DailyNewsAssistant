@@ -24,27 +24,11 @@ CLI `dna new` / `dna media`。提交命令在 `docs/git_commands.md`（待人工
 而 `config/prompts/shortvideo.zh.md` 写的是 `正文字数在 {{lo_chars}}~{{hi_chars}} 之间`。
 **两者取其一**：改提示词措辞，或放宽断言。**提示词是用户手工调的，不要擅自回改。**
 
-**护栏换成 DSH 原生插件了（2026-10-04）。**`.claude/settings.json` 用的是 Claude Code
-的 hook 协议，**DSH 不读**——那三个脚本在本机从来没生效过（实测：一轮改了 80+ 个文件，
-ruff 自动检查与「该跑哪个测试包」的提示一次都没出现过，而当时 ruff 甚至没装）。
-现在用 **`dsh-plugin-dna-guard`**（装在 DSH profile：`~/.dsh/profiles/desktop/plugins/`，
-**不随仓库走**）挂 `ctx.tools.guard`，拦 `git commit`/`git push`、`git add -A`、
-以及会真花钱的 `pytest -m live`/`-m slow`/`-m ''`。**实测有效**（`git commit --dry-run`
-被拒并返回中文原因）。细节与「哪些仍然只能靠自觉」见 `CLAUDE.md` 文末。
-
 **上一分支 `opt_gui`：GUI 易用性优化。** 计划正文 `~/.claude/plans/opt-gui.md`
-**已不在本机**（仓库外的计划正文会被清理掉，见下方「计划正文的存法」）。批次 A~F ✅。
+**已不在本机**。批次 A~F ✅。
 
 **更早分支 `DNA_v0.1`：全面优化（减少后续开发成本 + 去冗余）。**
 计划正文 `~/.claude/plans/sequential-fluttering-wren.md` **同样已不在本机**。
-
-> **计划正文的存法（2026-10-04 实测的教训）。**上面两行指针是**断的**：
-> `~/.claude/plans/` 现在只剩本次的 `custom-article.md`。那一行存在的理由本
-> 就是「上次 `/clear` 后主线找不回来」，现在它自己也找不回来了。
-> 要点事实上只剩两个地方可查：**本节的批次表** 与 **`git log` 的 commit message**
-> （每个批次一条，写得比这里细）。
-> 所以计划正文尽量**写进仓库**（`docs/plans/<分支>.md`，随分支走）；
-> 放仓库外只适合一次性草稿，放之前先想清楚它丢了以后谁还看得懂。
 
 | 批次 | 内容 | 状态 |
 |---|---|---|

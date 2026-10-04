@@ -43,16 +43,12 @@ frontends → produce → pipeline → narration → store → extract → sourc
 6. **AI 不执行 `git commit` / `git push`。** 命令写进
    `docs/git_commands.md`，由人工执行。那个文件是**一次性的**：
    覆写之前先 `git log` 核对上一组已经执行过。
-   （2026-10-04 起这条**有机制兜底**：DSH 护栏插件会拒绝这类调用，见文末。）
 7. **计划必须落盘，并在仓库里留指针。** 长任务的进度写进
    `docs/00_STAGE_SUMMARY.md` §〇，计划正文的路径也写在那里。
    会话一 `/clear`，只活在上下文里的计划就没了 —— 实测重新考古花掉十几轮。
    新会话接手长任务：先读 `00_STAGE_SUMMARY` §〇，别猜。
-   **计划正文优先写进仓库**（`docs/plans/<分支>.md`）：放 `~/.claude/plans/` 的
-   已经丢过两份，指针变成断链。
-8. **没有 CI 兜底。** `addopts` 只在本机 `pyproject.toml` 生效，
-   护栏只拦**AI 的工具调用**；人工在别的终端跑什么都不受约束 ——
-   `tools/check.py` 是唯一的闸。
+8. **没有 CI 兜底。** `addopts` 只在本机 `pyproject.toml` 生效；
+   人工在别的终端跑什么都不受约束 —— `tools/check.py` 是唯一的闸。
 
 ## 配置铁律（置信度 env > config > docs > source code）
 
@@ -92,7 +88,7 @@ frontends → produce → pipeline → narration → store → extract → sourc
 ## 花钱的地方
 
 - **真实 LLM 调用要花钱。** 默认 `pytest` 是安全的（`live`/`slow` 已排除）；
-  `pytest -m ''` 与 `-m live` **会真扣钱**（DSH 护栏会拦，见文末）。
+  `pytest -m ''` 与 `-m live` **会真扣钱**。
 - 已有产物不加 `--force` 就复用，零调用 —— 这是 produce 层最重要的护栏。
 - `longform` 不进 `--all`：一篇 5~9 次调用，是其余三种加起来的数倍。
 - 本地 LLM（Ollama / OpenVINO）**已冻结**，不做功能开发也不做功能测试。
@@ -101,29 +97,20 @@ frontends → produce → pipeline → narration → store → extract → sourc
 - 用户手工调过的 `config/profile.yaml` 与 `config/prompts/` **不要回改**；
   配置回写只能按行 patch（`yaml.safe_dump` 会抹掉注释）。
 
-## 自动反馈与护栏（现状：DSH 插件，**不是** Claude Code hook）
+## 自动反馈（现状：**没有任何自动护栏**）
 
-**`.claude/hooks/` 那三个脚本在 DSH 下不生效。** `.claude/settings.json` 用的是 Claude Code
-的 hook 协议，DSH 不读它。2026-10-04 实测：一轮改了 80+ 个文件，`ruff` 自动检查与
-「该跑哪个测试包」的提示**一次都没出现过**（当时 ruff 甚至没装）。脚本留在仓库里备查。
+`.claude/settings.json` + `.claude/hooks/` 用的是 **Claude Code** 的 hook 协议；
+换用别的 AI 工具后它不会被读取 —— 实测一轮改了 80+ 个文件，`ruff` 自动检查与
+「该跑哪个测试包」的提示**一次都没出现过**（当时 ruff 甚至没装）。脚本留在仓库里备查，
+但**不要以为它们会替你跑**。
 
-护栏换成了 DSH 原生插件 **`dsh-plugin-dna-guard`**（装在 DSH profile 里：
-`~/.dsh/profiles/desktop/plugins/`，**不随仓库走**；含 README 与离线 smoke 测试）。
-它挂 `ctx.tools.guard`——`ToolGuard = (exec) => string | undefined`，返回字符串即拒绝：
+所以下面三件事必须自己记得做（没有任何东西会触发它们）：
 
-| 拦什么 | 例子 |
+| 时机 | 做什么 |
 |---|---|
-| 写 git 历史 | `git commit`、`git push`（含 `git -C <path> commit`、`cd x && git commit`） |
-| 一锅端暂存 | `git add -A` / `--all` / `.` |
-| 会真花钱的测试 | `pytest -m live` / `-m slow` / `-m ''`（含 `pwsh -c "…"` 里被引号包住的） |
-
-拒绝原因会作为**工具结果**回给模型，里面写清该怎么做（例如「写进 `docs/git_commands.md`」），
-所以被拦时改道而不是重试。改插件 config 保存即 HMR 重载；关掉它把 `cordis.patch.yml`
-里那条的 `enabled` 改成 `false`。
-
-**仍然没有任何机制兜底、只能靠自觉的**：
-- 改完 `*.py` 跑 `ruff check <file>`；每批跑相关测试包；收尾跑 `python tools/check.py`
-- 人工在别的终端提交、或跑 `-m live` —— 护栏只拦 **AI 的工具调用**
+| 改完 `*.py` | `ruff check <那一个文件>`（0.1s），失败立刻改 |
+| 每批 | 只跑这一批改动涉及的测试包 |
+| 收尾 | `python tools/check.py`（ruff + 全量测试 + `dna doctor`）—— **唯一的闸** |
 
 换机器：把本机解释器路径写进 `.claude/hooks/python-path.txt`（不入库，`.gitignore` 已忽略），
-并改上面环境节那一行；护栏插件需要另外拷过去。
+并改上面环境节那一行。
