@@ -117,7 +117,7 @@ def daily_digest(digest_entry: DigestEntry) -> DailyDigest:
 @pytest.fixture
 def patch_actions_settings(monkeypatch):
     """
-    把 `actions` 包各子模块里的 `get_settings` 一起替掉。
+    把 `actions` 包各子模块以及 `dna.*` 各模块里的 `get_settings` 一起替掉。
 
     **这个夹具存在的唯一理由是一个容易误判的坑。** `frontends/nicegui_app/actions`
     是一个包（facade + 8 个子模块），每个子模块都写 `from dna.core.config import
@@ -127,6 +127,13 @@ def patch_actions_settings(monkeypatch):
     而报错长得像「测试写错了」，不像「打的位置不对」。
 
     Each submodule holds its own binding, so patching the facade alone has no effect.
+
+    2026-10-04 扩到 `dna.*`：同一个坑在存储层更危险。`dna.store.custom_article` 这类
+    模块也各持一份绑定，于是「调用一个 store 函数」会写到**用户真实的 `data/dna.db`**
+    ——一次跑测试就往台账里插了几行，全程不报错。凡是持有 `get_settings` 的模块都要替掉。
+    Extended to the `dna.*` modules: the same trap is worse in the store layer, where one
+    un-patched binding makes a test write into the user's real `data/dna.db` without raising
+    anything. Every module holding a `get_settings` binding has to be replaced.
     """
 
     def apply(settings) -> None:
@@ -134,9 +141,10 @@ def patch_actions_settings(monkeypatch):
 
         import frontends.nicegui_app.actions  # noqa: F401  确保子模块都已导入
 
-        prefix = "frontends.nicegui_app.actions"
         for name, module in list(sys.modules.items()):
-            if name.startswith(prefix) and hasattr(module, "get_settings"):
+            if not name.startswith(("frontends.nicegui_app.actions", "dna.")):
+                continue
+            if hasattr(module, "get_settings"):
                 monkeypatch.setattr(module, "get_settings", lambda: settings)
 
     return apply

@@ -6,7 +6,7 @@
     2. **分段**：切成模型吃得下的长度，且**只在句子边界切**
 
 为什么必须清洗 / Why cleaning is not optional:
-    产物文件是 Markdown：抬头有 `# 标题`、`> 口播文案　·　来源：https://…`，
+    产物文件是 Markdown：抬头有 `# 标题`、`> 中视频文案　·　来源：https://…`，
     正文里有 `**主标题：**`。直接送进 TTS，模型会**把网址一个字符一个字符念出来**，
     把星号念成「星星」。这不是音质问题，是整段音频废掉。
     The production files are Markdown with a title, a source URL and bold labels. Fed
@@ -51,7 +51,7 @@ def clean_for_speech(text: str) -> str:
     把 Markdown 正文清成可朗读的纯文本 / Reduce Markdown to speakable plain text.
 
     去掉的东西 / What is removed:
-        HTML 注释（长文案的提纲藏在这里）、图片、链接**连同网址**、行内标记、
+        HTML 注释（长视频的提纲藏在这里）、图片、链接**连同网址**、行内标记、
         标题井号、引用尖括号、列表符号、分隔线
 
     保留的东西 / What is kept:

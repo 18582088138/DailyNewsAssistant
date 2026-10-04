@@ -129,7 +129,7 @@ def gui(
     """
     启动台账工作台 / Launch the article workbench.
 
-    一张大表：每篇文章一行，总结 / 短视频 / 口播 / 长文案各一列，
+    一张大表：每篇文章一行，总结 / 短视频 / 中视频 / 长视频各一列，
     每格都能单独重做。**打开界面本身不产生费用**，只有点生成按钮才会调用 LLM。
     """
     from frontends.nicegui_app.main import run

@@ -14,7 +14,7 @@ test_prompt_lab.py —— 提示词调试台单元测试 / Prompt workbench test
     1. **干跑零 LLM 调用**：`render()` 不碰真 provider，也不写任何文件
     2. 干跑拿到的提示词**含 chat_json 追加的那条 JSON 指令**——
        这是拦在 provider 边界上而不是 build_messages 那一层的全部意义
-    3. 长文案干跑拿到「提纲 + 每节」多条提示词，不是只有第一条
+    3. 长视频干跑拿到「提纲 + 每节」多条提示词，不是只有第一条
     4. `instructions` 出现在提示词末尾（应用里也是接在末尾）
     5. 语言维度：`--lang en` 用英文写作要求
     6. 干跑不返回产物字数/时长——那些是占位回复的属性，不是模型的
@@ -125,7 +125,7 @@ def test_prompt_includes_the_json_instruction(settings: Settings) -> None:
 
 
 def test_longform_renders_one_prompt_per_section(settings: Settings) -> None:
-    """长文案是十几次调用拼起来的，每一节的提示词都不一样，要全部拿到。"""
+    """长视频是十几次调用拼起来的，每一节的提示词都不一样，要全部拿到。"""
     article_id = seed(settings)
     result = prompt_lab.render(
         article_id, ProductionKind.LONGFORM, variant="interview", settings=settings

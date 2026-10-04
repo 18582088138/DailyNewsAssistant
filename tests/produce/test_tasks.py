@@ -10,7 +10,7 @@ test_tasks.py —— 产物任务定义单元测试 / Production task definition
 
 覆盖 / Covers:
     1. 三种按字数验收的产物各自映射到 profile 里对应的字段
-    2. 长文案与音频返回 None —— 它们**不按字数验收**
+    2. 长视频与音频返回 None —— 它们**不按字数验收**
     3. 传字符串 kind 也认（台账里存的是字符串）
     4. 窗口跟着 profile 走，不是写死的常量
 
@@ -67,7 +67,7 @@ def test_char_windows_come_from_the_profile(
 )
 def test_kinds_without_a_char_window_return_none(profile: Profile, kind: ProductionKind) -> None:
     """
-    长文案按**时长**验收（字数由时长推出来，见 issue 007-C）；音频根本不是文本。
+    长视频按**时长**验收（字数由时长推出来，见 issue 007-C）；音频根本不是文本。
 
     返回 None 的意思是「不按字数判定」，不是「窗口是 0~0」——后者会把每一格都
     标成超长。

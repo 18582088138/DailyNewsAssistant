@@ -11,7 +11,7 @@ This is the master table: every collected article, its fetch status and where it
     2. **跨日去重**——同一篇文章第二天再出现在 feed 里时不再重复处理
        Cross-day de-duplication: an article reappearing in a feed tomorrow is not
        processed twice.
-    3. **后续功能的选取依据**——从表里挑几篇做日报、挑一篇做口播稿或视频、
+    3. **后续功能的选取依据**——从表里挑几篇做日报、挑一篇做中视频稿或视频、
        或指定重抓。后续阶段的产出记录（productions 表）会挂在这张表上。
        The selection basis for later features: pick entries for a digest, pick one for
        a voice-over or video, or force a re-fetch. The productions table added later
@@ -350,6 +350,48 @@ class Ledger(ProductionQueries):
         with open_db(self.db_path) as conn:
             conn.execute(
                 "UPDATE articles SET store_dir = ? WHERE id = ?", (store_dir, article_id)
+            )
+
+    def set_title(self, article_id: str, title: str, *, also_feed_title: bool = False) -> None:
+        """
+        人工改标题 / Rewrite a title by hand.
+
+        标题是可以改的——人工创作的文章从占位标题开始，抓取来的文章也可能只是
+        想换个说法。**不动 `feed_title`**：那是源发布时的原始标题，是重抓时的兜底
+        （见 issues/004），跟着一起改就失去了「标题被抽取污染后能自愈」的能力。
+        The title is editable — a hand-authored article starts from a placeholder, and a
+        fetched one may simply need rewording. `feed_title` is deliberately left alone: it
+        holds what the source published and is the fallback on re-fetch (issues/004), so
+        overwriting it would destroy the self-healing of polluted titles.
+
+        例外是人工创作的文章（`also_feed_title=True`）：它没有「源」，占位标题留在
+        `feed_title` 里只会在下一次读取时把改好的标题顶掉。
+        The exception is a hand-authored article, which has no source at all: leaving the
+        placeholder in `feed_title` would push it back over the edited title on the next
+        read.
+        """
+        with open_db(self.db_path) as conn:
+            if also_feed_title:
+                conn.execute(
+                    "UPDATE articles SET title = ?, feed_title = ? WHERE id = ?",
+                    (title, title, article_id),
+                )
+            else:
+                conn.execute("UPDATE articles SET title = ? WHERE id = ?", (title, article_id))
+
+    def set_media_counts(self, article_id: str, *, image_count: int, video_count: int) -> None:
+        """
+        改写媒体数量 / Rewrite the media counts.
+
+        给「人工往素材文件夹里拷了文件之后重新清点」用。单拎出来是因为它不该顺带
+        改动状态、正文字数或抓取次数——清点一下盘上有几张图，不是一次抓取。
+        Used after files are dropped into the asset folders by hand. Separate for the same
+        reason as `set_store_dir`: counting what is on disk is not a fetch.
+        """
+        with open_db(self.db_path) as conn:
+            conn.execute(
+                "UPDATE articles SET image_count = ?, video_count = ? WHERE id = ?",
+                (max(0, image_count), max(0, video_count), article_id),
             )
 
     def delete(self, article_id: str) -> int:

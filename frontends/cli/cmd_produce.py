@@ -27,9 +27,9 @@ def produce(
     instructions: str = typer.Option(
         "", "--instructions", "-i", help="本次的额外要求，例如「加长到 40 秒」"
     ),
-    all_kinds: bool = typer.Option(False, "--all", help="生成常规三项（不含长文案与音频）"),
+    all_kinds: bool = typer.Option(False, "--all", help="生成常规三项（不含长视频与音频）"),
     variant: str | None = typer.Option(
-        None, "--variant", help="长文案形式：feature（专题，单角色）| interview（访谈，双角色）"
+        None, "--variant", help="长视频形式：feature（专题，单角色）| interview（访谈，双角色）"
     ),
     force: bool = typer.Option(False, "--force", help="已有产物也重做（会重新计费）"),
 ) -> None:
@@ -39,7 +39,7 @@ def produce(
     ⚠️ **文案类产物会调用 LLM 并产生费用。** 已有的产物默认直接复用、不重复计费，
     要重做请加 --force。
 
-    长文案（5~15 分钟）**不在 --all 里**，必须显式 --kind longform：
+    长视频（5~15 分钟）**不在 --all 里**，必须显式 --kind longform：
     它一篇要 5~9 次调用，是其余三项加起来的两倍多。
 
     `--lang en` 出英文版。**英文版单独计费**，而且不进 --all——
@@ -52,7 +52,7 @@ def produce(
     再配 `--instructions "加长到 40 秒"`。
 
     三种 `*_audio` 是**本地 TTS 合成，一分钱不花，但很花时间**（实测 RTF≈2.5：
-    口播约 4 分钟，长文案约 37 分钟）。它们同样不在 --all 里，理由是时间不是钱。
+    中视频约 4 分钟，长视频约 37 分钟）。它们同样不在 --all 里，理由是时间不是钱。
     """
     from dna.produce import ProductionKind, produce_all, spec
     from dna.produce import produce as produce_one

@@ -55,12 +55,12 @@ articles ──1:N──> productions
 | `id` | 自增主键 |
 | `article_id` | 指向 `articles.id` |
 | `kind` | `summary_zh` \| `summary_en` \| `shortvideo` \| `narration` \| `longform` |
-| `variant` | 长文案专用：`feature`（专题）\| `interview`（访谈） |
+| `variant` | 长视频专用：`feature`（专题）\| `interview`（访谈） |
 | `status` | `ok` \| `failed` |
 | `output_path` | 相对 `outputs/` 的产物文件 |
-| `chars` / `est_seconds` | 字数 / 估算口播秒数 |
+| `chars` / `est_seconds` | 字数 / 估算中视频秒数 |
 | `llm_provider` / `llm_model` | 哪个 provider、哪个模型写的 |
-| `tokens` / `calls` / `duration_ms` | 用量 / 调用次数（长文案是分段的，会有多次） / 耗时 |
+| `tokens` / `calls` / `duration_ms` | 用量 / 调用次数（长视频是分段的，会有多次） / 耗时 |
 | `error` | 失败原因 |
 | `created_at` | 生成时间 |
 | `redo_of_id` | **指向被替换的上一版** |
@@ -142,7 +142,7 @@ ledger.production_matrix([r.id for r in records])   # {article_id: {kind: record
 ### 为什么语言是列，不是新的 kind
 
 `summary_zh` 与 `summary_en` 原本是两种产物类型，于是工作台里占两列——
-可它们是**同一份东西的两个语言版本**。要给短视频、口播、长文案都加英文版时，
+可它们是**同一份东西的两个语言版本**。要给短视频、中视频、长视频都加英文版时，
 照原样得再造三个 kind 加它们各自的音频，枚举翻倍而语义没变清楚一点。
 
 v4 之后 **`(article_id, kind, lang)` 才是一份产物的完整标识**：

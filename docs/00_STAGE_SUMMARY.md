@@ -7,12 +7,28 @@
 
 ## 〇、进行中
 
-**当前分支 `opt_gui`：GUI 易用性优化。** 计划正文 `~/.claude/plans/opt-gui.md`
-（不随仓库走；新会话先读它）。批次 A~F ✅，提交命令在 `docs/git_commands.md`（待人工执行）。
+**当前分支 `custom_article`：主界面「新建」自己的文章。**
+计划正文 `~/.claude/plans/custom-article.md`（不随仓库走；新会话先读它）。
+已完成：后端 `create_custom_article`（id 走 `custom://<uuid>`，空 URL 会撞行）·
+文章面板双击改标题/正文 · 未生成产物的骨架 · 素材合规化（点「媒体」格 / `dna media`）·
+口播→中视频、长文案→长视频改名（**落盘标记 `**口播（` 刻意不动**）·
+CLI `dna new` / `dna media`。提交命令在 `docs/git_commands.md`（待人工执行）。
 
-**上一分支 `DNA_v0.1`：全面优化（减少后续开发成本 + 去冗余）。**
-计划正文在 `~/.claude/plans/sequential-fluttering-wren.md`（不随仓库走，
-新会话先读它再动手 —— 这一行存在的理由就是上次 `/clear` 后主线找不回来）。
+**一条硬规矩：历史产物只读。**`save_title` / `save_body` 与 `normalize_media` 在
+**store 层**拒绝非人工创作的文章（命令行也绕不过去）——改稿会把整篇 `article.md`
+重渲染、整理素材会改名 `images/`，两者对抓取来的文章都是**改写历史档案**。
+历史产物要动只有 `dna refetch`（重抓）与 `dna sync`（只读 `article.md`，不改写）。
+
+**基线（动手前实测，未变）**：`pytest` 有 **2 个既有失败**，与本次改动无关——
+`tests/narration/test_script_builder.py` 断言提示词里有 `200~250 字`，
+而 `config/prompts/shortvideo.zh.md` 写的是 `正文字数在 {{lo_chars}}~{{hi_chars}} 之间`。
+**两者取其一**：改提示词措辞，或放宽断言。**提示词是用户手工调的，不要擅自回改。**
+
+**上一分支 `opt_gui`：GUI 易用性优化。** 计划正文 `~/.claude/plans/opt-gui.md`
+**已不在本机**。批次 A~F ✅。
+
+**更早分支 `DNA_v0.1`：全面优化（减少后续开发成本 + 去冗余）。**
+计划正文 `~/.claude/plans/sequential-fluttering-wren.md` **同样已不在本机**。
 
 | 批次 | 内容 | 状态 |
 |---|---|---|
@@ -123,7 +139,7 @@
 | [004](issues/004-image-hotlink-and-title-overwrite.md) | 图床防盗链 403；抽取降级时站点通用标题覆盖 RSS 正确标题 | ✅ |
 | [005](issues/005-wechat-zhihu-live-verification.md) | 知乎强反爬 403（改人工补正文 + `dna sync`）；配图上限偏少；孤儿图片 | ✅ |
 | [006](issues/006-p3-config-and-normalisation.md) | `db_path` 不跟随 `DATA_DIR`；NFKC 把中文逗号折成半角 | ✅ |
-| [007](issues/007-p35-workbench.md) | arXiv「配图」是页脚 logo；长文案按字符数推导与按秒数验收对不上 | ✅ |
+| [007](issues/007-p35-workbench.md) | arXiv「配图」是页脚 logo；长视频按字符数推导与按秒数验收对不上 | ✅ |
 | [008](issues/008-copy-information-density.md) | **字数预算按纯中文语速折算，系统性少要三分之一**，且错误完全静默 | ✅ |
 | [009](issues/009-tts-speaking-rate.md) | 时长估算与实际合成差六成；Qwen3-TTS 中文语速实测值 | ⚠️ 已量出，本阶段不改 |
 | [010](issues/010-redo-cache-and-new-badge.md) | **重做调了 LLM 但内容一字未变**（缓存键是提示词）；NEW 标识过夜消失 | ✅ |
@@ -132,6 +148,7 @@
 | [013](issues/013-wechat-videos-and-empty-select-values.md) | 微信视频抓取；NiceGUI 空 select 值触发 `Invalid value` 崩溃 | ✅ |
 | [014](issues/014-hardcoded-config-and-fake-settings.md) | **配置改了不生效**：存图上限被写死的 10 静默压掉；`.env` 的四个代理项完全不接线；18 条假配置 | 🔄 批次 2 |
 | [015](issues/015-language-sentinel-and-dialog-clipping.md) | 语言哨兵空串漏到下游：整张表静默变「未生成」+ 展开面板 `KeyError: ''`；设置面板被 Quasar 裁掉没滚动条；`src/` 下落了 `data/` 与 `outputs/` | ✅ |
+| [016](issues/016-title-change-did-not-rename-the-folder.md) | **改标题只改内容、不重命名产物目录**，目录名与标题脱节；连带隐患是下一次落盘会按 id 删掉旧目录，把里面的产物一起删掉 | ✅ |
 
 **issue 001 的长期约束**：本地推理模型回答一个字耗数千 token / 数百秒。因此本地模型
 **不要设小的 `max_tokens`**（控长度靠提示词约束句数）；Local 迁移优先选非推理模型；

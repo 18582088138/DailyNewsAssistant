@@ -12,6 +12,7 @@ from pathlib import Path
 from dna.core.config import Profile, Settings, get_settings
 from dna.core.logging import get_logger
 from dna.core.models import Article, Cluster, NewsItem
+from dna.core.urls import display_source
 from dna.llm.base import LLMProvider
 from dna.narration.longform import LongformMode, build_longform, can_build_longform
 from dna.narration.script_builder import build_narration, build_short_video
@@ -99,7 +100,7 @@ def generate_text(
         if article_id not in translated:
             raise RuntimeError("翻译未返回该条目")
         title_en, summary_en = translated[article_id]
-        body = f"# {title_en}\n\n> Source: {article.url}\n\n{summary_en}\n"
+        body = f"# {title_en}\n\n> Source: {display_source(article.url)}\n\n{summary_en}\n"
         return Generated(text=body, chars=len(summary_en), calls=1)
 
     if task.kind is ProductionKind.SHORTVIDEO:
@@ -116,7 +117,7 @@ def generate_text(
             max_rewrites=profile.copy_max_rewrites,
             body_chars=profile.script_body_chars,
         )
-        body = front_matter(article, f"短视频文案（{lang}）") + script_block(script)
+        body = front_matter(article, f"{task.label}（{lang}）") + script_block(script)
         return Generated(
             text=body,
             chars=script.chars,
@@ -139,7 +140,7 @@ def generate_text(
             max_rewrites=profile.copy_max_rewrites,
             body_chars=profile.script_body_chars,
         )
-        body = front_matter(article, f"口播文案（{lang}）") + script_block(script)
+        body = front_matter(article, f"{task.label}（{lang}）") + script_block(script)
         return Generated(
             text=body,
             chars=script.chars,
@@ -165,11 +166,14 @@ def generate_text(
             # 章节数就是这一篇的调用次数上限（每节一次），所以它必须可配
             sections=(tuning.longform_min_sections, tuning.longform_max_sections),
         )
-        label = "专题" if mode is LongformMode.FEATURE else "访谈"
+        # 抬头里的「长视频」取自 label（`tasks.TASKS`），不在这里再写一遍字面量：
+        # 标签改名时只有一处要改。`variant_label` 才是这一个变体的名字。
+        variant_label = "专题" if mode is LongformMode.FEATURE else "访谈"
         outline = "\n".join(f"{i}. {s_.title}" for i, s_ in enumerate(result.sections, 1))
         body = (
             front_matter(
-                article, f"长文案 · {label} · {lang}（约 {result.seconds / 60:.0f} 分钟）"
+                article,
+                f"{task.label} · {variant_label} · {lang}（约 {result.seconds / 60:.0f} 分钟）",
             )
             + f"<!-- 提纲\n{outline}\n-->\n\n"
             + result.text

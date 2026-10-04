@@ -109,7 +109,7 @@ def script_is_editable(kind: ProductionKind | str, *, lang: str = "") -> bool:
     """
     这一格的稿子能不能从操作台写回 / Whether this cell's script can be written back.
 
-    长文案的稿子**按发言人分轮**存在 JSON 边车里，一段纯文本写不回去（`save_script_text`
+    长视频的稿子**按发言人分轮**存在 JSON 边车里，一段纯文本写不回去（`save_script_text`
     会直接拒绝）。面板要提前知道，好在打开时就说清「这里改的字不会写回稿子」——
     等到人校对完一整篇再报错，那份工就白做了。
     """

@@ -1,5 +1,5 @@
 """
-长文案的数据模型 / The long-form script's models.
+长视频的数据模型 / The long-form script's models.
 
 专题与访谈**产出同一个结构**（`mode` 不同、`speaker` 不同），所以下游的 TTS
 照着 `speaker` 分配音色即可，不必分两条代码路径。
@@ -18,7 +18,7 @@ MAX_SECTIONS = 8
 
 
 class LongformMode(StrEnum):
-    """长文案形式 / Long-form mode."""
+    """长视频形式 / Long-form mode."""
 
     FEATURE = "feature"  # 专题：单角色
     INTERVIEW = "interview"  # 访谈：双角色
@@ -48,7 +48,7 @@ class SectionPlan(BaseModel):
 
 
 class OutlinePlan(BaseModel):
-    """长文案提纲 / The long-form outline."""
+    """长视频提纲 / The long-form outline."""
 
     sections: list[SectionPlan] = Field(min_length=1, max_length=MAX_SECTIONS)
 
@@ -68,7 +68,7 @@ class SectionScript(BaseModel):
 
 @dataclass
 class LongformResult:
-    """一篇长文案的结果 / The result of one long-form script."""
+    """一篇长视频的结果 / The result of one long-form script."""
 
     mode: LongformMode
     turns: list[Turn] = field(default_factory=list)

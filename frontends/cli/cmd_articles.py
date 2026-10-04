@@ -112,7 +112,7 @@ def list_articles(
     文章总表 / The master article table.
 
     列出台账里的文章：标题、来源、抓取状态、正文长度、配图数。
-    后续「选几篇做日报 / 选一篇做口播稿」都从这张表里挑。
+    后续「选几篇做日报 / 选一篇做中视频稿」都从这张表里挑。
     """
     from dna.store import FetchStatus, Ledger
 
@@ -252,6 +252,72 @@ def sync(article_id: str = typer.Argument(..., help="文章 id，前 8 位即可
         f"{_status_label(updated.status)}　已回写正文 [bold]{length}[/bold] 字："
         f"{updated.title}"
     )
+
+
+@app.command()
+def new(
+    title: str = typer.Option("", "--title", "-t", help="标题；不给则用占位标题，之后在界面上改"),
+    body: str = typer.Option("", "--body", help="正文；不给则用占位正文"),
+) -> None:
+    """
+    新建一篇空白文章 / Create a blank article to write yourself.
+
+    与界面上右上角的「新建」是同一个动作（两边调同一个 `create_custom_article`）。
+    文章**立刻落盘**：目录 + `article.md` + `meta.json`，来源标为 `custom_article`，
+    后续生成总结 / 短视频 / 中视频 / 长视频的流程与抓取来的文章完全一样。
+
+    改标题与正文有两种方式：界面上点标题格双击编辑，或直接改
+    `<产物目录>/article.md` 之后用 `dna sync` 回写。
+    **不调用 LLM，不产生费用。**
+
+    注意占位标题是有意写成 5 个字的：标题清理后不足 4 字会被流水线整篇丢掉，
+    而报错指向「读不到正文」，很难查。
+    """
+    from dna.store import create_custom_article
+
+    record = create_custom_article(title=title, body=body)
+    directory = get_settings().output_path / (record.store_dir or "")
+
+    console.print(
+        f"{_status_label(record.status)}　已新建空白文章 [bold]{record.title}[/bold]"
+    )
+    console.print(f"  来源：{record.source_id}　id：{record.id[:8]}")
+    console.print(f"  目录：{directory}")
+    console.print(
+        "  改内容：界面上点标题格双击编辑，或改 article.md 后执行 "
+        f"[bold]dna sync {record.id[:8]}[/bold]"
+    )
+
+
+@app.command()
+def media(article_id: str = typer.Argument(..., help="文章 id，前 8 位即可")) -> None:
+    """
+    整理素材文件夹 / Tidy up an article's asset folders.
+
+    界面上点「媒体」格做的是同一件事（同一个 `normalize_media`）。
+    把图片和视频自己拷进 `<产物目录>/images/` 与 `videos/` 之后跑一次，程序会：
+
+    - 按**文件头**纠正扩展名（`.jpg` 里装着 PNG 这种）
+    - 改名成 `NN_<来源>.<ext>`（本地文件没有来源，用 `custom`）
+    - 缺出处的补一张同名 `.json`，写明「人工放入（出处未记录）」与原始文件名
+    - 回写台账的图片 / 视频计数
+
+    **不删除任何文件**，认不出的（.txt、损坏的、过小的）只报告；
+    **不覆盖已有的出处边车**，那是下载时记下的真来源。
+    **不调用 LLM，不产生费用。**
+    """
+    from dna.store.media_normalize import normalize_media
+
+    record = _resolve_article(article_id)
+    report = normalize_media(record.id)
+
+    console.print(f"{_status_label(record.status)}　{report.summary()}")
+    for line in report.details():
+        console.print(f"  {line}")
+    if report.unrecognized:
+        console.print(
+            "  [yellow]认不出的文件原样留着，请自己确认是否该放在素材目录里。[/yellow]"
+        )
 
 
 @app.command()

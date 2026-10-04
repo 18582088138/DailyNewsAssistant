@@ -88,7 +88,7 @@ def audio_estimate_seconds(
     """
     合成这一格音频大约要等多久 / How long synthesising this cell will take.
 
-    按**稿子的估算时长 × 实测 RTF** 算。长文案要等半小时以上，
+    按**稿子的估算时长 × 实测 RTF** 算。长视频要等半小时以上，
     这个数字必须在按钮按下之前就摆出来——否则界面看起来就是卡死了。
     Computed from the script's projected duration times the measured real-time factor. A
     long-form script runs past half an hour, and without saying so up front the interface
@@ -154,7 +154,7 @@ def preview_links(text: str) -> list[str]:
 
 def longform_estimate(record: ArticleRecord) -> str:
     """
-    长文案的时长预估 / The projected duration of a long-form script.
+    长视频的时长预估 / The projected duration of a long-form script.
 
     走 `plan_target_seconds` 而不是在界面里另算一遍。先前这里写着
     `min(text_len * 1.2, 4000) / 4.5 / 60`——那是**已经废弃的按字符数推导**，

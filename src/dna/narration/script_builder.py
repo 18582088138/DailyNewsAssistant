@@ -1,7 +1,7 @@
 """
 文案构建 / Script construction.
 
-短视频稿（25~35s）与口播稿（1~2min）的生成。长文案（10~15min）在 `longform.py`，
+短视频稿（25~35s）与中视频稿（1~2min）的生成。长视频（10~15min）在 `longform.py`，
 因为它需要分段生成，结构上和这两个不是一回事。
 Short-video (25–35 s) and voice-over (1–2 min) scripts. The long-form script lives in
 `longform.py`: it needs sectioned generation and is structurally a different job.
@@ -24,7 +24,7 @@ Short-video (25–35 s) and voice-over (1–2 min) scripts. The long-form script
     duration while carrying a third less information.
 
 为什么输入用正文而不是摘要 / Why the body rather than the summary:
-    摘要已经把技术细节压掉了（它的任务是 60~120 字的快速浏览）。拿摘要写口播，
+    摘要已经把技术细节压掉了（它的任务是 60~120 字的快速浏览）。拿摘要写中视频，
     模型手里除了几句结论什么都没有，只能用形容词填满一分钟——**白话正是这么来的**。
     The summary has already discarded the technical detail; its job is a 60–120 character
     skim. Writing a voice-over from it leaves the model with nothing but conclusions to
@@ -145,15 +145,15 @@ class ShortVideoOut(BaseModel):
     # max_length 只是最后一道防线，比提示词的要求留出余量。
     title: str = Field(max_length=24, description="主标题，有冲击力，不用标点结尾")
     subtitle: str = Field(max_length=36, description="副标题，补充关键信息或数据")
-    script: str = Field(min_length=40, description="口播正文，不含标题，不含角色名")
+    script: str = Field(min_length=40, description="中视频正文，不含标题，不含角色名")
 
 
 class NarrationOut(BaseModel):
-    """口播文案的结构化输出 / Structured output of a voice-over script."""
+    """中视频文案的结构化输出 / Structured output of a voice-over script."""
 
     title: str = Field(max_length=24, description="主标题，写事件本身")
     subtitle: str = Field(max_length=36, description="副标题，堆亮点与意义")
-    script: str = Field(min_length=120, description="口播正文，连贯成段，不分小标题")
+    script: str = Field(min_length=120, description="中视频正文，连贯成段，不分小标题")
 
 
 def build_short_video(
@@ -278,9 +278,9 @@ def build_narration(
     body_chars: int | None = None,
 ) -> ScriptResult:
     """
-    生成口播文案 / Build a voice-over script.
+    生成中视频文案 / Build a voice-over script.
 
-    1~2 分钟的中视频口播：有空间把方法说清楚，因此**必须有技术深度**——
+    1~2 分钟的中视频中视频：有空间把方法说清楚，因此**必须有技术深度**——
     这是它区别于短视频稿的全部理由。只是把短视频稿拉长就白做了。
     A one-to-two minute piece has room to explain the method, and technical depth is the
     entire reason it exists. Merely stretching the short-video script wastes the format.
@@ -318,7 +318,7 @@ def build_narration(
         extract=lambda out: (out.script, out.title, out.subtitle),
         low_units=lo_chars,
         high_units=hi_chars,
-        label="口播",
+        label="中视频",
         max_rewrites=max_rewrites,
         body_chars=body_chars,
     )
@@ -335,7 +335,7 @@ def _build_english_narration(
     max_rewrites: int | None = None,
     body_chars: int | None = None,
 ) -> ScriptResult:
-    """英文版口播稿 / The English voice-over script（原生写，理由同短视频）。"""
+    """英文版中视频稿 / The English voice-over script（原生写，理由同短视频）。"""
     lo_words, hi_words = _window(chars, low, high, "en")
     prompt = render_prompt(
         f"{PROMPT_NARRATION}.en",

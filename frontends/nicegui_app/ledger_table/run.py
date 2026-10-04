@@ -31,7 +31,7 @@ def _launch(
     发起一次生成 / Kick off one production.
 
     两种情况先弹确认框 / Two kinds of production ask first:
-        长文案——一篇 5~9 次调用，是其余产物的好几倍，**不该一点就跑**
+        长视频——一篇 5~9 次调用，是其余产物的好几倍，**不该一点就跑**
         长音频——不花钱，但要跑几十分钟，同样不该一点就跑
 
     两种代价不同，确认框的措辞也不同：一个说的是账单，一个说的是时间。
@@ -61,7 +61,7 @@ def _launch(
 
 # 超过这么久就先问一句 / anything longer than this asks first
 #
-# 五分钟：短视频音频约 75 秒、口播约 4 分钟，都直接跑；长文案音频半小时以上，
+# 五分钟：短视频音频约 75 秒、中视频约 4 分钟，都直接跑；长视频音频半小时以上，
 # 必须先问。门槛设在这里，日常的两项不会被确认框打断，而真正长的那项跑不掉。
 # Five minutes: the short-video and narration audio run straight away, while the
 # long-form audio always asks. The routine cases stay unobstructed.
@@ -125,14 +125,14 @@ def _ask_longform(
     lang: str = "",
     instructions: str = "",
 ) -> None:
-    """长文案的形式选择与费用确认 / Mode choice and cost confirmation."""
+    """长视频的形式选择与费用确认 / Mode choice and cost confirmation."""
     lang = normalize_lang(lang)
     task = spec(kind)
 
     with ui.dialog() as dialog, ui.card().classes("w-96 wb-dialog").style(
         "background: var(--wb-panel); border: 1px solid var(--wb-line-strong)"
     ):
-        ui.label("生成长文案").classes("text-lg font-medium").style(
+        ui.label("生成长视频").classes("text-lg font-medium").style(
             "color: var(--wb-accent)"
         )
         ui.label(theme.short_title(row.article.title, 60)).classes("wb-path")
@@ -225,7 +225,7 @@ def _run(
             warning = ""
             if not result.within_target:
                 # 报确切数字，不只报「超出区间」：人要据此决定是手删两句还是重做。
-                # 验收标准是**字数**（长文案的时长也是从字数推出来的），措辞跟着改过来
+                # 验收标准是**字数**（长视频的时长也是从字数推出来的），措辞跟着改过来
                 # ——先前写「时长区间」，而摘要根本没有时长这个维度。
                 # The concrete numbers decide trim-or-redo; the unit is characters, which
                 # the wording previously got wrong for the summary kind.

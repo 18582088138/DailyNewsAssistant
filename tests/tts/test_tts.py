@@ -8,12 +8,12 @@ test_tts.py —— 语音合成层单元测试 / Speech synthesis layer tests
     dna tts                              # 后端能不能起来、有哪些音色（不合成，秒回）
     dna tts --say "一句话" -o out.wav    # 真的合成一次，看 RTF 与音质
     dna produce <id> --kind narration_audio
-    dna gui → 展开口播格 → 「合成音频」
+    dna gui → 展开中视频格 → 「合成音频」
 
 覆盖 / Covers:
     清洗与分段（纯函数，无模型）:
       1. **URL 必须去掉**——不去掉模型会把网址一个字符一个字符念出来，整段音频报废
-      2. Markdown 标记、HTML 注释（长文案的提纲藏在这里）、图片、列表符号都要去掉
+      2. Markdown 标记、HTML 注释（长视频的提纲藏在这里）、图片、列表符号都要去掉
       3. 链接的**锚文本保留**，地址丢掉——锚文本是句子的一部分
       4. **只在句子边界切**，标点跟着前一句走（模型靠它收尾语调）
       5. 单句超长时退到逗号切；空输入返回空列表而不是 `[""]`
@@ -81,7 +81,7 @@ SAMPLE_RATE = 24_000
 
 def test_url_is_removed() -> None:
     """
-    **网址必须去掉。**产物抬头里有 `> 口播文案　·　来源：https://…`，
+    **网址必须去掉。**产物抬头里有 `> 中视频文案　·　来源：https://…`，
     直接送进 TTS，模型会把它一个字符一个字符念出来——不是音质变差，是整段废掉。
     The header carries a source URL; read aloud character by character it destroys the
     take rather than merely degrading it.
@@ -105,7 +105,7 @@ def test_markdown_markers_are_removed() -> None:
 
 def test_html_comment_is_removed() -> None:
     """
-    长文案把提纲藏在 HTML 注释里，念出来就成了「提纲一背景二方法」。
+    长视频把提纲藏在 HTML 注释里，念出来就成了「提纲一背景二方法」。
     The long-form outline hides in an HTML comment and must not be voiced.
     """
     cleaned = clean_for_speech("<!-- 提纲\n1. 背景\n2. 方法\n-->\n\n正文第一句。")
@@ -584,7 +584,7 @@ def test_written_script_reads_back() -> None:
     Nothing raises when the parser falls out of step with the layout — the URL simply
     gets read aloud. Renderer and parser therefore live together, pinned by this test.
     """
-    document = f"# 标题\n\n> 口播文案　·　来源：https://x.com/a\n\n{script_block(_Script())}"
+    document = f"# 标题\n\n> 中视频文案　·　来源：https://x.com/a\n\n{script_block(_Script())}"
 
     spoken = spoken_text(document)
 
@@ -598,7 +598,7 @@ def test_spoken_text_without_marker_drops_metadata() -> None:
     没有标记时（旧产物、手工编辑过的文件）也不能整篇照念。
     Without the marker the metadata lines are still dropped.
     """
-    spoken = spoken_text("# 标题\n\n> 口播文案　·　来源：https://x.com/a\n\n正文一句。")
+    spoken = spoken_text("# 标题\n\n> 中视频文案　·　来源：https://x.com/a\n\n正文一句。")
 
     assert spoken == "正文一句。"
 
@@ -612,7 +612,7 @@ def test_proofread_text_writes_back_without_touching_the_header() -> None:
     """
     from dna.produce.documents import replace_spoken
 
-    header = "# 标题\n\n> 口播文案　·　来源：https://x.com/a\n"
+    header = "# 标题\n\n> 中视频文案　·　来源：https://x.com/a\n"
     document = f"{header}\n{script_block(_Script())}"
 
     updated = replace_spoken(document, "改过之后的一句话，短了不少。")
@@ -631,7 +631,7 @@ def test_proofreading_an_old_file_adds_the_marker() -> None:
     from dna.produce.documents import SPOKEN_MARKER, replace_spoken
 
     updated = replace_spoken(
-        "# 标题\n\n> 口播文案　·　来源：https://x.com/a\n\n旧的正文。", "新的正文。"
+        "# 标题\n\n> 中视频文案　·　来源：https://x.com/a\n\n旧的正文。", "新的正文。"
     )
 
     assert SPOKEN_MARKER in updated

@@ -227,7 +227,7 @@ def test_min_width_counts_every_column_including_the_pick_column() -> None:
     最小宽度必须把**每一列**都算进去，勾选列也不例外。
 
     加了勾选列却忘了加进宽度，横向滚动条会提前到位，最右边那一列被切掉一截——
-    而被切掉的恰好是长文案，最贵的那一格。
+    而被切掉的恰好是长视频，最贵的那一格。
     """
     from frontends.nicegui_app.theme import (
         COL_BODY,
@@ -440,7 +440,7 @@ def test_production_file_is_none_when_missing(settings: Settings, monkeypatch, p
 
 
 def test_sidecar_only_exists_for_longform(settings: Settings, monkeypatch, patch_actions_settings) -> None:
-    """只有长文案有 JSON 附件——其余产物不该冒出一个下载 JSON 的按钮。"""
+    """只有长视频有 JSON 附件——其余产物不该冒出一个下载 JSON 的按钮。"""
     from frontends.nicegui_app import actions
 
     patch_actions_settings(settings)
@@ -603,7 +603,7 @@ def test_kinds_without_a_window_are_never_over(narrow_profile, kind: str) -> Non
     """
     不按字数验收的产物永远不标超长。
 
-    长文案按时长验收、音频根本不是文本。把它们也判一遍的话，`char_window`
+    长视频按时长验收、音频根本不是文本。把它们也判一遍的话，`char_window`
     返回 None 会被当成 `(0, 0)`，于是每一格都变成琥珀色——图例就失效了。
     """
     from frontends.nicegui_app import actions

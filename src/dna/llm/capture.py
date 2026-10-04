@@ -18,7 +18,7 @@ Used by the prompt workbench: see the prompt a task actually sends, without payi
     this tool.
 
 它同时**返回预置回复让流程走完** / It also returns canned replies so the flow completes:
-    长文案是「提纲 1 次 + 每节 1 次」十几次调用串起来的，其中每一节的提示词都依赖
+    长视频是「提纲 1 次 + 每节 1 次」十几次调用串起来的，其中每一节的提示词都依赖
     上一节的产出。抛异常中断的话只能看到第一条提示词；返回一个合法的假回复，
     整条链路会照常跑完，十几条提示词一次全拿到，仍然是零费用。
     A long-form script chains a dozen calls whose prompts depend on the previous

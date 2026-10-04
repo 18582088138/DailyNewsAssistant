@@ -55,7 +55,7 @@ def _render(
             ).classes("wb-path").style("color: var(--wb-danger)")
         if not panel.editable:
             ui.label(
-                "长文案的稿子按发言人分轮保存，这里改的文本**不会写回稿子**"
+                "长视频的稿子按发言人分轮保存，这里改的文本**不会写回稿子**"
                 "（音频仍按改后的文本合成）"
             ).classes("wb-path").style("color: var(--wb-warn, var(--wb-danger))")
 

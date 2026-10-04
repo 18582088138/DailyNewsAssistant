@@ -1,5 +1,5 @@
 """
-长文案 / Long-form scripts（10~15 分钟）.
+长视频 / Long-form scripts（10~15 分钟）.
 
 两种形式 / Two modes:
     **专题**（feature）  —— 单角色讲述
@@ -55,14 +55,14 @@ from dna.narration.script_builder import article_block, instruction_block, rules
 
 logger = get_logger("narration.longform")
 
-# 正文短于这个字数就不做长文案 / below this the source cannot carry a long script
+# 正文短于这个字数就不做长视频 / below this the source cannot carry a long script
 # 800 字的资讯撑不起 10 分钟。硬做出来的一定是注水稿，既花钱又没法用。
 # An 800-character item cannot carry ten minutes; forcing it produces padding that costs
 # money and cannot be used.
 MIN_BODY_FOR_LONGFORM = 800
 
 # 目标字数 = 正文字数 × 这个系数，再截到上限
-# 口播稿比原文长是正常的（要展开、要解释），但超过 1.5 倍基本就是在注水。
+# 中视频稿比原文长是正常的（要展开、要解释），但超过 1.5 倍基本就是在注水。
 # A script longer than its source is normal — it expands and explains — but beyond about
 # 1.5× it is padding.
 EXPANSION_RATIO = 1.2
@@ -72,7 +72,7 @@ EXPANSION_RATIO = 1.2
 # 同一件事的两种单位各写一份，迟早会漂移到互相矛盾。
 # This is the single definition of length. The character bounds are derived from it
 # rather than declared separately: two units for one quantity eventually contradict.
-MIN_TARGET_SECONDS = 300.0   # 5 分钟：再短就不该叫「长文案」
+MIN_TARGET_SECONDS = 300.0   # 5 分钟：再短就不该叫「长视频」
 MAX_TARGET_SECONDS = 900.0   # 15 分钟：用户给的上限
 
 
@@ -100,7 +100,7 @@ def language_directive(lang: str) -> str:
     """
     输出语言的硬性声明 / The hard statement of output language.
 
-    长文案是**分十几次调用**拼起来的，每一节都是独立的一次请求。
+    长视频是**分十几次调用**拼起来的，每一节都是独立的一次请求。
     只在第一节说一次「用英文写」，后面几节的模型看不到那句话，会跟着中文原文
     一起滑回中文——拼出来就是中英夹杂的半成品，而这时钱已经花完了。
     所以每一节的提示词都重复一遍，这不是冗余。
@@ -118,10 +118,10 @@ def can_build_longform(
     article: Article, *, min_body_chars: int | None = None
 ) -> tuple[bool, str]:
     """
-    判断这篇能不能做长文案 / Whether this article can carry a long-form script.
+    判断这篇能不能做长视频 / Whether this article can carry a long-form script.
 
     返回 `(可以吗, 原因)`。**在花钱之前判断**——不够料的文章做出来一定是注水稿，
-    而长文案是最贵的产物（提纲 1 次 + 每节 1 次）。
+    而长视频是最贵的产物（提纲 1 次 + 每节 1 次）。
     Returns whether it can, and why not. Checked before spending anything: an
     insufficient source can only yield padding, and this is the most expensive
     production there is.
@@ -130,7 +130,7 @@ def can_build_longform(
     if len(article.text) < floor:
         return False, (
             f"正文只有 {len(article.text)} 字，不足 {floor} 字，"
-            f"撑不起 10 分钟的长文案。强行生成只会得到注水稿。"
+            f"撑不起 10 分钟的长视频。强行生成只会得到注水稿。"
         )
     return True, ""
 
@@ -148,7 +148,7 @@ def plan_target_seconds(
     **在时长空间里推导，而不是字符数空间。** 两者不是一回事：技术稿里
     `UD-Q8_K_XL`、`DeepSeek-V4-Flash-0731` 这类标识符一个就占十几个字符，
     但念出来的时间远不成比例。按字符数推导会让「4000 字的原文」和
-    「4000 字的成稿」看起来对等，实际口播时长差出一倍。
+    「4000 字的成稿」看起来对等，实际中视频时长差出一倍。
     Derived in duration space rather than character space, because the two diverge:
     identifiers like `UD-Q8_K_XL` occupy a dozen characters each while taking nowhere
     near proportional time to read. Scaling by character count makes a 4000-character
@@ -209,7 +209,7 @@ def build_longform(
     sections: tuple[int, int] | None = None,
 ) -> LongformResult:
     """
-    生成长文案 / Build a long-form script.
+    生成长视频 / Build a long-form script.
 
     参数 / Args:
         low / high: 目标时长窗口（秒），来自 `Profile.longform_duration_seconds`。
@@ -228,7 +228,7 @@ def build_longform(
         article, low=low, high=high, lang=lang, expansion_ratio=expansion_ratio
     )
     logger.info(
-        "长文案开始：%s 模式 / %s，目标 %d 字（约 %.0f 分钟）",
+        "长视频开始：%s 模式 / %s，目标 %d 字（约 %.0f 分钟）",
         lang,
         mode,
         total_target,
@@ -256,7 +256,7 @@ def build_longform(
 
     result.seconds = estimate_seconds(result.text)
     logger.info(
-        "长文案完成：%d 节，%d 字，约 %.0f 分钟，%d 次调用",
+        "长视频完成：%d 节，%d 字，约 %.0f 分钟，%d 次调用",
         len(outline.sections),
         result.chars,
         result.seconds / 60,

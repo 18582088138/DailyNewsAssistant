@@ -75,7 +75,7 @@ def production_sidecar(
     """
     产物的 JSON 附件 / A production's JSON sidecar, when it has one.
 
-    目前只有长文案有：按发言人切好的轮次，P6/P7 的 TTS 要用它分配音色。
+    目前只有长视频有：按发言人切好的轮次，P6/P7 的 TTS 要用它分配音色。
     Only the long-form script has one today: the speaker turns the TTS stage needs.
     """
     lang = normalize_lang(lang)
@@ -123,11 +123,29 @@ def body_file(record: ArticleRecord) -> Path | None:
 
 def media_targets(record: ArticleRecord) -> list[Path]:
     """
-    媒体格该打开哪些目录 / Which directories the media cell opens。
+    媒体格该打开哪些目录 / Which directories the media cell opens.
 
-    图、视频都有就两个都开，只有一种就开一个，都没有返回空列表（格子不可点）。
+    图、视频都有就两个都开，只有一种就开一个。
+    **人工创作的文章即使一个文件都没有也要开出两个目录**：空素材目录正是「把素材拷进来」
+    这句话唯一的入口，返回空列表会让这一格不可点，那个功能就等于不存在。
+    抓取来的文章保持老规矩——不给一个点开是空的按钮。
+    Hand-authored articles open both folders even when empty, because an empty folder is the
+    only entry point for dropping assets in; a fetched article keeps the old rule.
     """
-    return list(media_folders(record).values())
+    existing = list(media_folders(record).values())
+    if existing:
+        return existing
+
+    # 现查台账只在「人工创作 + 素材目录还是空的」这一种情况下发生，
+    # 所以整页渲染不会平白多出 50 次查询。
+    # The ledger lookup happens only for a hand-authored article with empty folders, so a
+    # full page render does not gain fifty extra queries.
+    from dna.store.custom_article import media_folders as store_media_folders
+    from frontends.nicegui_app.actions.custom import is_custom
+
+    if not is_custom(record):
+        return []
+    return store_media_folders(record.id)
 
 
 def cell_seconds(record: ProductionRecord) -> float:

@@ -18,7 +18,7 @@ action for it.
 
 语言开关也在这里 / The language switch lives here too:
     英文版曾经是表格里单独一列。可它和中文版是**同一份东西的两个语言版本**，
-    不是两种产物——占两列既挤，又没法扩展到短视频和长文案（那样要六列）。
+    不是两种产物——占两列既挤，又没法扩展到短视频和长视频（那样要六列）。
     收进面板之后，一列对应一种产物，语言是这一格内部的一个开关。
     The English edition used to be its own column, but it is one more language of the
     same thing rather than a different kind. As a column it could not extend to the
@@ -57,7 +57,7 @@ def render(
     把某个产物的详情画进容器 / Draw one production's detail into the container.
 
     参数 / Args:
-        on_redo: 重做的发起函数，由表格层提供（长文案要先弹形式选择框）
+        on_redo: 重做的发起函数，由表格层提供（长视频要先弹形式选择框）
         lang:    当前显示哪个语言版本；空串表示「按配置的默认语言」
     """
     # 这一层往下，`lang` 会当字典键（`row.production`）、当 `LANGUAGE_LABELS` 的下标、
@@ -67,7 +67,6 @@ def render(
 
     container.clear()
     record = row.production(kind, lang)
-    task = spec(kind)
 
     # 「修改指令」的开关与内容 / the extra-instruction toggle and its text
     #
@@ -100,7 +99,7 @@ def render(
         _render_instructions(state)
 
         if record is None or not record.ok:
-            _render_empty(record, task.label, lang)
+            _render_empty(record, row, kind, lang, on_change=on_change)
             return
 
         # 内容是**展开时才读**的。表格一页 50 行 × 4 种产物 × 2 种语言，进页面就
@@ -412,8 +411,22 @@ def _reveal(path: str | Path) -> None:
         ui.notify(error, type="warning")
 
 
-def _render_empty(record, label: str, lang: str) -> None:
-    """还没有产物时显示什么 / What to show before anything exists."""
+def _render_empty(
+    record, row: RowView, kind: ProductionKind, lang: str, *, on_change
+) -> None:
+    """
+    还没有产物时显示什么 / What to show before anything exists.
+
+    两种「还没有」要分开 / Two different kinds of "nothing yet":
+        · 试过但失败了 → 原样显示失败原因，让人判断是重试、改配置，还是这篇本就不该做
+        · 从没做过   → 给一份**排好版的空稿骨架**，双击就能自己写（零费用）
+
+    骨架只显示在编辑器里、不预先落盘：`produce()` 默认复用已有产物，先写一份占位文件
+    会让「生成」按钮变成空操作，产出一个看起来成功、内容却是模板的稿子。
+    The skeleton is shown but never pre-written: `produce()` reuses existing artefacts, so a
+    placeholder file on disk would turn "generate" into a no-op that yields a
+    successful-looking template. See `dna/produce/skeleton.py`.
+    """
     if record is not None and not record.ok:
         # 失败原因**原样显示**：人要据此判断是重试、改配置，还是这篇本来就不该做
         with ui.element("div").classes("wb-body w-full"):
@@ -422,9 +435,19 @@ def _render_empty(record, label: str, lang: str) -> None:
             )
         return
 
+    label = spec(kind).label
+    skeleton = actions.skeleton_text(row.article, kind, lang)
+    if not skeleton:
+        ui.label(
+            f"{LANGUAGE_LABELS[lang]}版的{label}还没有生成。点右侧「生成」开始（会调用 LLM）。"
+        ).classes("wb-path").style("padding: 8px 2px")
+        return
+
     ui.label(
-        f"{LANGUAGE_LABELS[lang]}版的{label}还没有生成。点右侧「生成」开始（会调用 LLM）。"
+        f"{LANGUAGE_LABELS[lang]}版的{label}还没有生成。"
+        "点右侧「生成」调 LLM，或双击下面这份骨架自己写（零费用）。"
     ).classes("wb-path").style("padding: 8px 2px")
+    render_body(row.article.id, kind, lang, skeleton, on_saved=on_change)
 
 
 __all__ = ["render"]

@@ -2,14 +2,15 @@
 产物文件的写与读 / Writing and reading the production files.
 
 **写和读放在同一个文件里，是为了它们不可能各写各的。**
-口播稿是这样落盘的：抬头 + 主副标题 + 一行「口播（约 N 秒 · M 字）：」+ 正文。
+中视频稿是这样落盘的：抬头 + 主副标题 + 一行「口播（约 N 秒 · M 字）：」+ 正文。
 TTS 要的只有最后那段正文——抬头里的 URL 一旦被念出来，整段音频就废了。
 分成两个模块的话，哪天改了排版，解析这边不会报错，只会**安静地把网址念出来**。
+（那一行里的「口播」为什么不跟着界面改成「中视频」，见下面 `SPOKEN_MARKER` 的说明。）
 Renderer and parser live together so they cannot drift. The header carries a URL, and if
 the parser falls out of step with the layout nothing raises — the URL simply gets read
 aloud.
 
-长文案走另一条路 / Long-form takes the other route:
+长视频走另一条路 / Long-form takes the other route:
     它已经有一份 `.json` 附件，按发言人切好了 turns。有结构化数据就用结构化数据，
     没有理由回头去解析 Markdown。
     It already ships a JSON sidecar split into speaker turns; structured data is used
@@ -22,10 +23,22 @@ import json
 from pathlib import Path
 
 from dna.core.models import Article
+from dna.core.urls import display_source
 from dna.narration.duration import count_units, estimate_seconds
 from dna.narration.script_builder import ScriptResult
 
 # 口播正文的起始标记 / where the spoken body begins
+#
+# **这个「口播」是故意的，不要跟着界面标签一起改成「中视频」。**
+# 界面、CLI 与产物抬头统一叫中视频（见 `tasks.TASKS[].label`），但这一行是**落盘契约**：
+# `spoken_text` / `replace_spoken`、TTS 操作台、以及**所有已经生成的历史产物**都靠它定位正文。
+# 改掉它 = 已有的中视频稿再也读不出正文，而报错会出现在 TTS 合成那一步，
+# 距离这里很远，查起来很费时间。
+# The word 口播 here is deliberate and must NOT follow the UI label to 中视频. The labels
+# are unified as 中视频 in the UI, the CLI and the artefact headers, but this line is an
+# on-disk contract: the spoken-text parser, the TTS console and every already-generated
+# file depend on it. Changing it would silently break reading the body out of existing
+# scripts, and the failure would surface much later, inside TTS synthesis.
 #
 # 解析靠它定位，所以它必须由**同一个文件**写出来。改这一行就要一起改渲染。
 # The parser locates the body by this marker, which is why the writer sits beside it.
@@ -44,24 +57,44 @@ def front_matter(article: Article, label: str) -> str:
     Carries the source title and link because these files get copied out for publishing
     and must remain traceable on their own — the same reasoning as the per-image sidecar.
     """
-    return f"# {article.title}\n\n> {label}　·　来源：{article.url}\n\n"
+    return f"# {article.title}\n\n> {label}　·　来源：{display_source(article.url)}\n\n"
 
 
 def script_block(script: ScriptResult) -> str:
     """
-    短视频稿与口播稿的正文排版 / The body layout shared by both video scripts.
+    短视频稿与中视频稿的正文排版 / The body layout shared by both video scripts.
 
     两种稿子都带主副标题——发布时标题栏要填，写在产物里就不用再想一遍。
     Both carry a title pair, because the publishing form needs one and having it in the
     artefact saves composing it again.
     """
+    return spoken_block(
+        title=script.title,
+        subtitle=script.subtitle,
+        text=script.text,
+        seconds=script.seconds,
+        chars=script.chars,
+    )
+
+
+def spoken_block(*, title: str, subtitle: str, text: str, seconds: float, chars: int) -> str:
+    """
+    朗读类产物的正文排版 / The body layout of a spoken production.
+
+    生成路径（`script_block`）与「未生成时给用户手写的骨架」（`produce/skeleton.py`）
+    **必须排版一致**：骨架写出来之后就要能被 `spoken_text` 读回正文、被 TTS 念出来。
+    这里分成两份的话，骨架会安静地缺一行标记，于是手写的稿子合成出空音频。
+    The generated path and the hand-written skeleton must share one layout, otherwise the
+    skeleton would quietly miss the marker line and a hand-written script would synthesise
+    to empty audio.
+    """
     parts = []
-    if script.title:
-        parts.append(f"**主标题：** {script.title}\n")
-    if script.subtitle:
-        parts.append(f"**副标题：** {script.subtitle}\n")
-    parts.append(f"{SPOKEN_MARKER}约 {script.seconds:.0f} 秒 · {script.chars} 字）：**\n")
-    parts.append(f"{script.text}\n")
+    if title:
+        parts.append(f"**主标题：** {title}\n")
+    if subtitle:
+        parts.append(f"**副标题：** {subtitle}\n")
+    parts.append(f"{SPOKEN_MARKER}约 {seconds:.0f} 秒 · {chars} 字）：**\n")
+    parts.append(f"{text}\n")
     return "\n".join(parts)
 
 
@@ -162,6 +195,7 @@ __all__ = [
     "longform_turns",
     "replace_spoken",
     "script_block",
+    "spoken_block",
     "spoken_text",
     "strip_front_matter",
 ]

@@ -5,7 +5,7 @@ test_console.py —— TTS 操作台后端单元测试 / TTS console backend tes
     /c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest tests/tts/test_console.py -v
 
 对应的人工验证 / Matching manual check:
-    dna gui → 展开口播格 → 「TTS 操作台」   # 服务离线时面板照样打得开
+    dna gui → 展开中视频格 → 「TTS 操作台」   # 服务离线时面板照样打得开
     设置 → TTS 子页                          # 音色下拉、参考音频候选与试听
 
 覆盖 / Covers:

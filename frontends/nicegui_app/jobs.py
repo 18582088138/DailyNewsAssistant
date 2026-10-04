@@ -54,7 +54,7 @@ def running_in_cell(article_id: str, kind: ProductionKind | str) -> Job | None:
     """
     这一格上有没有任务在跑 / The job running on a table cell, if any。
 
-    音频没有自己的列，它显示在稿子那一格上（口播音频 → 口播格）。
+    音频没有自己的列，它显示在稿子那一格上（中视频音频 → 中视频格）。
     """
     for job in _JOBS.values():
         if job.article_id != article_id:

@@ -1,12 +1,14 @@
-"""表格的格子：标题、正文、媒体、五个产物格 / The table's cells。"""
+"""表格的格子：标题、正文、媒体、四个产物格 / The table's cells。"""
 
 from __future__ import annotations
+
+from pathlib import Path
 
 from nicegui import ui
 
 from dna.produce import DISPLAY_ORDER, ProductionKind, spec
 from dna.store.ledger import ProductionRecord
-from frontends.nicegui_app import actions, detail_panel, jobs, theme
+from frontends.nicegui_app import actions, article_panel, detail_panel, jobs, theme
 from frontends.nicegui_app.actions import RowView
 from frontends.nicegui_app.ledger_table.run import _launch
 from frontends.nicegui_app.ledger_table.state import (
@@ -14,6 +16,7 @@ from frontends.nicegui_app.ledger_table.state import (
     _OPEN,
     _SELECTED,
     _STATUS_COLOUR,
+    ARTICLE_CELL,
     _Selection,
     page_icon,
     remember_row,
@@ -73,29 +76,35 @@ def _render_row(row: RowView, *, on_change, picks: _Selection) -> None:
         panel = ui.element("div").classes("wb-detail")
         panel.visible = False
 
-        # 当前展开的是哪一格；None 表示这一行是收起的
-        state: dict[str, ProductionKind | None] = {"open": None}
-        cells: dict[ProductionKind, ui.element] = {}
+        # 当前展开的是哪一格；None 表示这一行是收起的。
+        # 键是字符串：产物格用 `ProductionKind` 的值，标题格用 `ARTICLE_CELL`。
+        # The open panel's key is a string: a ProductionKind value for a production cell,
+        # `ARTICLE_CELL` for the article's own panel.
+        state: dict[str, str | None] = {"open": None}
+        cells: dict[str, ui.element] = {}
 
-        def toggle(kind: ProductionKind, *, remember: bool = True) -> None:
+        def toggle(key: str, *, remember: bool = True) -> None:
             """点同一格收起，点别的格切过去 / Same cell closes, another switches."""
             if remember:
                 remember_row(article.id)
-            if state["open"] == kind:
+            if state["open"] == key:
                 state["open"] = None
                 panel.visible = False
                 wrapper.classes(remove="is-open")
                 if remember:
                     _OPEN["cell"] = None
             else:
-                state["open"] = kind
+                state["open"] = key
                 panel.visible = True
                 wrapper.classes(add="is-open")
                 if remember:
-                    _OPEN["cell"] = (article.id, str(kind))
-                detail_panel.render(
-                    panel, row, kind, on_change=on_change, on_redo=_launch
-                )
+                    _OPEN["cell"] = (article.id, key)
+                if key == ARTICLE_CELL:
+                    article_panel.render(panel, row, on_change=on_change)
+                else:
+                    detail_panel.render(
+                        panel, row, ProductionKind(key), on_change=on_change, on_redo=_launch
+                    )
             for k, element in cells.items():
                 element.classes(**({"add": "sel"} if k == state["open"] else {"remove": "sel"}))
 
@@ -106,32 +115,24 @@ def _render_row(row: RowView, *, on_change, picks: _Selection) -> None:
                     lambda e, aid=article.id: picks.toggle(aid, bool(e.value))
                 )
                 picks.boxes[article.id] = (box, wrapper)
-            _render_title_cell(row, on_open=lambda: toggle(_first_kind(row)))
+            _render_title_cell(row, on_open=lambda: toggle(ARTICLE_CELL))
             _render_body_cell(row)
-            _render_media_cell(row)
+            _render_media_cell(row, on_change=on_change)
             for kind in DISPLAY_ORDER:
-                cells[kind] = _render_kind_cell(row, kind, on_open=toggle)
+                cells[str(kind)] = _render_kind_cell(row, kind, on_open=toggle)
 
         # 刷新前展开的是这一行的话，重新展开它 / re-open what was open before the refresh
         remembered = _OPEN["cell"]
         if remembered is not None and remembered[0] == article.id:
-            toggle(ProductionKind(remembered[1]))
+            toggle(remembered[1])
 
         _ = article  # 供调试时定位这一行 / kept for debugging identification
-
-
-def _first_kind(row: RowView) -> ProductionKind:
-    """点标题时默认展开哪一格 / Which cell the title click opens."""
-    for kind in DISPLAY_ORDER:
-        record = row.production(kind)
-        if record is not None and record.ok:
-            return kind
-    return DISPLAY_ORDER[0]
 
 
 def _render_title_cell(row: RowView, *, on_open) -> None:
     """标题格：标题 + 来源 + 抓取状态 + 原文链接 / Title, source, status, link."""
     article = row.article
+    custom = actions.is_custom(article)
 
     with ui.element("div").classes("wb-cell-title") as cell:
         with ui.row().classes("items-center gap-2 no-wrap min-w-0"):
@@ -147,7 +148,19 @@ def _render_title_cell(row: RowView, *, on_open) -> None:
                 article.title or "(无标题)"
             )
         with ui.row().classes("items-center gap-2 no-wrap").style("margin-top:3px"):
-            ui.label(article.source_id or "user").classes("wb-cell-meta")
+            source = ui.label(article.source_id or "user").classes("wb-cell-meta")
+            if custom:
+                # 人工创作的文章没有原文地址，「来源」这一行就是**指向产物文件夹的入口**：
+                # 没有它，用户没有任何地方能打开自己那篇文章的目录。
+                # A hand-authored article has no source address, so the source line *is* the
+                # way into its folder — without it there is nowhere to open that directory.
+                directory = actions.article_directory(article)
+                if directory:
+                    source.classes(add="lnk cursor-pointer")
+                    source.tooltip(f"打开产物目录　·　{directory}")
+                    source.on("click", lambda p=directory: _reveal(Path(p)))
+                    # 这一格的点击会展开文章面板，点来源名不该连带展开
+                    source.on("click", js_handler="(e) => e.stopPropagation()")
             ui.badge(str(article.status)).props(
                 f"color={_STATUS_COLOUR.get(str(article.status), 'grey')} outline"
             ).style("font-size:9px; padding:0 5px")
@@ -155,7 +168,7 @@ def _render_title_cell(row: RowView, *, on_open) -> None:
         # 而「原文」两个字看不出这条是公众号转载还是 arXiv 原文。
         # The address itself: the domain carries half the credibility, which the word
         # "source" does not.
-        if article.url:
+        if article.url and not custom:
             link = (
                 ui.link(theme.short_url(article.url), article.url, new_tab=True)
                 .classes("lnk block")
@@ -195,23 +208,75 @@ def _render_body_cell(row: RowView) -> None:
     cell.on("click", lambda p=target: _reveal(p))
 
 
-def _render_media_cell(row: RowView) -> None:
+def _render_media_cell(row: RowView, *, on_change) -> None:
     """
     媒体格 / The media cell.
 
-    配图、视频都有就两个文件夹都打开，只有一种就开一个。数量为 0 时不可点：
-    `media_targets` 只返回**真实存在且非空**的目录。
-    Opens every non-empty media folder; never clickable when there is none.
+    点一下做两件事：**打开素材文件夹**，并把里面的文件**顺手整理合规**（按文件头纠正
+    扩展名、改成 `NN_<来源>.<ext>`、补写出处边车），然后把结果报出来。
+    One click does two things: opens the asset folders and normalises what is inside them,
+    then reports what it did.
+
+    为什么要「顺手」而不是另给一个按钮 / Why it happens on the same click:
+        用户的动作是「拷完文件回来点一下」，那一瞬间正是整理的最佳时机；再要求他去点
+        第二个按钮，实际使用中就是「忘了点，然后困惑为什么计数没变」。
+        Coming back after dropping files *is* the moment to tidy up. A second button would
+        be forgotten, and the count would then silently stay wrong.
+
+    不可点的规则按文章来历分 / Clickability depends on how the article came to be:
+        抓取来的文章没有素材就不可点（不给一个点开是空的按钮）；
+        人工创作的文章**始终可点**——空素材目录正是「把素材拷进来」的入口。
+    A fetched article with no assets stays inert; a hand-authored one is always clickable,
+    because its empty folders are the entry point for adding assets.
     """
+    custom = actions.is_custom(row.article)
     targets = actions.media_targets(row.article)
     cell = ui.element("div").classes("wb-num" + (" clickable" if targets else ""))
     with cell:
         ui.label(row.media_label)
+
     if not targets:
         return
+
+    if custom:
+        cell.tooltip("打开素材文件夹并整理其中的文件　·　把图片和视频直接拷进去即可")
+        cell.on("click", lambda: _tidy_and_reveal(row.article.id, targets, on_change=on_change))
+        return
+
     names = "　".join(f"{p.name}/" for p in targets)
     cell.tooltip(f"在文件管理器里打开　·　{names}")
     cell.on("click", lambda ps=targets: [_reveal(p) for p in ps])
+
+
+async def _tidy_and_reveal(article_id: str, targets: list, *, on_change) -> None:
+    """
+    打开素材文件夹并整理，然后报告结果 / Open the folders, tidy them, and report.
+
+    整理结果**一定要报出来**，包括「认不出哪些」。静默改名会让人在发布时才发现某张图的
+    名字变了；静默跳过认不出的文件则会让人以为程序没在工作。
+    The outcome is always reported, including what could not be recognised: silently
+    renaming would surprise the user at publishing time, and silently skipping would look
+    like the feature does nothing.
+    """
+    for path in targets:
+        _reveal(path)
+
+    report = await actions.normalize_assets(article_id)
+    details = report.details()
+    message = report.summary()
+    if details:
+        shown = details[:6]
+        message += "\n" + "\n".join(shown)
+        if len(details) > len(shown):
+            message += f"\n…… 另有 {len(details) - len(shown)} 条"
+
+    ui.notify(
+        message,
+        type="info" if report.changed else "positive",
+        multi_line=bool(details),
+    )
+    if report.changed:
+        on_change()
 
 
 def _reveal(path) -> None:

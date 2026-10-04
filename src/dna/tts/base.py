@@ -40,7 +40,7 @@ DEFAULT_SAMPLE_RATE = 24_000
 
 # 实测的实时率 / measured real-time factor
 #
-# 用来在**按下按钮之前**告诉人要等多久——长文案 15 分钟的稿子要算约 37 分钟，
+# 用来在**按下按钮之前**告诉人要等多久——长视频 15 分钟的稿子要算约 37 分钟，
 # 这个数字不摆出来，人会以为界面卡死了。
 # Used to state the wait before the button is pressed; without it the interface merely
 # looks frozen for half an hour.

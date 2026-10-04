@@ -93,7 +93,7 @@ def produce(
 
     参数 / Args:
         lang:        输出语言，`zh` 或 `en`。语言是产物的一个维度，不是另一种产物
-        variant:     长文案的形式，`feature`（专题）或 `interview`（访谈）
+        variant:     长视频的形式，`feature`（专题）或 `interview`（访谈）
         force:       已有产物时是否重做。**默认不重做，也就不花钱**
         instructions: 这一次的额外要求（「加长到 40 秒」「用词再专业一点」）。
                      它会接在提示词末尾并记进台账，下次重做能看到上次改了什么
@@ -101,7 +101,7 @@ def produce(
         llm:         注入 provider；不给则按 .env 构造（测试一律注入假的）
         tts:         音频产物的后端；不给则按 .env 构造
         on_progress: 音频合成的进度回调 `(已完成段, 总段, 已产出秒数)`。
-                     长文案音频要跑半小时，没有进度就只能看着界面发呆
+                     长视频音频要跑半小时，没有进度就只能看着界面发呆
         segments:    音频产物专用：用外部调好的分段替掉自动切分。TTS 操作台里
                      逐段挑过音色之后走这里，**落盘路径与自动合成完全同一条**
                      （写台账、算时长、出字幕），否则两条路的产物迟早不一致。
@@ -297,7 +297,7 @@ def produce_all(
     """
     批量生成 / Produce the batch kinds.
 
-    **不含长文案**——它是最贵的产物，必须显式指定（见 `tasks.py`）。
+    **不含长视频**——它是最贵的产物，必须显式指定（见 `tasks.py`）。
     Excludes the long-form script, which must be requested explicitly.
 
     前一项失败不阻断后面的：四项彼此独立（除了英文总结依赖中文总结，
@@ -378,7 +378,7 @@ def save_script_text(
     不归档旧文件 —— 现在的重做也是直接覆盖，这里不新造一套。
 
     `kind` 给音频产物也可以，会自动落到它的稿子上（操作台手里拿的是音频那一格）。
-    长文案除外：它的稿子按发言人分轮存在 `.json` 附件里，一段纯文本写不回去。
+    长视频除外：它的稿子按发言人分轮存在 `.json` 附件里，一段纯文本写不回去。
 
     返回新插入的台账行 id / Returns the id of the inserted ledger row.
     """

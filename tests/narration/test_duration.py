@@ -1,5 +1,5 @@
 """
-test_duration.py —— 口播时长估算单元测试 / Narration duration unit tests
+test_duration.py —— 中视频时长估算单元测试 / Narration duration unit tests
 
 复测命令 / Re-run:
     /c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest tests/narration/test_duration.py -v
@@ -72,10 +72,10 @@ def test_chinese_uses_the_documented_rate() -> None:
     [
         (25, 112),   # 短视频下限
         (35, 157),   # 短视频上限
-        (60, 270),   # 口播下限
-        (120, 540),  # 口播上限
-        (600, 2700), # 长文案下限
-        (900, 4050), # 长文案上限
+        (60, 270),   # 中视频下限
+        (120, 540),  # 中视频上限
+        (600, 2700), # 长视频下限
+        (900, 4050), # 长视频上限
     ],
 )
 def test_target_chars_matches_the_documented_windows(seconds: int, expected_chars: int) -> None:
@@ -116,7 +116,7 @@ def test_observed_density_reflects_the_actual_mix() -> None:
     纯中文稿约 4.5 字符/秒，塞满英文标识符的技术稿能到两倍以上。
     用常数换算，高密度稿会被少要求删一半，第二稿仍然超时——白花一次调用。
     """
-    chinese = "这是一段纯中文的口播稿件内容" * 10
+    chinese = "这是一段纯中文的中视频稿件内容" * 10
     english = "Terminal Bench throughput benchmark result " * 10
 
     zh_rate = observed_chars_per_second(len(chinese), estimate_seconds(chinese))

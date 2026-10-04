@@ -26,8 +26,8 @@ _STATUS_COLOUR = {
 _HEAD_SHORT = {
     ProductionKind.SUMMARY: "总结",
     ProductionKind.SHORTVIDEO: "短视频",
-    ProductionKind.NARRATION: "口播",
-    ProductionKind.LONGFORM: "长文案",
+    ProductionKind.NARRATION: "中视频",
+    ProductionKind.LONGFORM: "长视频",
 }
 
 # 展开状态跨刷新保留 / the open panel survives a refresh
@@ -38,6 +38,14 @@ _HEAD_SHORT = {
 # A refresh rebuilds the table and would close the panel exactly when the new content is
 # what the user wants to see, making a successful run look like nothing happened.
 _OPEN: dict[str, tuple[str, str] | None] = {"cell": None}
+
+# 「文章本身」那一格的面板键 / the panel key for the article itself
+#
+# 展开的不一定是产物格：点标题格展开的是文章自己的面板（标题/正文/媒体）。用一个小写
+# 字符串当键，与 `ProductionKind` 的值（summary / shortvideo / …）不会撞。
+# The open panel is not always a production: clicking the title cell opens the article's own
+# panel. A lowercase string keeps it from colliding with any `ProductionKind` value.
+ARTICLE_CELL = "article"
 
 # 勾选状态跨刷新保留 / the selection survives a refresh
 #

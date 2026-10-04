@@ -39,9 +39,9 @@ DailyNewsAssistant/
     │           ├── summary.zh.md                 中文总结      ┐
     │           ├── summary.en.md                 英文总结      │ dna.produce 生成，
     │           ├── shortvideo.zh.md              短视频 25~35s │ 每项可单独重做
-    │           ├── narration.zh.md               口播 1~2min   │
-    │           ├── longform.zh.md                长文案 5~15min│
-    │           ├── longform.zh.json              长文案角色轮次（TTS 消费）┘
+    │           ├── narration.zh.md               中视频 1~2min   │
+    │           ├── longform.zh.md                长视频 5~15min│
+    │           ├── longform.zh.json              长视频角色轮次（TTS 消费）┘
     │           ├── shortvideo.zh.wav             音频：与文稿同名，换扩展名 ┐
     │           ├── shortvideo.zh.srt             字幕：与音频逐段对齐       │ dna.tts
     │           └── tts/                          逐段中间产物              │ 生成
@@ -71,6 +71,31 @@ DailyNewsAssistant/
 id 是 `url_hash(url)`（规范化 URL 的 sha256 前 16 位，见 `core/urls.py`）。
 **台账主键、`NewsItem.id`、`DigestEntry.id` 是同一个值**，所以三者互相查得到。
 
+**人工创作的文章（新建）也是这个布局**，只是没有原文地址：url 用伪方案
+`custom://<uuid>`，所以 id 仍然唯一（空 URL 的 `url_hash("")` 是**常量**，
+每一篇都会撞成同一行）。它的差异只有四处：
+
+| | 人工创作的文章 |
+|---|---|
+| `url` / 抬头来源行 | `custom://<uuid>`；`article.md` 与产物抬头里显示成 `custom_article` |
+| `article.md` | 正文一律放在**正文粘贴区之下**，见下 |
+| `images/` / `videos/` | 建文章时就建出来（空目录＝用户拷素材的落点） |
+| 素材文件名 | 用户拷进来的重命名为 `NN_custom.<ext>`，边车补写 `origin: manual` |
+
+正文为什么放在粘贴区之下：`read_body` 只在粘贴区之后**原样**取文本，正常路径会丢掉
+所有 `# `/`> ` 开头的行——那会把用户手写的引用块和小标题**安静地吃掉**。
+
+人工放入的素材只保证**可追溯**，不保证有来源地址：没有边车的补一张，
+`credit` 写「人工放入（出处未记录）」、`origin: manual`、`original_name` 记原始文件名。
+**已有边车绝不覆盖**（那是下载时记下的真出处），**认不出的文件绝不删除**。
+整理逻辑在 `store/media_normalize.py`，界面点「媒体」格与 `dna media <id>` 都会跑。
+
+> **历史产物只读。**抓取来的文章的 `images/` `videos/` **一律不整理**，
+> 连名字不规范的文件也不改名——那是当时下载下来的档案。因此
+> `normalize_media` 对非人工创作的文章直接返回「已跳过」，
+> `save_title` / `save_body` 也在 store 层拒绝非人工创作的文章。
+> 两者都能被命令行调到，所以守卫放在 store 层而不是界面上。
+
 ---
 
 ## 三、两级之间只有引用，没有副本
@@ -82,7 +107,7 @@ id 是 `url_hash(url)`（规范化 URL 的 sha256 前 16 位，见 `core/urls.py
 ```
 
 **为什么不复制。**一篇文章可以进多期（跨日的后续报道）。复制会产生两份各自漂移的
-副本：重做了条目的口播稿，期次里那份还是旧的，而且没有任何提示。按 id 引用只有
+副本：重做了条目的中视频稿，期次里那份还是旧的，而且没有任何提示。按 id 引用只有
 一处真相，重做之后期次这边**自动就是新的，不需要重新装配**。
 
 代价是：条目目录被手工删掉时，期次里的链接会指空。这一点**不静默处理**——

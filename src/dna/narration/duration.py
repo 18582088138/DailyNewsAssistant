@@ -1,5 +1,5 @@
 """
-口播时长估算 / Narration duration estimation.
+中视频时长估算 / Narration duration estimation.
 
 纯函数，无依赖、无 I/O，可以随便调用。
 Pure functions with no dependencies or I/O.
@@ -42,7 +42,7 @@ WORDS_PER_SECOND_EN = 2.6
 
 # 中英混排技术稿的字符密度系数 / character-density factor for mixed technical copy
 #
-# 纯中文 4.5 字/秒，但技术口播稿里 `UD-Q8_K_XL`、`Artificial Analysis` 这类标识符
+# 纯中文 4.5 字/秒，但技术中视频稿里 `UD-Q8_K_XL`、`Artificial Analysis` 这类标识符
 # **占字符多、占时长少**。实测两篇 30 秒档的稿子：
 #
 #     人工撰写的参考稿   199 字符 → 27.8 秒 ＝ 7.2 字符/秒
@@ -86,7 +86,7 @@ def spoken_text(text: str) -> str:
 
 def estimate_seconds(text: str, *, lang: str = "zh") -> float:
     """
-    估算口播时长（秒）/ Estimate how long the text takes to read aloud.
+    估算中视频时长（秒）/ Estimate how long the text takes to read aloud.
 
     中英混排按各自语速分别计算再相加——技术稿里「DeepSeek-V4-Flash 在
     Terminal Bench 上达到 82.7」这种句子很常见，一律按中文字数算会低估英文部分。
@@ -94,7 +94,7 @@ def estimate_seconds(text: str, *, lang: str = "zh") -> float:
     English model names and benchmarks, and counting everything as Chinese characters
     would underestimate them.
 
-    >>> round(estimate_seconds("这是一段中文口播稿件内容"), 1)
+    >>> round(estimate_seconds("这是一段中文中视频稿件内容"), 1)
     2.7
     """
     clean = spoken_text(text)
@@ -212,7 +212,7 @@ def unit_window(low_chars: int, high_chars: int, *, lang: str = "zh") -> tuple[i
 
 def seconds_for_units(units: int, *, lang: str = "zh") -> float:
     """
-    字数（或词数）→ 预计口播秒数 / Units to the duration they are expected to speak.
+    字数（或词数）→ 预计中视频秒数 / Units to the duration they are expected to speak.
 
     **只用于参照与记账，不用于验收。** 验收看字数（见 `char_feedback`）：
     模型能数字数，数不了秒数，而同一个字数在中英混排比例不同的稿子上

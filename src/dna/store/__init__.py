@@ -4,7 +4,7 @@
     from dna.store import Ledger, FetchStatus, intake_sources, intake_urls
 
 台账是「总表」：记录每篇文章的标题、链接、抓取状态与落盘位置，
-既用于人工核对，也是后续「选文章做日报 / 口播 / 视频」的选取依据。
+既用于人工核对，也是后续「选文章做日报 / 中视频 / 视频」的选取依据。
 The ledger is the master table — titles, links, fetch status and storage locations —
 used both for manual verification and as the selection basis for later features.
 """
@@ -16,6 +16,15 @@ from dna.store.article_render import (
     read_title,
 )
 from dna.store.article_store import article_dir, save_article
+from dna.store.custom_article import (
+    CUSTOM_SOURCE_ID,
+    article_text,
+    create_custom_article,
+    is_custom_record,
+    media_folders,
+    save_body,
+    save_title,
+)
 from dna.store.db import SCHEMA_VERSION, connect, open_db
 from dna.store.delete import DeletePlan, delete_articles, plan_delete
 from dna.store.intake import (
@@ -43,6 +52,7 @@ from dna.store.migrate_layout import MigrationPlan, migrate, plan_migration
 from dna.store.video_store import download_videos, is_direct_video_url
 
 __all__ = [
+    "CUSTOM_SOURCE_ID",
     "DIGEST_FILENAME",
     "MANUAL_BODY_MARKER",
     "REFERENCES_FILENAME",
@@ -59,15 +69,19 @@ __all__ = [
     "SavedArticle",
     "SavedIssue",
     "article_dir",
+    "article_text",
     "connect",
+    "create_custom_article",
     "delete_articles",
     "download_videos",
     "intake_sources",
     "intake_urls",
+    "is_custom_record",
     "is_direct_video_url",
     "issue_paths",
     "list_issues",
     "load_issue",
+    "media_folders",
     "migrate",
     "open_db",
     "plan_delete",
@@ -78,6 +92,8 @@ __all__ = [
     "refresh_references",
     "resolve_links",
     "save_article",
+    "save_body",
     "save_issue",
+    "save_title",
     "sync_manual_body",
 ]
