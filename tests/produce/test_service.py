@@ -13,16 +13,16 @@ test_service.py —— 单篇产物生成单元测试 / Per-article production s
     2. force=True 时才重做，并在 productions 表里插新行、redo_of_id 指向上一版
     3. **前置缺失时自动补**（英文总结依赖中文总结），不报错让人手动跑
     4. 产物写进文章目录，文件名与 TaskSpec 一致
-    5. 长文案额外产出 `.json`（供 TTS 分配音色）
+    5. 长视频额外产出 `.json`（供 TTS 分配音色）
     6. **失败也记一行**，状态 failed 且带原因——不记的话表格显示「未生成」，
        人会以为没跑过，再点一次再失败一次
-    7. 正文太短时拒绝长文案，且不调 LLM
-    8. `produce_all` **不含长文案**（它一篇 5~9 次调用）
+    7. 正文太短时拒绝长视频，且不调 LLM
+    8. `produce_all` **不含长视频**（它一篇 5~9 次调用）
     9. 台账里没有的文章、没落盘的文章都返回明确错误而不是崩
    10. 产物文件带抬头（标题 + 来源链接），单独拷走仍可追溯
    11. **profile.yaml 的时长区间与结尾引导语真的传到构建器**——
        在此之前那三行时长配置是死配置，改了没反应
-   12. 短视频稿与口播稿的产物文件里都写入主副标题
+   12. 短视频稿与中视频稿的产物文件里都写入主副标题
    13. **NEW 标识判定**：刚导入且无产物为新 · 任意产物（含失败）清掉标识 ·
        **存量文章不算新的** · 窗口设 0 关闭时间检查
    14. 音频产物（P4.5）：**一次 LLM 都不调** · 按字节写盘且台账记真实时长 ·
@@ -125,7 +125,7 @@ def short_reply(*, lang: str = "zh") -> str:
 
 
 def narration_reply(*, lang: str = "zh") -> str:
-    """口播稿同样带主副标题——1~2 分钟的视频发布时也要填标题栏。"""
+    """中视频稿同样带主副标题——1~2 分钟的视频发布时也要填标题栏。"""
     script = "字" * 500 if lang == "zh" else " ".join(["throughput"] * 200)
     return json.dumps(
         {"title": "推理引擎开源", "subtitle": "吞吐提升 2.3 倍", "script": script},
@@ -244,7 +244,7 @@ def test_output_carries_a_traceable_header(settings: Settings) -> None:
 
 def test_longform_also_writes_a_json_sidecar(settings: Settings) -> None:
     """
-    长文案额外产出 .json —— P6/P7 的 TTS 按 speaker 分配音色要用它。
+    长视频额外产出 .json —— P6/P7 的 TTS 按 speaker 分配音色要用它。
     """
     article_id = seed(settings)
     outline = json.dumps(
@@ -294,9 +294,9 @@ def test_failure_is_recorded_in_the_ledger(settings: Settings) -> None:
 
 def test_short_article_rejects_longform_without_calling_the_llm(settings: Settings) -> None:
     """
-    正文太短时拒绝长文案，**且不发请求**。
+    正文太短时拒绝长视频，**且不发请求**。
 
-    长文案是最贵的产物，不够料的文章做出来一定是注水稿——先判断再决定花不花钱。
+    长视频是最贵的产物，不够料的文章做出来一定是注水稿——先判断再决定花不花钱。
     """
     article_id = seed(settings, body="很短的正文。")
     llm = ScriptedProvider("fake", ["不该被用到"])
@@ -338,7 +338,7 @@ def test_article_without_store_dir_returns_a_clear_error(settings: Settings) -> 
 
 def test_batch_excludes_longform(settings: Settings) -> None:
     """
-    `--all` **不含长文案**。
+    `--all` **不含长视频**。
 
     它一篇 5~9 次调用，是其余四项加起来的两倍多。跟着批量跑的话，
     一次误操作就是十几倍的账单。
@@ -370,7 +370,7 @@ def test_batch_continues_after_one_failure(settings: Settings) -> None:
         "fake",
         ["坏 JSON", "坏 JSON", "坏 JSON",           # 总结失败（3 次重试）
          short_reply(),                              # 短视频成功
-         narration_reply()],                        # 口播成功
+         narration_reply()],                        # 中视频成功
     )
 
     results = produce_all(article_id, settings=settings, llm=llm)
@@ -411,7 +411,7 @@ def test_profile_windows_and_sign_off_reach_the_builder(settings: Settings) -> N
 
 def test_video_scripts_write_the_title_pair_into_the_file(settings: Settings) -> None:
     """
-    短视频稿与口播稿的产物文件里都要有主副标题。
+    短视频稿与中视频稿的产物文件里都要有主副标题。
 
     发布时标题栏要填，写在产物里就不用再想一遍，也保证标题与文案出自
     同一次生成、口径一致。
@@ -430,7 +430,7 @@ def test_recorded_chars_count_the_script_not_the_whole_file(settings: Settings) 
     """
     台账里的字数是**正文的字数**，不含抬头与主副标题。
 
-    抬头带着文章标题和整条 URL：按整个文件长度记，一篇 400 字的口播稿会显示成
+    抬头带着文章标题和整条 URL：按整个文件长度记，一篇 400 字的中视频稿会显示成
     六百多字，和同一格里的预估秒数、以及文件里那行「约 N 秒 · M 字」三个数字
     互相打架——实测报上来的就是这个。
     """
@@ -687,7 +687,7 @@ def test_audio_is_written_as_bytes_and_recorded(settings: Settings) -> None:
 
 def test_audio_speaks_only_the_script_body(settings: Settings) -> None:
     """
-    **抬头里的网址不能被念出来。**产物文件带 `> 口播文案　·　来源：https://…`，
+    **抬头里的网址不能被念出来。**产物文件带 `> 中视频文案　·　来源：https://…`，
     整篇照念的话，模型会把网址一个字符一个字符读出来，整段音频报废。
     The header carries a source URL; reading the whole file aloud would destroy the take.
     """
@@ -706,7 +706,7 @@ def test_interview_audio_uses_two_voices(settings: Settings) -> None:
     """
     访谈的两个角色落在两把不同的嗓子上 / An interview's two roles get two voices.
 
-    长文案的 `.json` 附件已经按发言人切好了轮次，音频这边照着分配音色即可——
+    长视频的 `.json` 附件已经按发言人切好了轮次，音频这边照着分配音色即可——
     有结构化数据就用结构化数据，不回头解析 Markdown。
     The sidecar is already split into speaker turns, so the audio assigns voices from it.
     """
@@ -764,7 +764,7 @@ def test_redoing_audio_does_not_rebill_the_script(settings: Settings) -> None:
 
 def test_audio_is_not_in_the_batch() -> None:
     """
-    **音频不进 `--all`。**它不花钱，但口播要 4 分钟、长文案要 37 分钟；
+    **音频不进 `--all`。**它不花钱，但中视频要 4 分钟、长视频要 37 分钟；
     批量里混进一个半小时的任务等同于把机器按死。
     Free but slow: a batch carrying a half-hour task is a frozen machine.
     """
@@ -1084,7 +1084,7 @@ def test_proofread_script_is_written_back_and_recorded(settings: Settings) -> No
 
 def test_longform_script_cannot_be_flattened(settings: Settings) -> None:
     """
-    长文案的稿子按发言人分轮存在 `.json` 附件里，一段纯文本写不回去 ——
+    长视频的稿子按发言人分轮存在 `.json` 附件里，一段纯文本写不回去 ——
     静默写坏比报错糟得多：访谈会变成一个人从头念到尾。
     """
     from dna.produce.service import save_script_text
@@ -1175,7 +1175,8 @@ def test_edit_refreshes_chars_and_seconds(settings: Settings) -> None:
 
 
 def test_edit_summary_keeps_header_and_adds_no_spoken_marker(settings: Settings) -> None:
-    """总结没有「口播」那一行：写回时不能给它凭空补一行标记。"""
+    """总结没有朗读那一行：写回时不能给它凭空补一行标记。"""
+    from dna.produce.documents import SPOKEN_MARKER
     from dna.produce.service import save_production_text
 
     article_id = seed(settings)
@@ -1190,7 +1191,9 @@ def test_edit_summary_keeps_header_and_adds_no_spoken_marker(settings: Settings)
         encoding="utf-8"
     )
     assert document.strip() == text
-    assert "口播（" not in document
+    # 按常量断言而不是照抄字面量：标记词与界面标签是分开演进的（界面已统一叫中视频、
+    # 落盘标记仍然是口播），抄一份字面量就会在下次改名时把它悄悄变成空断言。
+    assert SPOKEN_MARKER not in document
     record = ledger.latest_production(article_id, str(ProductionKind.SUMMARY))
     assert record.chars == len("改过的总结正文。")
 
