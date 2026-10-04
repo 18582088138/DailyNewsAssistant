@@ -402,11 +402,11 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 `CHARS_PER_SECOND_ZH = 4.5`、`WORDS_PER_SECOND_EN = 2.6`、`MIXED_COPY_CHAR_FACTOR = 1.5`。
 
 **改这里要注意**：**长度只用一个单位定义，而那个单位是字数。**
-短视频与口播的字数区间来自 `profile.yaml`（`shortvideo_chars` / `narration_chars`），
+短视频与中视频的字数区间来自 `profile.yaml`（`shortvideo_chars` / `narration_chars`），
 提示词里说的、程序验收的是同一个数（`core/length.py::char_feedback`）。
 `estimate_seconds` 退为参照，不参与验收——同一个字数在中英比例不同的稿子上
 实测差 50%，拿它当验收标准会把合格的稿子反复回炉、让偏短的稿子静静通过。
-长文案仍按**时长**推导目标（它的长度跟原文体量走，不是固定窗口，见 issue 007-C）。
+长视频仍按**时长**推导目标（它的长度跟原文体量走，不是固定窗口，见 issue 007-C）。
 
 ### `narration/script_builder.py`
 
@@ -418,7 +418,7 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 
 **改这里要注意**：
 - **文案从正文写，不从摘要写。** 摘要已经把技术细节压掉了（它的任务是 60~120 字
-  的快速浏览），拿它写口播，模型手里只剩几句结论可以注水——白话正是这么来的。
+  的快速浏览），拿它写中视频，模型手里只剩几句结论可以注水——白话正是这么来的。
 - 回炉时**必须把上一稿作为 assistant 消息带回去**。只说「太长了」会让模型从头
   重写一篇完全不同的，上一稿写对的部分一起丢了。
 - 差值按**这一稿实测的字符密度**换算，不按预设 4.5 字/秒：技术稿实测能到 8，
@@ -442,7 +442,7 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 - 展开一节要给模型**两样上下文**：上一节结尾（120 字，保接缝）**和完整提纲**
   （标出哪几节已讲、哪几节留给后面）。只给结尾不够——实测 7 节的那篇，
   第 7 节把第 6 节的 9 个实体全部重讲了一遍，因为它只看见前 120 字。
-- `language_directive()` **每节都重复一遍**。长文案是十几次独立调用，
+- `language_directive()` **每节都重复一遍**。长视频是十几次独立调用，
   只在第一节说「用英文写」，后面几节会跟着中文原文滑回中文。
 - 模型偶尔自创角色名（「专家」「记者」）→ **归到默认角色而不是丢掉**：
   内容是好的，只是标签错了。
@@ -541,8 +541,8 @@ clean → dedup → score  │  summarize → translate → trend → _digest.js
 | 英文摘要挂错了条目 | `pipeline/translate.py::build_messages` —— 按 id 对齐 |
 | 稿子全是形容词、没有数字 | 提示词：`config/prompts/_shared/professionalism.zh.md` |
 | 稿子时长总是不达标 | `narration/duration.py::length_feedback` + `prompt_char_budget` |
-| 长文案后面几节重复前面 | `narration/longform.py::_outline_map` —— 提纲要全量可见 |
-| 英文长文案中英夹杂 | `narration/longform.py::language_directive` —— 每节都要重复 |
+| 长视频后面几节重复前面 | `narration/longform.py::_outline_map` —— 提纲要全量可见 |
+| 英文长视频中英夹杂 | `narration/longform.py::language_directive` —— 每节都要重复 |
 | 点重做花了钱 / 没花钱 | `produce/service.py::produce` 的 `force` 分支 |
 | 表格显示「未生成」但确实跑过 | `produce/service.py` —— 失败要记一行 |
 | 改了提示词没生效 | `dna prompt <id> -t <task>` 看真正发出去的那一份 |

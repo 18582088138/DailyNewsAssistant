@@ -1,6 +1,11 @@
 # 11 文章总表与落盘 / Article Ledger and Storage
 
 > 面向使用者的操作手册。**全程不调用 LLM，不产生费用。**
+>
+> 命令一览 / Commands:
+> `list` · `show` · `stats`（§一~五）· `fetch`（§六）·
+> **`new`（§七 新建自己的文章）** · **`media`（§七bis 整理素材文件夹）** ·
+> `add` `refetch` `sync` `delete`（见 [13_workbench_guide.md](13_workbench_guide.md) §八）
 
 ---
 
@@ -13,6 +18,7 @@ dna list                        # 最近 30 条
 dna list --status degraded      # 只看抽取降级的
 dna list --status failed        # 只看失败的
 dna list --source qbitai        # 只看某个来源
+dna list --source custom_article   # 只看自己新建的文章
 dna list -q 多模态              # 按标题或链接搜索
 dna list -n 100                 # 显示更多
 ```
@@ -69,7 +75,7 @@ data/articles/20260902/Claude最强Fable-5-1发布__5c4430ab/
 如果某张图没下下来，`references.md` 里会写明原因（403 防盗链、文件过小、格式无法识别等）。
 
 **每篇默认存 10 张图**，比日报实际要用的 1~3 张多得多——多存的是素材库：
-做长图、口播配图、视频封面时都要挑图，而**重抓拿不回当初那些图**（站点会换图删图）。
+做长图、中视频配图、视频封面时都要挑图，而**重抓拿不回当初那些图**（站点会换图删图）。
 想改数量：`dna add <链接> --max-images 20`。
 
 ---
@@ -214,14 +220,68 @@ dna fetch --refetch              # 已抓过的也重抓
 
 ---
 
-## 七、后续功能会怎么用这张表
+## 七、新建自己的文章：`dna new`
+
+```bash
+dna new                              # 一篇空白文章，标题是占位的「未命名文章」
+dna new --title "我的文章"            # 直接给标题
+dna new --title "我的文章" --body "正文…"   # 标题和正文一起给
+```
+
+**不调用 LLM，不产生费用。**与界面右上角的「新建」是同一个动作
+（两边调同一个 `create_custom_article`）。
+
+它做的事：造一个唯一的 id（`custom://<uuid>`，**不能用空 URL**——`url_hash("")`
+是常量，每一篇都会撞成同一行）、登记台账、**立刻落盘**（目录 + `article.md` +
+`meta.json` + 空的 `images/` 与 `videos/`），来源标为 `custom_article`。
+
+之后它与抓来的文章**完全一样**：`dna produce <id> --all`、合成音频、
+进日报，走的都是同一条路。
+
+两处要注意：
+
+- **占位标题是 5 个字，这是有意的。**标题清理后不足 4 字会被流水线整篇丢掉，
+  而 `produce` 报出来的是「读不到这篇文章的正文」——指不到真正的原因。
+- **改内容**可以在界面上点标题格双击编辑，或者改 `<产物目录>/article.md` 之后
+  用 `dna sync <id>` 回写。界面改会同时更新台账、`meta.json`、`article.md` 三处。
+- **改标题会把产物目录一起改名**（目录名是 `<标题slug>__<id8>`）：已有的产物、
+  素材、`tts/` 分段全部跟着搬，日期层不变。见
+  [issues/016](issues/016-title-change-did-not-rename-the-folder.md)。
+- **只有「新建」的文章能这样改。**抓取来的文章是**只读档案**：改稿会把整篇
+  `article.md` 重渲染一遍，抽取结果、原始链接、当时抓到的正文都会被覆盖。
+  守卫在 store 层，命令行也绕不过去。历史产物要动只有 `dna refetch` 与 `dna sync`。
+
+## 七bis、整理素材文件夹：`dna media`
+
+```bash
+dna media <id>          # 把 images/ 与 videos/ 里的文件整理合规
+```
+
+**不调用 LLM，不产生费用。不删除任何文件。**界面点「媒体」格做的是同一件事。
+做四件事，然后逐条报告：
+
+1. 按**文件头**纠正扩展名（`.jpg` 里装着 PNG 就改成 `.png`）
+2. 改名成 `NN_<来源>.<ext>`（本地文件没有来源，用 `custom`）
+3. 缺出处的补一张同名 `.json`：`origin: manual`、`credit: 人工放入（出处未记录）`、
+   `original_name` 记原始文件名。**已有边车不覆盖**——那是下载时记下的真出处
+4. 回写台账的图片 / 视频计数（表格上的「N 图 / N 视频」）
+
+认不出的（`.txt`、损坏的、过小的）**只点名不删除**，留给人工判断。
+
+> **抓取来的文章整趟跳过。**它的 `images/` `videos/` 是抓取当时的历史档案，
+> 改名就是改写历史——所以这个命令与界面上的媒体格**只对「新建」的文章生效**。
+> 连名字不规范的文件也不动：历史产物一律只读（要重来有 `dna refetch`）。
+
+---
+
+## 八、后续功能会怎么用这张表
 
 台账是 P3 之后所有功能的选取依据：
 
 | 后续功能 | 怎么用 |
 |---|---|
 | AI 日报（P5） | 从表里选若干篇 → 去重聚类 → 摘要 → 图文稿 + 长图 |
-| 短视频口播（P6） | 选一篇 → 主副标题 + 20~25s 口播稿 + 配图/官方视频 |
+| 短视频中视频（P6） | 选一篇 → 主副标题 + 20~25s 中视频稿 + 配图/官方视频 |
 | 播客（P7） | 选若干篇 → 单人播报或双人访谈脚本 + 音频 |
 | 后台控制台（P8） | 表格化展示产出矩阵，勾选重做 |
 
@@ -233,23 +293,28 @@ dna fetch --refetch              # 已抓过的也重抓
 
 ---
 
-## 八、数据位置
+## 九、数据位置
 
 | 路径 | 内容 | 是否入库 |
 |---|---|---|
 | `data/dna.db` | SQLite 台账 | ❌ gitignore |
-| `data/articles/<日期>/<标题>__<id>/` | 正文、图片、视频、来源清单 | ❌ gitignore |
+| `outputs/articles/<日期>/<标题>__<id>/` | 正文、图片、视频、来源清单、四种产物 | ❌ gitignore |
+
+（目录在 `outputs/` 而不是 `data/`，理由见 [05_output_spec.md](05_output_spec.md)。
+旧布局 `data/articles/` 已提供 `dna migrate-layout` 迁移。）
 
 数据库有版本管理（`PRAGMA user_version`），升级时自动迁移，**不需要删库重来**——
 台账里积累的抓取历史是有价值的。
 
 ---
 
-## 九、相关
+## 十、相关
 
 - 添加与过滤信息源：[10_sources_guide.md](10_sources_guide.md)
+- 落盘唯一权威：[05_output_spec.md](05_output_spec.md)
 - 真机验证发现的问题：[issues/003](issues/003-p2-live-verification-findings.md)、
   [issues/004](issues/004-image-hotlink-and-title-overwrite.md)、
   [issues/005](issues/005-wechat-zhihu-live-verification.md)
 - 实现：`src/dna/store/`（`ledger.py` 台账 · `article_store.py` 落盘 ·
+  `custom_article.py` 人工创作的文章 · `media_normalize.py` 素材合规化 ·
   `video_store.py` 视频下载 · `intake.py` 入库流程）

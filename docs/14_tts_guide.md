@@ -123,7 +123,9 @@ The GUI is mounted on the service: one process, one copy of the weights.
 
 工作台点「合成音频」，或 `dna produce <id> --kind narration_audio`：
 
-1. 读稿子（长文案读 `.json` 附件里的角色轮次，其余解析 Markdown 的「口播」段）
+1. 读稿子（长视频读 `.json` 附件里的角色轮次，其余解析 Markdown 里以 `**口播（` 开头的那一段——
+   界面上的产物名已统一叫「中视频」，但**落盘标记仍然是「口播」**，见
+   [05_output_spec.md](05_output_spec.md) §七）
 2. **朗读友好化**：一次 LLM 调用（见 §6）
 3. **分段**：只在句子边界切，每段 ≤120 字
 4. 逐段 `POST /tts/synthesize`（`encoding=base64`，一次一段）
@@ -200,7 +202,7 @@ The GUI is mounted on the service: one process, one copy of the weights.
   `documents.replace_spoken()`（保留 front matter，只换 `SPOKEN_MARKER` 之后的正文）
   → `record_production(calls=0, instructions="人工校对（TTS 操作台）")`。
   顺序反了的话，音频那一格的前置稿子还是 LLM 那一版。
-  **长文案直接拒绝**（`ValueError`）：它的稿子按发言人分轮存在 JSON 边车里，
+  **长视频直接拒绝**（`ValueError`）：它的稿子按发言人分轮存在 JSON 边车里，
   拉平成一段纯文本会把一场访谈变成一个人念完全部。
 - **种子只在重掷之后才发**：`voice_controls.reroll_seed(index, reroll)`，
   没重掷过返回 `None` → payload 里没有 `seed` → 与自动合成同一版。
@@ -327,7 +329,7 @@ dna doctor                          # 含「TTS 服务」一项：在线 / 会�
 dna tts                             # 探活（会自动拉起）+ 列音色，不合成
 dna tts --say "一句话" -o out.wav   # 真的合成一次，报 音频/耗时/RTF
 dna produce <id> --kind narration_audio
-dna gui                             # 展开口播格 → 「合成音频」或「TTS 操作台」
+dna gui                             # 展开中视频格 → 「合成音频」或「TTS 操作台」
 ```
 
 换到 4060 那台机器时：那边起服务（`python -m agentic_tts.cli serve --host 0.0.0.0`），

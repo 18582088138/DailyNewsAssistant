@@ -100,8 +100,10 @@
 |---|---|
 | `main.py` | 装配页面：顶栏（含 TTS 状态芯片）+ 筛选 + 表格 + 分页；`run()` 启服务 |
 | `ledger_table.py` | 表格：勾选列、表头、行、产物格、格子状态与配色、批量条、发起生成、操作后回到原位 |
-| `detail_panel.py` | 展开面板：语言开关、这一版的元信息、修改指令、下载/合成/操作台/重做 |
-| `actions.py` | **界面动作**：读数据、跑生成、批量重抓/删除、配置读写、TTS 状态/分段/生成/写回稿子、打开文件 |
+| `detail_panel.py` | 展开面板：语言开关、这一版的元信息、修改指令、下载/合成/操作台/重做；**未生成时给一份骨架**（`produce/skeleton.py`） |
+| `article_panel.py` | **文章面板**：标题 / 正文 / 媒体三节，点标题格展开。与 `detail_panel` 分开，是因为两者的按钮几乎不重叠（那里每件事都围绕**一份稿子**，这里围绕**文章本身**） |
+| `text_editor.py` | 就地编辑：`render_field()` 是「双击 → 文本框 → 失焦保存」的**唯一实现**，产物正文与文章字段共用 |
+| `actions.py` | **界面动作**：读数据、跑生成、批量重抓/删除、配置读写、TTS 状态/分段/生成/写回稿子、打开文件、新建文章、素材合规化 |
 | `tts_panel.py` | **TTS 操作台**：可编辑分段、三态与缓存、逐段生成/重掷/插事件、整体合成（走 `produce(segments=..., rendered=...)`） |
 | `voice_controls.py` | 一组声音配置控件（**三种模式**/音色/语气或音色描述/参考音频/上传）；**统一配置与每段的单独配置是同一个类的两个实例** |
 | `import_dialog.py` | 链接导入对话框 |
@@ -135,9 +137,16 @@
 | `source_options()` / `import_from_sources()` | 从 `load_sources()` 取启用的源 · 采集（不调 LLM） |
 | `profile_values()` / `save_settings()` | 设置面板的读与写；写走 `core/config_edit.py` |
 | `ENV_FIELDS` / `env_groups()` / `env_display()` / `env_shadowed()` | `.env` 白名单的呈现：分组、打码、环境变量遮盖判定 |
-| `longform_estimate()` / `cache_status()` | 长文案时长预估 · LLM 缓存命中率 |
+| `longform_estimate()` / `cache_status()` | 长视频时长预估 · LLM 缓存命中率 |
+| `create_blank_article()` / `article_body()` / `is_custom()` | 新建空白文章 · 读回正文供面板显示 · 判断是不是人工创作的 |
+| `save_article_field()` | 写回文章的标题或正文（字段名未登记时**抛错**，不静默成功） |
+| `normalize_assets()` / `skeleton_text()` | 素材合规化 · 未生成时的空稿骨架 |
 
 `RowView` 是表格一行的视图模型：`article` + `productions[(kind, lang)]` + `is_new`。
+
+**展开面板的键是字符串。**`_OPEN["cell"]` 存 `(文章 id, 面板键)`，产物格用
+`ProductionKind` 的值，标题格用 `ledger_table/state.ARTICLE_CELL`——刷新后要能按原样
+重开，所以这个键不能假定成产物类型。
 
 **改这里要注意**：
 - **每一次 LLM / TTS 调用都要 `run.io_bound`。** 同步调用冻住整个页面十几秒。
@@ -156,7 +165,7 @@
 | `_cell_tooltip()` | 悬停详情 |
 | `_launch()` / `_run()` | 发起一次生成并把结果告诉用户 |
 | `_ask_audio()` | 超过 `AUDIO_CONFIRM_SECONDS = 300` 的合成先确认耗时 |
-| `_ask_longform()` | **长文案的形式选择与费用确认** |
+| `_ask_longform()` | **长视频的形式选择与费用确认** |
 | `_SELECTED` / `selected_ids()` / `clear_selection()` | 勾选状态**跨刷新保留**（与 `_OPEN` 同一个做法）；`dict[str, None]` 当有序集合用，确认框里的标题顺序就是勾的顺序 |
 | `render_batch_bar()` / `_ask_batch_refetch()` / `_ask_batch_delete()` | 选中 > 0 时出现的批量条与两个确认框 |
 | `_render_body_cell()` / `_render_media_cell()` / `_reveal()` | 正文格开 `article.md`，媒体格开 `images/`（没有则 `videos/`） |
@@ -164,7 +173,7 @@
 **改这里要注意**：
 - **失败的格子要看得出是失败，不是「未生成」。** 显示「未生成」的话人会以为
   没跑过，再点一次再失败一次，每次都付钱。
-- `_ask_longform()` 是长文案唯一的费用闸门（一篇 5~9 次调用）。
+- `_ask_longform()` 是长视频唯一的费用闸门（一篇 5~9 次调用）。
 - 长音频要 `_ask_audio()`：不花钱但要跑几十分钟，没有确认人会以为界面挂了。
 - **勾选框与标题下的原文链接都要 `click.stop`**（`js_handler`，浏览器端拦住，不走一趟服务端）。
   漏了就是勾一下顺带把行展开、点链接开新标签页的同时也展开——这一行的注释曾经描述过
@@ -212,7 +221,7 @@
 | 点一下界面卡十几秒 | 漏了 `nicegui.run.io_bound`（`actions.py` / `ledger_table.py`） |
 | 点重做花了钱 / 没花钱 | 后端 `produce/service.py::produce` 的 `force` 分支 |
 | 格子显示「未生成」但确实跑过 | `ledger_table.py::_cell_state` + 后端要记失败行 |
-| 长文案点一下就扣了一大笔 | `ledger_table.py::_ask_longform` 的确认没生效 |
+| 长视频点一下就扣了一大笔 | `ledger_table.py::_ask_longform` 的确认没生效 |
 | 「打开文件夹」打开的不是我的目录 | `actions.py::_server_is_local` |
 | 点标题下的原文链接，连带把这一行展开了 | `ledger_table.py::_render_title_cell` 的 `click.stop`（`js_handler`） |
 | 勾选丢了 / 重线跑到「媒体」列左边 | `theme.py` 的 `COL_PICK` 与 `.wb-grid > div:nth-child(5)`——加列时这两处要一起改 |
