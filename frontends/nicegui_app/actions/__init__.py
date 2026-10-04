@@ -6,7 +6,7 @@
 The single bridge between the buttons and the core. No business logic lives here.
 
 为什么必须走 io_bound / Why everything goes through io_bound:
-    一次 LLM 调用要十几秒，长文案要一两分钟。直接在事件回调里同步调用会**冻住
+    一次 LLM 调用要十几秒，长视频要一两分钟。直接在事件回调里同步调用会**冻住
     整个界面**——连滚动和点别的按钮都不行，看起来就像程序崩了。
     A single call takes ten-odd seconds; calling synchronously inside an event handler
     freezes the whole page and looks exactly like a crash.
@@ -36,7 +36,18 @@ from frontends.nicegui_app.actions.batch import (
     plan_batch_delete,
     plan_batch_produce,
 )
-from frontends.nicegui_app.actions.editing import production_editable, save_production
+from frontends.nicegui_app.actions.custom import (
+    article_body,
+    create_blank_article,
+    is_custom,
+    normalize_assets,
+)
+from frontends.nicegui_app.actions.editing import (
+    production_editable,
+    save_article_field,
+    save_production,
+    skeleton_text,
+)
 from frontends.nicegui_app.actions.env import (
     ENV_FIELDS,
     EnvField,
@@ -106,6 +117,7 @@ __all__ = [
     "ProducePlan",
     "RowView",
     "TTSStatus",
+    "article_body",
     "article_directory",
     "audio_estimate_seconds",
     "audio_for",
@@ -114,16 +126,19 @@ __all__ = [
     "body_file",
     "cache_status",
     "cell_seconds",
+    "create_blank_article",
     "env_display",
     "env_groups",
     "env_shadowed",
     "import_from_sources",
     "import_links",
+    "is_custom",
     "last_instructions",
     "load_rows",
     "longform_estimate",
     "media_folders",
     "media_targets",
+    "normalize_assets",
     "open_in_file_manager",
     "over_target",
     "plan_batch_delete",
@@ -139,10 +154,12 @@ __all__ = [
     "ref_audio_options",
     "resplit_text",
     "run_production",
+    "save_article_field",
     "save_production",
     "save_script",
     "save_settings",
     "script_is_editable",
+    "skeleton_text",
     "source_options",
     "speech_segments",
     "subtitle_file",

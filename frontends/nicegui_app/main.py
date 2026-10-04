@@ -150,6 +150,39 @@ def _render_page() -> None:
             text += f"　·　筛自最近 {actions.SCAN_CAP} 条"
         count_label.set_text(text)
         _sync_pagination(view)
+
+    async def new_article() -> None:
+        """
+        新建一篇空白文章 / Create one blank article.
+
+        成功后回到第 1 页并清掉搜索框：新文章是最新的，按现有排序一定在第 1 页第一条，
+        所以这样必定看得见——否则用户在别的页面上点「新建」，看不到任何变化，
+        会以为按钮坏了。
+        Back to page one with the search box cleared, which is enough to see the new row: it
+        is the newest, so it sorts first. Otherwise a click from another page would appear to
+        do nothing.
+
+        **不静默清掉来源和状态筛选**：那是用户自己设的，替他清掉会让他丢失在长列表里的
+        位置，比「新建的那条被筛掉了」更让人困惑。真被筛掉时，来源筛选里本来就写着
+        `custom_article`，一看就知道。
+        The source and status filters are deliberately left alone: clearing them would move
+        the user's place in a long list, which is more confusing than a filtered-out new row —
+        and the active source filter reads `custom_article`, so the cause is visible.
+        """
+        try:
+            record = await actions.create_blank_article()
+        except (OSError, ValueError) as error:
+            ui.notify(f"新建失败：{error}", type="negative")
+            return
+
+        search_input.value = ""
+        state["search"] = None
+        state["page"] = 1
+        refresh()
+        ui.notify(
+            f"已新建空白文章：{record.title}。点标题格展开，可编辑标题与正文。",
+            type="positive",
+        )
         # 费用在每次操作后刷新——它必须一直是当前值，否则等于没显示
         # Refreshed after every action: a stale cost readout is no better than none.
         cost_label.set_text(actions.cache_status())
@@ -236,6 +269,17 @@ def _render_page() -> None:
         ).props("no-caps unelevated dense outline").style(
             "color: var(--wb-accent)"
         ).tooltip("把配置里启用的订阅源最近几天的新文章批量抓下来（不产生费用）")
+        # 新建放在「导入」这一类里：它同样是让表格多出一行的入口，只是内容由人来写。
+        # 加号图标与「导入链接」的链接图标刻意不同——这两个按钮都会让表格变长，
+        # 图标一样的话，想自己写一篇的人会先点错进导入对话框。
+        # Beside the import buttons because it is the third way a row appears, with content
+        # written by hand. The plus icon differs from the import link icon on purpose: both
+        # lengthen the table, and a shared icon would send authors into the import dialog.
+        ui.button(
+            "新建", icon="note_add", on_click=new_article,
+        ).props("no-caps unelevated dense outline").style(
+            "color: var(--wb-new)"
+        ).tooltip("新建一篇空白文章，内容自己写；后续生成流程与导入的文章完全一样（不产生费用）")
         ui.button(icon="refresh", on_click=refresh).props("flat dense round").tooltip("刷新")
         # 设置改完字数窗口，表格里的超长标记要跟着重判——所以回调是 refresh
         ui.button(

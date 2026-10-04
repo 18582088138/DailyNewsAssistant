@@ -299,6 +299,11 @@ body::before {
   background: var(--wb-bg); border: 1px solid var(--wb-line);
   border-radius: 8px; padding: 10px 14px; font-size: 13px; line-height: 1.75;
 }
+/* 文章面板里「标题 / 正文 / 媒体」这三节的小标题 */
+.wb-subhead {
+  font-size: 11px; letter-spacing: .08em; text-transform: uppercase;
+  color: var(--wb-dim); margin: 10px 0 2px;
+}
 .wb-detail .wb-body h1, .wb-detail .wb-body h2 { font-size: 15px; color: var(--wb-accent); }
 .wb-detail .wb-body strong { color: #e6eef8; }
 .wb-detail .wb-body.editable { cursor: text; }
