@@ -36,6 +36,8 @@ EXPECTED_COMMANDS: tuple[str, ...] = (
     "list",
     "show",
     "sync",
+    "new",
+    "media",
     "refetch",
     "delete",
     "produce",
