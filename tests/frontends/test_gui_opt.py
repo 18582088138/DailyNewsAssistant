@@ -55,7 +55,7 @@ def _texts(element) -> list[str]:
 
 
 def test_body_is_editable_except_longform(offscreen) -> None:
-    """总结 / 口播类可双击编辑；长文案只读并提示去 TTS 操作台。"""
+    """总结 / 中视频类可双击编辑；长视频只读并提示去 TTS 操作台。"""
     from nicegui import ui
 
     from dna.produce import ProductionKind
@@ -77,15 +77,15 @@ def test_body_is_editable_except_longform(offscreen) -> None:
 def test_job_registry_blocks_duplicates_and_maps_audio_to_its_script_cell() -> None:
     """
     同一格重复点「生成」被挡住（第二次是计费，不是加速）；不同格、不同文章可并行。
-    音频没有自己的列：口播音频在跑时，亮的是口播那一格。
+    音频没有自己的列：中视频音频在跑时，亮的是中视频那一格。
     """
     from dna.produce import ProductionKind as K
     from frontends.nicegui_app import jobs
 
-    first = jobs.begin("a", K.NARRATION_AUDIO, "zh", "口播音频")
+    first = jobs.begin("a", K.NARRATION_AUDIO, "zh", "中视频音频")
     try:
         assert first is not None and first.audio
-        assert jobs.begin("a", K.NARRATION_AUDIO, "zh", "口播音频") is None
+        assert jobs.begin("a", K.NARRATION_AUDIO, "zh", "中视频音频") is None
         other = jobs.begin("b", K.SUMMARY, "zh", "总结")
         assert other is not None and not other.audio
 
@@ -96,7 +96,7 @@ def test_job_registry_blocks_duplicates_and_maps_audio_to_its_script_cell() -> N
     finally:
         jobs.finish(first)
     assert jobs.active() == []
-    assert jobs.begin("a", K.NARRATION_AUDIO, "zh", "口播音频") is not None
+    assert jobs.begin("a", K.NARRATION_AUDIO, "zh", "中视频音频") is not None
     jobs.finish(jobs.running_in_cell("a", K.NARRATION))
 
 
@@ -127,7 +127,7 @@ def test_batch_plan_reuses_existing_and_skips_too_short(settings, monkeypatch, p
     plan = actions.plan_batch_produce([article_id], kinds)
 
     assert plan.reused == {K.SUMMARY: 1}
-    assert plan.not_applicable == {K.LONGFORM: 1}, "正文 200 字撑不起长文案"
+    assert plan.not_applicable == {K.LONGFORM: 1}, "正文 200 字撑不起长视频"
     assert plan.todo == [(article_id, K.SHORTVIDEO), (article_id, K.NARRATION)]
     assert plan.calls == 2
 
@@ -157,7 +157,8 @@ def test_voice_controls_show_only_the_selected_mode(offscreen, monkeypatch) -> N
         VoiceControls,
     )
 
-    monkeypatch.setattr(actions, "ref_audio_options", lambda: [])
+    # 直接给 `list` 而不是 `lambda: []`：本例只关心「一个都取不到」这个状态
+    monkeypatch.setattr(actions, "ref_audio_options", list)
     controls = VoiceControls(voices=["serena"], base=VoiceSpec(speaker="serena"), uploads=False)
     controls.render()
 
