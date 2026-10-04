@@ -15,7 +15,7 @@ from dna.produce.tasks import default_language
 from frontends.nicegui_app import actions, jobs
 from frontends.nicegui_app.audio_progress import AudioProgress
 
-# 勾选状态跨重画保留（批量条每勾一篇文章都会重画）；长文案默认不勾：一篇 5~9 次调用
+# 勾选状态跨重画保留（批量条每勾一篇文章都会重画）；长视频默认不勾：一篇 5~9 次调用
 _PICKED: set[ProductionKind] = {
     ProductionKind.SUMMARY, ProductionKind.SHORTVIDEO, ProductionKind.NARRATION,
 }
@@ -63,7 +63,7 @@ def _ask(ids: list[str], *, on_done) -> None:
                 {"feature": "专题（单角色讲述）", "interview": "访谈（主持人 + 嘉宾）"},
                 value="feature",
             ).props("inline dense")
-            ui.label("⚠️ 长文案一篇 5~9 次 LLM 调用，是其余三种加起来的数倍").classes(
+            ui.label("⚠️ 长视频一篇 5~9 次 LLM 调用，是其余三种加起来的数倍").classes(
                 "text-xs"
             ).style("color: var(--wb-warn)")
 

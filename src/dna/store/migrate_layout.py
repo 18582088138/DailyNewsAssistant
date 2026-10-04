@@ -6,7 +6,7 @@ Moves article directories from `data/articles/` to `outputs/articles/` and rewri
 ledger's `store_dir`.
 
 为什么搬 / Why:
-    文章目录里放的是**产物**——正文、配图、视频，接下来还要加总结、口播稿、
+    文章目录里放的是**产物**——正文、配图、视频，接下来还要加总结、中视频稿、
     短视频稿。这些是用户要打开、要拷走、要发布的东西，属于 `outputs/`。
     `data/` 留给程序自己的东西：台账数据库与 LLM 缓存。
     The article directory holds deliverables — body, images, video, and soon summaries

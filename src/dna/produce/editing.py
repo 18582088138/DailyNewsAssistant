@@ -39,8 +39,8 @@ def save_production_text(
     """
     整份产物文件写回 / Overwrite a whole production file with edited text.
 
-    口播类（有对应音频的稿子）按 `spoken_text` 数字数、估时长，并刷新「口播（约 N 秒
-    · M 字）」那一行；总结只数抬头之外的正文。长文案的稿子在 `.json` 附件里，拒绝。
+    中视频类（有对应音频的稿子）按 `spoken_text` 数字数、估时长，并刷新「中视频（约 N 秒
+    · M 字）」那一行；总结只数抬头之外的正文。长视频的稿子在 `.json` 附件里，拒绝。
 
     返回新插入的台账行 id / Returns the id of the inserted ledger row.
     """

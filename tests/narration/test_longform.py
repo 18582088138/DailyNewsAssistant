@@ -1,5 +1,5 @@
 """
-test_longform.py —— 长文案单元测试 / Long-form script unit tests
+test_longform.py —— 长视频单元测试 / Long-form script unit tests
 
 复测命令 / Re-run:
     /c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest tests/narration/test_longform.py -v
@@ -96,7 +96,7 @@ def test_short_article_is_rejected_before_spending_anything() -> None:
     """
     正文太短时**在花钱之前**就拒绝。
 
-    长文案是最贵的产物（提纲 1 次 + 每节 1 次）。不够料的文章做出来一定是注水稿，
+    长视频是最贵的产物（提纲 1 次 + 每节 1 次）。不够料的文章做出来一定是注水稿，
     先判断再决定要不要花这个钱。
     """
     ok, reason = can_build_longform(article(400))
@@ -184,11 +184,11 @@ def test_target_is_clamped_at_both_ends() -> None:
 
 def test_target_is_derived_in_duration_space_not_character_space() -> None:
     """
-    目标由**口播时长**推导，不是字符数。
+    目标由**中视频时长**推导，不是字符数。
 
     两者不是一回事：技术稿里 `UD-Q8_K_XL` 这类标识符一个占十几个字符，
     念出来的时间却远不成比例。按字符数推导会让「4000 字原文」与
-    「4000 字成稿」看起来对等，实际口播时长差出一倍——真机验证时正是这样
+    「4000 字成稿」看起来对等，实际中视频时长差出一倍——真机验证时正是这样
     才发现的（目标 15 分钟、实测 7.4 分钟）。
     """
     plain = Article(url="https://e.com/1", title="T", text="这是中文技术内容。" * 200, extraction_ok=True)
@@ -377,7 +377,7 @@ def test_interview_prompt_forbids_mutual_flattery() -> None:
 
 
 def test_professionalism_rules_apply_to_longform_too() -> None:
-    """专业性约束对长文案同样生效。"""
+    """专业性约束对长视频同样生效。"""
     llm = ScriptedProvider("fake", [outline_reply(1), section_reply(("narrator", "内容"))])
     build_longform(article(), llm, mode=LongformMode.FEATURE)
 

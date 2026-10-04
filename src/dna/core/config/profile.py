@@ -126,7 +126,7 @@ class Tuning(BaseModel):
     hamming_threshold: int = Field(default=3, ge=0, le=64)
     simhash_sample_chars: int = Field(default=500, ge=100)
 
-    # -- 长文案 / long-form（最贵的产物）-------------------------------------
+    # -- 长视频 / long-form（最贵的产物）-------------------------------------
     longform_min_body_chars: int = Field(default=800, ge=0, description="正文不足这么长就拒绝")
     longform_expansion_ratio: float = Field(default=1.2, gt=0, description="目标字数 = 原文 × 此值")
     longform_min_sections: int = Field(default=4, ge=1)
@@ -193,7 +193,7 @@ class Profile(BaseModel):
     script_body_chars: int = 6000
 
     # 每篇最多存几张图/几个视频。多存是为了攒素材：日报只用 1~3 张，但做长图、
-    # 口播配图、视频封面时都要挑图，而**重抓拿不回当初那些图**——站点会换图删图。
+    # 中视频配图、视频封面时都要挑图，而**重抓拿不回当初那些图**——站点会换图删图。
     # Kept generous because the extras are a material library: the digest uses one to
     # three, while long images, voice-over stills and covers all need choices, and a
     # re-fetch cannot recover images the site has since swapped or deleted.
@@ -220,7 +220,7 @@ class Profile(BaseModel):
     # 时长区间（秒）/ duration windows —— 只用于提示词的开场句与产物记账
     video_duration_seconds: tuple[int, int] = (25, 35)
     narration_duration_seconds: tuple[int, int] = (60, 120)
-    # 长文案的下限是**下限而不是目标**：原文短就写短，宁可 6 分钟也不注水凑 15 分钟。
+    # 长视频的下限是**下限而不是目标**：原文短就写短，宁可 6 分钟也不注水凑 15 分钟。
     # 默认 300 与 `longform.MIN_TARGET_SECONDS` 一致——两处写不同的值，
     # 就会出现「配置说 10 分钟起、代码按 5 分钟起」这种谁也说不清的行为。
     # The lower bound is a floor, not a target: a short source yields a short script.

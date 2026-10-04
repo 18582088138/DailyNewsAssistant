@@ -67,7 +67,7 @@ UPDATE articles SET feed_title = title WHERE feed_title = '';
 # v3：单篇产物台账 / per-article production ledger
 #
 # 每生成一次产物就插一行，**不更新旧行**：`redo_of_id` 指向被替换的那版，
-# 历史因此可追溯——「这段口播稿是哪天用哪个模型生成的」是能回答的问题。
+# 历史因此可追溯——「这段中视频稿是哪天用哪个模型生成的」是能回答的问题。
 # 只更新一行的话，重做会把上一版连同它的模型与时间一起抹掉。
 # Each generation inserts a row rather than updating one: `redo_of_id` points at the
 # version it replaces, so history survives and "which model wrote this script, and when"
@@ -82,11 +82,11 @@ CREATE TABLE IF NOT EXISTS productions (
     status        TEXT NOT NULL,              -- ok|failed
     output_path   TEXT,                       -- 相对 outputs/
     chars         INTEGER NOT NULL DEFAULT 0,
-    est_seconds   REAL,                       -- 口播时长估算
+    est_seconds   REAL,                       -- 中视频时长估算
     llm_provider  TEXT,
     llm_model     TEXT,
     tokens        INTEGER NOT NULL DEFAULT 0,
-    calls         INTEGER NOT NULL DEFAULT 1, -- 长文案分段生成，会有多次
+    calls         INTEGER NOT NULL DEFAULT 1, -- 长视频分段生成，会有多次
     duration_ms   INTEGER NOT NULL DEFAULT 0,
     error         TEXT,
     created_at    TEXT NOT NULL,

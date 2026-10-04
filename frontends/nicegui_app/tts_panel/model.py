@@ -95,7 +95,7 @@ class _Panel:
         self.loaded_text = ""
         """载入时的稿子正文，用来判断人到底改没改过——没改就不必写回台账。"""
         self.editable = True
-        """稿子能不能写回（长文案按发言人分轮存，一段纯文本写不回去）。"""
+        """稿子能不能写回（长视频按发言人分轮存，一段纯文本写不回去）。"""
         self.template: VoiceSpec | None = None
         """载入时第一段的音色，「清空」之后「加一段」还要靠它当模板。"""
         self.refresh: Callable[[], None] = lambda: None

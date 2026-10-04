@@ -150,7 +150,7 @@ def plan_batch_produce(
 
     **已经生成过的复用、不重做**（不 force）——批量是补缺口，不是整批重来；
     正文太短撑不起的产物直接剔掉，免得每篇都跑一趟只拿回一条报错。
-    调用次数在确认框里报给人，长文案一篇 5~9 次，选上它之前要看见这个数。
+    调用次数在确认框里报给人，长视频一篇 5~9 次，选上它之前要看见这个数。
     """
     from dna.core.config import get_settings
     from dna.store.ledger import Ledger

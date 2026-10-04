@@ -34,7 +34,7 @@ from dna.core.urls import host_of
 logger = get_logger("extract.media")
 
 # 每篇最多留几张配图 / images kept per article
-# 日报只用 1~3 张，但多存的那些是素材库：做长图、口播配图、视频封面时可以挑，
+# 日报只用 1~3 张，但多存的那些是素材库：做长图、中视频配图、视频封面时可以挑，
 # 而重抓一遍拿不回当初那些图（站点会换图、删图）。存储成本远低于错过素材。
 # The digest itself uses one to three, but the extras are a material library for long
 # images, voice-over stills and video covers. Re-fetching later cannot recover them —

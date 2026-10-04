@@ -2,7 +2,7 @@
 音频合成的进度浮窗 / The synthesis progress panel.
 
 为什么值得单独一个组件 / Why this is not just a notification:
-    合成一条口播音频在 CPU 上要几分钟，长文案要几十分钟。这段时间里界面必须
+    合成一条中视频音频在 CPU 上要几分钟，长视频要几十分钟。这段时间里界面必须
     **一直有东西在动**，而且要能回答三个问题：还在跑吗、跑到哪了、大概还要多久。
     一个静止的转圈图标只能回答第一个，而且回答得并不可信 —— 卡死的界面上转圈
     照样在转（那是 CSS 动画，不是程序还活着的证据）。
@@ -34,7 +34,7 @@ class AudioProgress:
     一次合成的进度浮窗 / One synthesis run's progress panel.
 
     用法 / Usage:
-        panel = AudioProgress("口播音频", expected_seconds=240)
+        panel = AudioProgress("中视频音频", expected_seconds=240)
         ...  # 工作线程往 panel.progress 里写 done/total/seconds
         panel.close()
     """

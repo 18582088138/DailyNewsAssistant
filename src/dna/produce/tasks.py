@@ -29,7 +29,7 @@ No generator function lives here; dispatch is in `service.generate_text`. Puttin
 would make this table depend on `narration` and `pipeline`, whereas it is currently pure
 data that both front-ends can import without pulling in the world.
 
-为什么长文案不进批量 / Why long-form stays out of the batch:
+为什么长视频不进批量 / Why long-form stays out of the batch:
     它是最贵的产物——提纲 1 次 + 每节 1 次，一篇要 5~9 次调用，
     而其余四项加起来才 3 次。让它跟着 `--all` 跑，一次误操作就是十几倍的账单。
     It is by far the most expensive: an outline call plus one per section, five to nine
@@ -37,8 +37,8 @@ data that both front-ends can import without pulling in the world.
     would turn one mistaken keystroke into a bill an order of magnitude larger.
 
 为什么音频也不进批量 / Why the audio kinds stay out too:
-    它们**不花钱，但很花时间**——实测 RTF≈2.5，口播稿要等约 4 分钟，
-    长文案约 37 分钟。批量里混进一个半小时的任务，等同于把界面按死。
+    它们**不花钱，但很花时间**——实测 RTF≈2.5，中视频稿要等约 4 分钟，
+    长视频约 37 分钟。批量里混进一个半小时的任务，等同于把界面按死。
     成本护栏防的是账单，时间护栏防的是「点一下之后这台机器就没法用了」，
     两者都要拦，拦的理由不同。
     They cost nothing but take a great deal of time: measured at RTF≈2.5, a narration
@@ -142,7 +142,7 @@ class TaskSpec:
     """
 
     needs_variant: bool = False
-    """是否需要指定形式（长文案的专题/访谈）/ whether a variant must be chosen."""
+    """是否需要指定形式（长视频的专题/访谈）/ whether a variant must be chosen."""
 
     min_body_chars: int = 0
     """正文低于此长度就不该生成 / below this body length the kind is not offered."""
@@ -177,6 +177,12 @@ class TaskSpec:
 
 
 TASKS: dict[ProductionKind, TaskSpec] = {
+    # `label` 是**唯一**的用户可见名字：界面表头、CLI 输出、设置面板、错误提示与产物抬头
+    # 都读它（表头另有 `state._HEAD_SHORT` 的 4 字缩写）。改一处即可全局改名。
+    # 注意中视频的落盘标记与此**故意不同**——产物正文里仍是 `**口播（…）：**`，
+    # 那是解析用的契约，理由见 `documents.SPOKEN_MARKER`，不要顺手改掉。
+    # `label` is the single user-visible name; the on-disk spoken marker deliberately
+    # keeps the older word, and `documents.SPOKEN_MARKER` explains why.
     ProductionKind.SUMMARY: TaskSpec(
         kind=ProductionKind.SUMMARY,
         label="总结",
@@ -192,14 +198,14 @@ TASKS: dict[ProductionKind, TaskSpec] = {
     ),
     ProductionKind.NARRATION: TaskSpec(
         kind=ProductionKind.NARRATION,
-        label="口播文案",
+        label="中视频文案",
         stem="narration",
         approx_calls=1,
         spoken=True,
     ),
     ProductionKind.LONGFORM: TaskSpec(
         kind=ProductionKind.LONGFORM,
-        label="长文案",
+        label="长视频",
         stem="longform",
         in_batch=False,  # 见模块文档：最贵的产物，必须显式指定
         approx_calls=7,
@@ -219,7 +225,7 @@ TASKS: dict[ProductionKind, TaskSpec] = {
     ),
     ProductionKind.NARRATION_AUDIO: TaskSpec(
         kind=ProductionKind.NARRATION_AUDIO,
-        label="口播音频",
+        label="中视频音频",
         stem="narration",
         extension="wav",
         requires=ProductionKind.NARRATION,
@@ -229,7 +235,7 @@ TASKS: dict[ProductionKind, TaskSpec] = {
     ),
     ProductionKind.LONGFORM_AUDIO: TaskSpec(
         kind=ProductionKind.LONGFORM_AUDIO,
-        label="长文案音频",
+        label="长视频音频",
         stem="longform",
         extension="wav",
         requires=ProductionKind.LONGFORM,
@@ -340,9 +346,9 @@ def char_window(kind: ProductionKind | str, profile: Profile) -> tuple[int, int]
     """
     这种产物的字数区间 / The character window this kind is accepted against.
 
-    返回 None 表示**不按字数验收**：长文案的目标是时长（字数由时长推算，见
+    返回 None 表示**不按字数验收**：长视频的目标是时长（字数由时长推算，见
     `narration/longform.py`），音频根本不是文本。对这些返回一个假窗口，
-    界面就会把正常的长文案标成「超长」。
+    界面就会把正常的长视频标成「超长」。
     None means the kind is not judged on characters: long-form derives its bounds from a
     duration target, and audio is not text at all. Returning a made-up window for them
     would paint every healthy long-form cell as over length.
@@ -373,7 +379,7 @@ def audio_kind(kind: ProductionKind | str) -> ProductionKind | None:
     """
     这份稿子对应的音频产物 / The audio production for one script kind.
 
-    不是口播类的返回 None —— 总结不会被念出来，界面上也就不该有合成按钮。
+    不是中视频类的返回 None —— 总结不会被念出来，界面上也就不该有合成按钮。
     Returns None for kinds that are not spoken, so no synthesis button is offered.
     """
     return AUDIO_OF.get(ProductionKind(kind))
@@ -383,7 +389,7 @@ def json_sidecar(spec_: TaskSpec, lang: str = "") -> str | None:
     """
     该产物是否额外产出一份 JSON / Whether this kind writes a JSON sibling.
 
-    只有长文案有：它要按发言人切成 turns 给 TTS 分配音色。
+    只有长视频有：它要按发言人切成 turns 给 TTS 分配音色。
     Only the long-form script does: the TTS stage needs it split into speaker turns.
     """
     lang = normalize_lang(lang)

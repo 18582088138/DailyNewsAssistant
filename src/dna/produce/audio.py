@@ -55,8 +55,8 @@ def _generate_audio(
     read aloud, whereas the article is not.
 
     两条取文路径 / Two routes into the text:
-        长文案走 `.json` 附件——它已经按发言人切好 turns，访谈的两个角色就是
-        两个音色；其余走 Markdown，解析出「口播」那一段。
+        长视频走 `.json` 附件——它已经按发言人切好 turns，访谈的两个角色就是
+        两个音色；其余走 Markdown，解析出「中视频」那一段。
         Long-form reads the JSON sidecar, already split into speaker turns; the others
         parse the spoken section out of the Markdown.
 

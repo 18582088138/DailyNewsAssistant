@@ -152,7 +152,7 @@ def load_rows(
         rows = [row for row in rows if row.is_new]
 
     if only_gaps:
-        # 「有缺口的」= 常规四项里至少有一项没生成。长文案不算——它本来就是按需的，
+        # 「有缺口的」= 常规四项里至少有一项没生成。长视频不算——它本来就是按需的，
         # 把它计入的话所有文章都会显示有缺口，筛选就失去意义了。
         # "Has gaps" means at least one of the four routine kinds is missing. The
         # long-form script is excluded: it is on-demand by design, and counting it would

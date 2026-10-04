@@ -1,5 +1,5 @@
 """
-test_script_builder.py —— 短视频与口播文案单元测试 / Short-video and voice-over tests
+test_script_builder.py —— 短视频与中视频文案单元测试 / Short-video and voice-over tests
 
 复测命令 / Re-run:
     /c/Users/test/miniforge3/envs/ov_env_py312/python.exe -m pytest tests/narration/test_script_builder.py -v
@@ -13,7 +13,7 @@ test_script_builder.py —— 短视频与口播文案单元测试 / Short-video
     2. **信息密度是第一要求**，且逐条点名了禁止出现的填充句式
     3. 提示词包含正文，且超长时截断到 SCRIPT_BODY_LIMIT
     4. 短视频要求**覆盖文章主干**（第一句给事件、每句换一个新事实）
-    5. 口播提示词要求技术深度，并要求提到局限
+    5. 中视频提示词要求技术深度，并要求提到局限
     6. 结尾引导语由调用方传入，不写死在提示词里
     7. **字数预算按中英混排密度放大**（168~235 字而非 112~157 字）
     8. 正文为空时提示词禁止编造
@@ -178,7 +178,7 @@ def test_video_scripts_end_with_the_configured_sign_off() -> None:
 
 def test_narration_demands_technical_depth_and_limitations() -> None:
     """
-    口播提示词必须要求技术深度，并要求提到局限。
+    中视频提示词必须要求技术深度，并要求提到局限。
 
     有深度是它区别于短视频稿的全部理由；只讲好处的稿子没有可信度。
     """
@@ -243,7 +243,7 @@ def test_english_window_is_converted_to_words_not_characters() -> None:
     """
     英文版把中文字数折算成**词数**，不是字符数。
 
-    一个英文词的口播时长约等于两个半汉字。按字符 1:1 折算，英文稿会长出一倍多，
+    一个英文词的中视频时长约等于两个半汉字。按字符 1:1 折算，英文稿会长出一倍多，
     而时长才是平台的硬约束。200~250 字 → 约 77~96 词。
     """
     reply = short_reply(" ".join(["benchmark"] * 85))
@@ -347,7 +347,7 @@ def test_short_video_returns_title_and_subtitle() -> None:
 
 
 def test_narration_targets_the_longer_window() -> None:
-    """口播稿按 1~2 分钟判定，不能套用短视频的区间。"""
+    """中视频稿按 1~2 分钟判定，不能套用短视频的区间。"""
     llm = ScriptedProvider("fake", [narration_reply("字" * 500)])  # 500 字，落在 405~810 的窗口内
     result = build_narration(article(), llm, low=60, high=120)
 
@@ -358,7 +358,7 @@ def test_narration_targets_the_longer_window() -> None:
 
 def test_narration_also_returns_a_title_pair() -> None:
     """
-    口播稿同样带主副标题。
+    中视频稿同样带主副标题。
 
     1~2 分钟的稿子也是发到平台上的视频，标题栏一样要填。产物里带上就不用
     发布时再想一遍，也保证标题与文案出自同一次生成、口径一致。

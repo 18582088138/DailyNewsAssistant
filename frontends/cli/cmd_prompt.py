@@ -22,7 +22,7 @@ def prompt_lab_cmd(
     ),
     lang: str = typer.Option("zh", "--lang", "-l", help="输出语言：zh | en"),
     variant: str | None = typer.Option(
-        None, "--variant", help="长文案形式：feature（专题）| interview（访谈）"
+        None, "--variant", help="长视频形式：feature（专题）| interview（访谈）"
     ),
     instructions: str = typer.Option(
         "", "--instructions", "-i", help="本次的额外要求，测试它接在提示词末尾的效果"
@@ -38,7 +38,7 @@ def prompt_lab_cmd(
         False, "--save", help="把提示词与产物存到 outputs/prompt_lab/，方便前后对比"
     ),
     list_tasks: bool = typer.Option(False, "--list", help="列出各任务读哪些提示词文件"),
-    full: bool = typer.Option(False, "--full", help="打印完整提示词，不折叠长文案的中间几节"),
+    full: bool = typer.Option(False, "--full", help="打印完整提示词，不折叠长视频的中间几节"),
 ) -> None:
     """
     提示词调试台 / Tune the prompts —— 看提示词、试提示词。
@@ -51,7 +51,7 @@ def prompt_lab_cmd(
       dna prompt a1b2c3d4 -t narration --run  # 真机跑一次看产物（**计费**）
 
     **默认不花钱**：不加 --run 时一次 LLM 调用都不发，只把提示词渲染出来。
-    长文案会打印「提纲 + 每节」十几条，因为每一节的提示词都不一样。
+    长视频会打印「提纲 + 每节」十几条，因为每一节的提示词都不一样。
 
     看到的提示词与 `dna produce` / 工作台点「重做」发出去的**逐字节相同**——
     两条路走的是同一个 `dna.produce.service.generate_text()`，只是这里换了 provider。
@@ -130,7 +130,7 @@ def prompt_lab_cmd(
         console.print(f"\n[red]{result.error}[/red]")
         raise typer.Exit(code=1)
 
-    # 长文案十几条提示词全打出来会淹掉终端；默认只展开首尾，中间给一行提要。
+    # 长视频十几条提示词全打出来会淹掉终端；默认只展开首尾，中间给一行提要。
     # `--full` 全展开，`--save` 落盘之后随便看。
     total = len(result.prompts)
     for index, prompt in enumerate(result.prompts, 1):

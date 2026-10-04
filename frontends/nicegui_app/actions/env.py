@@ -107,7 +107,7 @@ ENV_FIELDS: tuple[EnvField, ...] = (
     ),
     EnvField(
         "TTS_REQUEST_TIMEOUT", "服务", "单次请求上限（秒）", page="TTS",
-        help="本地合成 RTF≈2.5，长文案一段就要几分钟——这个值宁大勿小",
+        help="本地合成 RTF≈2.5，长视频一段就要几分钟——这个值宁大勿小",
     ),
     EnvField(
         "TTS_MODE", "音色", "合成方式", options=("voice_clone", "custom_voice"), page="TTS",
@@ -120,7 +120,7 @@ ENV_FIELDS: tuple[EnvField, ...] = (
     ),
     EnvField(
         "TTS_VOICE_GUEST", "音色", "嘉宾音色名（双人稿）", page="TTS", needs_mode="custom_voice",
-        help="只有长文案的访谈体用得上",
+        help="只有长视频的访谈体用得上",
     ),
     EnvField(
         "TTS_REF_AUDIO", "参考音频", "主播参考音频", page="TTS", needs_mode="voice_clone",

@@ -90,7 +90,7 @@ PROMPT_FILES: dict[ProductionKind, tuple[str, ...]] = {
 
 # 干跑用的假回复 / canned replies for the dry run
 #
-# 长度是刻意挑的：短视频 130 字落在 25~35 秒内、口播 400 字落在 1~2 分钟内，
+# 长度是刻意挑的：短视频 130 字落在 25~35 秒内、中视频 400 字落在 1~2 分钟内，
 # 所以**不会触发回炉重写**，干跑就是「一个任务一条提示词」，看着清楚。
 # 想看回炉重写那一版的提示词，把这里的字数调到区间外即可——它会多打印两条。
 # The lengths are chosen to land inside the duration windows so no rewrite is triggered
@@ -148,7 +148,7 @@ class LabResult:
     """
     一次调试的结果 / The outcome of one workbench run.
 
-    `prompts` 是**每一次 LLM 调用**的完整 messages，按发生顺序排。长文案会有
+    `prompts` 是**每一次 LLM 调用**的完整 messages，按发生顺序排。长视频会有
     「提纲 + 每节一条」十几条；短视频若回炉重写过也会多出几条——调提示词时
     最要紧的信息之一就是「这一篇花了几次调用」。
     One entry per LLM call, in order. Long-form yields an outline plus one per section;
@@ -207,7 +207,7 @@ def render(
 
     **零调用零费用。** 走的是与 `dna produce` 完全相同的生成路径，只是把 provider
     换成 `CapturingProvider`：它记下真正发出去的 messages，并返回预置的假回复让
-    整条链路跑完，好把长文案十几条提示词一次全拿到。
+    整条链路跑完，好把长视频十几条提示词一次全拿到。
     Zero calls, zero cost: the same generation path as `dna produce`, with the provider
     swapped for one that records and returns canned replies so the whole chain completes.
     """
