@@ -15,6 +15,7 @@ from pathlib import Path
 
 from dna.core.logging import get_logger
 from dna.core.models import Article, MediaKind
+from dna.core.urls import display_source
 
 logger = get_logger("store.article_render")
 
@@ -23,7 +24,7 @@ logger = get_logger("store.article_render")
 # ---------------------------------------------------------------------------
 
 
-def _render_markdown(article: Article, article_id: str) -> str:
+def _render_markdown(article: Article, article_id: str, *, manual_body: bool = False) -> str:
     """
     渲染成带 frontmatter 的 Markdown / Render Markdown with a YAML frontmatter block.
 
@@ -31,6 +32,14 @@ def _render_markdown(article: Article, article_id: str) -> str:
     不用另开一个文件。
     The frontmatter keeps the file readable by a person while still carrying metadata a
     program can parse, avoiding a second file.
+
+    `manual_body=True` 用于人工创作的文章：正文照降级文章的办法放进**粘贴区之下**。
+    这不是为了复用代码，而是为了 `read_body` 的语义——它只在粘贴区之后原样取文本，
+    正常路径会丢掉所有 `# `/`> ` 开头的行，那会把用户手写的引用块和小标题吃掉。
+    `manual_body=True` is for hand-authored articles: the body goes below the paste marker
+    exactly as it does for a degraded article. That is not code reuse but a requirement of
+    `read_body`, which only takes text verbatim after the marker; the normal path drops
+    every line starting with `# ` or `> `, silently eating a hand-written blockquote.
     """
     lines = [
         "---",
@@ -47,7 +56,7 @@ def _render_markdown(article: Article, article_id: str) -> str:
         "",
         f"# {article.title}",
         "",
-        f"> 来源：{article.url}",
+        f"> 来源：{display_source(article.url)}",
         "",
     ]
 
@@ -64,6 +73,8 @@ def _render_markdown(article: Article, article_id: str) -> str:
             ),
             "",
         ]
+    elif manual_body:
+        lines += [MANUAL_BODY_MARKER, ""]
 
     lines.append(article.text or "")
     lines.append("")
@@ -78,7 +89,7 @@ def _render_references(article: Article, saved: SavedArticle) -> str:
     Each image lists its original address and the article it came from, for attribution
     at publishing time.
     """
-    lines = [f"# 来源 / References — {article.title}", "", f"- 原文：{article.url}"]
+    lines = [f"# 来源 / References — {article.title}", "", f"- 原文：{display_source(article.url)}"]
 
     if article.author:
         lines.append(f"- 作者：{article.author}")

@@ -17,8 +17,8 @@ by hand.
     ├── summary.zh.md       中文总结         ┐
     ├── summary.en.md       英文总结         │ 由 dna.produce 生成，
     ├── shortvideo.zh.md    短视频文案 25~35s │ 每一项都可单独重做
-    ├── narration.zh.md     口播文案 1~2min  │
-    └── longform.zh.md/.json 长文案 10~15min ┘
+    ├── narration.zh.md     中视频文案 1~2min  │
+    └── longform.zh.md/.json 长视频 10~15min ┘
 
 放在 `outputs/` 而不是 `data/`：这里全是**产物**——要打开、要拷走、要发布的东西。
 `data/` 留给程序自己的台账数据库与 LLM 缓存。
@@ -47,7 +47,7 @@ from pathlib import Path
 from dna.core.logging import get_logger
 from dna.core.models import Article, MediaAsset, MediaKind
 from dna.core.naming import slugify
-from dna.core.urls import host_of
+from dna.core.urls import host_of, is_custom_url
 from dna.extract.media import looks_like_image_url
 from dna.sources.http import fetch_bytes
 from dna.store.article_render import (
@@ -123,7 +123,15 @@ def save_article(
         references_path=directory / "references.md",
     )
 
-    saved.article_path.write_text(_render_markdown(article, article_id), encoding="utf-8")
+    saved.article_path.write_text(
+        # 人工创作的文章正文走粘贴区，理由见 `_render_markdown` 的 `manual_body`。
+        # 这里由 URL 方案自动判定，而不是加一个调用方能忘记传的参数。
+        # Hand-authored articles keep their body below the paste marker (see
+        # `_render_markdown`). Derived from the URL scheme rather than passed in, so no
+        # caller can forget it.
+        _render_markdown(article, article_id, manual_body=is_custom_url(article.url)),
+        encoding="utf-8",
+    )
     saved.meta_path.write_text(
         article.model_dump_json(indent=2, exclude_none=False), encoding="utf-8"
     )

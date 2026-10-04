@@ -140,6 +140,54 @@ def url_hash(url: str) -> str:
     return hashlib.sha256(canonical.encode("utf-8")).hexdigest()[:16]
 
 
+# 人工创作文章的伪 URL 方案 / the pseudo-scheme used by hand-authored articles
+#
+# 为什么非要造一个 URL：`url_hash("")` 是常量（sha256("") 的前 16 位），
+# 而 id 就是 url_hash(url)。空 URL 的每一篇都会撞成同一行，`register()` 从此
+# 永远返回第一篇。造一个带 uuid 的方案，id 就自然唯一，且**不碰任何既有路径**。
+# Why a synthetic URL is needed: url_hash("") is a constant and the id *is*
+# url_hash(url), so every URL-less article would collide on one row and register()
+# would keep returning the first one forever. A uuid-bearing scheme makes the id
+# unique on its own and leaves every existing path untouched.
+CUSTOM_URL_SCHEME = "custom"
+
+# 台账里的 source_id，同时也是人看到的来源名 / the ledger source_id, also the human label
+CUSTOM_SOURCE_LABEL = "custom_article"
+
+
+def is_custom_url(url: str) -> bool:
+    """
+    这个地址是不是人工创作文章的伪 URL / Whether this is a hand-authored pseudo-URL.
+
+    >>> is_custom_url("custom://3f2a")
+    True
+    >>> is_custom_url("https://example.com/a")
+    False
+    """
+    try:
+        return urlparse(url).scheme == CUSTOM_URL_SCHEME
+    except ValueError:
+        return False
+
+
+def display_source(url: str) -> str:
+    """
+    给人看的来源 / The source as a person should read it.
+
+    人工创作的文章没有原文地址，把伪 URL 印进产物抬头（`> 总结（zh）　·　来源：custom://…`）
+    对读者毫无意义。这些抬头是要跟着稿子发出去的，所以统一显示成来源名。
+    A hand-authored article has no source address, and printing the pseudo-URL into the
+    artefact header would mean nothing to a reader — yet those headers travel with the
+    published script, so they show the source label instead.
+
+    >>> display_source("custom://3f2a")
+    'custom_article'
+    >>> display_source("https://example.com/a")
+    'https://example.com/a'
+    """
+    return CUSTOM_SOURCE_LABEL if is_custom_url(url) else url
+
+
 def extract_urls(text: str) -> list[str]:
     """
     从自由文本中提取全部 URL，去重保序 / Extract every URL from free text.
@@ -256,9 +304,13 @@ def is_local_url(url: str) -> bool:
 
 
 __all__ = [
+    "CUSTOM_SOURCE_LABEL",
+    "CUSTOM_URL_SCHEME",
     "canonicalize_url",
+    "display_source",
     "extract_urls",
     "host_of",
+    "is_custom_url",
     "is_local_url",
     "same_url",
     "title_from_url",
