@@ -144,6 +144,23 @@ class Tuning(BaseModel):
     # current rates, so exposing them without redoing that calibration would invite a
     # change that silently invalidates the acceptance criteria.
 
+    # -- 字幕切分 / subtitle segmentation --------------------------------------
+    #
+    # 这几个**可以调**，与上面那批语速常量不是一回事：语速变了会推翻按它校准出来的
+    # 字数窗口，而字幕切分只影响**观感**（一条字幕多长、切在哪里），
+    # 与任何验收窗口都不耦合。用户实测反馈「5~20 个中文字已经很宽泛」，
+    # 所以旋钮交给 profile，改这里就生效。
+    # Configurable, unlike the speech-rate constants above: these affect how subtitles
+    # look, not any calibrated acceptance window.
+    subtitle_max_chars: int = Field(
+        default=20, ge=5, le=80, description="单条字幕字数上限（中文按字、英文按词折算）")
+    subtitle_min_chars: int = Field(
+        default=12, ge=2, le=60, description="达到它才允许在弱边界（逗号、短停顿）切")
+    subtitle_merge_below_seconds: float = Field(
+        default=0.9, ge=0, le=5, description="短于此的条目并入相邻条目，避免一闪而过")
+    subtitle_snap_window: float = Field(
+        default=0.45, ge=0, le=3, description="时间边界吸附到最近停顿的窗口（秒），0 = 不吸附")
+
     # -- 趋势综述 / trend note ------------------------------------------------
     min_entries_for_trend: int = Field(default=4, ge=1, description="低于此不写综述，省一次调用")
 
@@ -153,6 +170,11 @@ class Tuning(BaseModel):
             raise ValueError(
                 f"longform 章节数下限大于上限："
                 f"({self.longform_min_sections}, {self.longform_max_sections})"
+            )
+        if self.subtitle_min_chars > self.subtitle_max_chars:
+            raise ValueError(
+                f"字幕字数下限大于上限："
+                f"({self.subtitle_min_chars}, {self.subtitle_max_chars})"
             )
         return self
 
