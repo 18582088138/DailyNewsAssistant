@@ -218,8 +218,10 @@ def test_target_length_uses_the_mixed_copy_budget_not_the_raw_rate() -> None:
     build_short_video(article(), llm, low=25, high=35)
 
     text = joined(llm.messages[0])
-    assert "168~235 字" in text
-    assert "112~157 字" not in text, "按纯中文语速换算会系统性少要"
+    # 断言跟着**模板的写法**走（`shortvideo.zh.md` 的措辞由用户调，不回改）；
+    # 这条验的是那两个数字，不是「字」这个字
+    assert "168~235 之间" in text
+    assert "112~157" not in text, "按纯中文语速换算会系统性少要"
 
 
 def test_config_char_window_goes_straight_into_the_prompt() -> None:
@@ -234,7 +236,7 @@ def test_config_char_window_goes_straight_into_the_prompt() -> None:
     llm = ScriptedProvider("fake", [short_reply("字" * 220)])
     result = build_short_video(article(), llm, low=25, high=35, chars=(200, 250))
 
-    assert "200~250 字" in joined(llm.messages[0])
+    assert "200~250 之间" in joined(llm.messages[0])
     assert llm.call_count == 1, "落在配置的区间内就不该回炉"
     assert result.within_target
 
