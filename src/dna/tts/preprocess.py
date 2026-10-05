@@ -70,6 +70,16 @@ class PreparedSpeech:
     `used_llm` 要分得清：退回原文和润色成功是两回事，前者意味着音质问题还在。
     Whether the LLM was actually used matters: a fallback means the reading problems
     are still there.
+
+    `source` 是**改写之前的稿子**（`clean_for_speech` 的输出，与作者写的逐字对应）。
+    字幕要用它，而不是 `text`：
+
+        `text` 里有多音字换成的同音字、`RTX 4060` 的读法、`[pause:400ms]` 这类
+        合成指令 —— 那些是**给耳朵的**，显示出来就成了错字与噪音。
+
+    两者字数可以差到 0.6~1.8 倍，所以字幕切分不能按字数比例映射，
+    只能按条数配对（见 `tts/cue_split.py`）。
+    `source` is what the author wrote; `text` is what the synthesiser reads.
     """
 
     text: str
@@ -77,6 +87,14 @@ class PreparedSpeech:
     notes: list[str] = field(default_factory=list)
     reason: str = ""
     """没用上 LLM 的原因 / why the LLM result was not used（成功时为空）。"""
+
+    source: str = ""
+    """
+    改写之前的稿子，供字幕使用 / the pre-rewrite copy, used for subtitles.
+
+    退回原文时它与 `text` 相同 —— 那种情况下字幕本来就用不上映射。
+    Equal to `text` whenever the rewrite did not happen.
+    """
 
 
 # 提示词正文在 `config/prompts/tts_preprocess.md` / The prompt text lives in that file.
@@ -113,7 +131,8 @@ def prepare_for_speech(
         return PreparedSpeech(text="", reason="没有可朗读的内容")
 
     if not s.tts_preprocess:
-        return PreparedSpeech(text=cleaned, reason="已关闭 TTS 预处理（TTS_PREPROCESS=false）")
+        return PreparedSpeech(text=cleaned, reason="已关闭 TTS 预处理（TTS_PREPROCESS=false）",
+                              source=cleaned)
 
     try:
         provider = llm or _default_llm()
@@ -126,7 +145,7 @@ def prepare_for_speech(
         )
     except Exception as exc:
         logger.warning("TTS 预处理失败，用原文合成：%s", " ".join(str(exc).split())[:200])
-        return PreparedSpeech(text=cleaned, reason=f"LLM 调用失败：{exc}"[:300])
+        return PreparedSpeech(text=cleaned, reason=f"LLM 调用失败：{exc}"[:300], source=cleaned)
 
     spoken = (result.spoken or "").strip()
     ratio = len(spoken) / len(cleaned)
@@ -136,11 +155,13 @@ def prepare_for_speech(
         return PreparedSpeech(
             text=cleaned,
             reason=f"改写后 {len(spoken)} 字 / 原文 {len(cleaned)} 字，偏离过大，已退回原文",
+            source=cleaned,
         )
 
     logger.info("TTS 预处理：%d → %d 字，%d 条改动", len(cleaned), len(spoken),
                 len(result.notes))
-    return PreparedSpeech(text=spoken, used_llm=True, notes=list(result.notes))
+    return PreparedSpeech(text=spoken, used_llm=True, notes=list(result.notes),
+                          source=cleaned)
 
 
 def _default_llm() -> LLMProvider:

@@ -7,12 +7,26 @@
 
 ## 〇、进行中
 
+<<<<<<< Updated upstream
 **当前分支 `custom_article`：主界面「新建」自己的文章。**
 计划正文 `~/.claude/plans/custom-article.md`（不随仓库走；新会话先读它）。
 已完成：后端 `create_custom_article`（id 走 `custom://<uuid>`，空 URL 会撞行）·
 文章面板双击改标题/正文 · 未生成产物的骨架 · 素材合规化（点「媒体」格 / `dna media`）·
 口播→中视频、长文案→长视频改名（**落盘标记 `**口播（` 刻意不动**）·
 CLI `dna new` / `dna media`。提交命令在 `docs/git_commands.md`（待人工执行）。
+=======
+**字幕重切分（`opt_gui` 之上的独立任务）**：把「一段音频一条字幕」改成段内切短条，
+且**文本用原文案而不是送 TTS 的改写稿**；逐段音频旁边配同名 `.srt`。
+
+- 新增 `tts/vad.py`（能量法停顿检测，**零新依赖**）、`tts/cue_split.py`（条数配对切分）；
+- 数据流改动：`PreparedSpeech.source` → `SpeechSegment.source` → 字幕文本；
+- 完整背景与实测见 [issues/016](issues/016-subtitles-used-the-rewritten-copy.md)，
+  用法见 [14_tts_guide.md](14_tts_guide.md) 的「字幕的文本与切分」；
+- 调参探针：`tools/probe_subtitles.py <tts 目录>`。
+
+**当前分支 `opt_gui`：GUI 易用性优化。** 计划正文 `~/.claude/plans/opt-gui.md`
+（不随仓库走；新会话先读它）。批次 A~F ✅，提交命令在 `docs/git_commands.md`（待人工执行）。
+>>>>>>> Stashed changes
 
 **一条硬规矩：历史产物只读。**`save_title` / `save_body` 与 `normalize_media` 在
 **store 层**拒绝非人工创作的文章（命令行也绕不过去）——改稿会把整篇 `article.md`
@@ -149,6 +163,7 @@ CLI `dna new` / `dna media`。提交命令在 `docs/git_commands.md`（待人工
 | [014](issues/014-hardcoded-config-and-fake-settings.md) | **配置改了不生效**：存图上限被写死的 10 静默压掉；`.env` 的四个代理项完全不接线；18 条假配置 | 🔄 批次 2 |
 | [015](issues/015-language-sentinel-and-dialog-clipping.md) | 语言哨兵空串漏到下游：整张表静默变「未生成」+ 展开面板 `KeyError: ''`；设置面板被 Quasar 裁掉没滚动条；`src/` 下落了 `data/` 与 `outputs/` | ✅ |
 | [016](issues/016-title-change-did-not-rename-the-folder.md) | **改标题只改内容、不重命名产物目录**，目录名与标题脱节；连带隐患是下一次落盘会按 id 删掉旧目录，把里面的产物一起删掉 | ✅ |
+| [017](issues/017-subtitles-used-the-rewritten-copy.md) | **字幕显示的是 LLM 改写稿**（`2.1.287` → 「二点一点二八七」）；修复中还发现切分会在词中间硬切（「函 / 数」）与 0.05 秒的一闪而过 | ✅ 修复 |
 
 **issue 001 的长期约束**：本地推理模型回答一个字耗数千 token / 数百秒。因此本地模型
 **不要设小的 `max_tokens`**（控长度靠提示词约束句数）；Local 迁移优先选非推理模型；

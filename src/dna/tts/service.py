@@ -41,7 +41,7 @@ from dna.tts.base import (
     TTSInfo,
 )
 from dna.tts.client import TTSServiceClient
-from dna.tts.subtitle import build_cues
+from dna.tts.subtitle import build_cues_segmented, piece_srt_names, write_srt
 from dna.tts.supervisor import ensure_service
 
 logger = get_logger("tts.service")
@@ -146,7 +146,9 @@ class TTSServiceProvider:
         reasons: list[str] = []
         artifacts: list[str] = []
         local: list[tuple[str, bytes]] = []
-        spoken: list[tuple[float, str]] = []      # 字幕要的 (时长, 原文)
+        # 字幕的原料：(真实时长, 朗读稿, 原文)。朗读稿决定条数与时间，
+        # 原文决定显示什么 —— 两者长度可以差到 0.6~1.8 倍，见 tts/cue_split.py。
+        spoken: list[tuple[float, str, str]] = []
         seconds = 0.0
 
         for index, piece in enumerate(pieces):
@@ -156,7 +158,7 @@ class TTSServiceProvider:
             try:
                 if ready is not None:
                     # 现成的波形只补一个 `seconds`，下面的路一个字不改：拼接、
-                    # 真实时长、字幕仍走同一个 `_join` / `build_cues`。唯一的差别是
+                    # 真实时长、字幕仍走同一个 `_join` 与同一套段内切分。唯一的差别是
                     # 这一段没有服务端产物路径，`artifacts` 因此少一条（允许，
                     # `_copy_tts_artifacts` 本来就只在拿不到时记一条警告）。
                     body = {"wav": ready, "seconds": _wav_seconds(ready)}
@@ -202,7 +204,7 @@ class TTSServiceProvider:
             # 字幕时长用**波形自己的长度**，不用服务端报的秒数：
             # 字幕的误差是累积的，几十段之后半秒的偏差会变成看得见的错位。
             # Measured from the waveform: subtitle drift accumulates.
-            spoken.append((_wav_seconds(body["wav"]), piece.text))
+            spoken.append((_wav_seconds(body["wav"]), piece.text, piece.source))
             if on_progress is not None:
                 on_progress(index + 1, len(pieces), seconds)
 
@@ -217,8 +219,10 @@ class TTSServiceProvider:
             )
 
         joined, rate, real_seconds = _join(wavs, gaps[:-1] if gaps else [])
+        whole_cues, piece_cues = build_cues_segmented(spoken, wavs, gaps)
         return AudioClip(
-            cues=build_cues(spoken, gaps),
+            cues=whole_cues,
+            piece_cues=piece_cues,
             wav=joined,
             sample_rate=rate,
             seconds=real_seconds,
@@ -255,6 +259,8 @@ class TTSServiceProvider:
                 logger.warning("逐段音频写盘失败 %s：%s", name, exc)
                 continue
             saved.append(target)
+
+        saved.extend(_write_piece_subtitles(clip, dest_dir))
         return saved
 
     # ------------------------------------------------------ 内部 / internals
@@ -285,6 +291,40 @@ class TTSServiceProvider:
 # ---------------------------------------------------------------------------
 # 波形拼接 / joining waveforms
 # ---------------------------------------------------------------------------
+
+
+def _write_piece_subtitles(clip: AudioClip, dest_dir: Path) -> list[Path]:
+    """
+    逐段字幕与逐段音频落在一起 / Write a subtitle beside every piece of audio.
+
+    音频的逐段副本早就落了盘，字幕却只有整条那份 —— 想单独换一句话时，
+    有那一段的音频却没有对应的字幕，还得回到整条里去找它。两者是同一类产物，
+    就该同进同出。
+    Audio pieces were already written per segment; subtitles were not.
+
+    文件名与音频**同名同扩展名**（`seg_001_narrator.srt`），所以一一对应关系
+    看一眼文件夹就明白，不需要额外的清单。
+    Same stem as the audio, so the pairing is obvious from the folder listing.
+
+    写不进去只记一条警告：文案与音频都已经拿到了，字幕落盘失败不该让整次生成算失败。
+    """
+    if not clip.piece_cues or not clip.pieces:
+        return []
+
+    names = piece_srt_names(clip.pieces)
+    saved: list[Path] = []
+    for index, cues in enumerate(clip.piece_cues):
+        if index >= len(names) or not cues:
+            continue
+        target = dest_dir / names[index]
+        try:
+            written = write_srt(target, list(cues))
+        except OSError as exc:
+            logger.warning("逐段字幕写盘失败 %s：%s", target.name, exc)
+            continue
+        if written is not None:
+            saved.append(written)
+    return saved
 
 
 def _gap_after(index: int, pieces: Sequence[SpeechSegment]) -> float:

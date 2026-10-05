@@ -29,6 +29,7 @@ from dna.produce.tasks import (
 from dna.tts.base import ProgressFn, SpeechSegment, TTSProvider
 from dna.tts.factory import voice_for_role
 from dna.tts.preprocess import prepare_for_speech
+from dna.tts.cue_split import split_to_n
 from dna.tts.segment import split_for_speech
 
 logger = get_logger("produce.service")
@@ -170,11 +171,34 @@ def _build_segments(
         # 音色跟着语言走：英文稿用英文音色，否则模型会用中文的发音习惯念英文
         # The voice follows the language; otherwise English is read with Chinese phonetics.
         voice = voice_for_role(role, settings, lang=lang)
-        for piece in split_for_speech(prepared.text):
-            segments.append(SpeechSegment(text=piece, voice=voice, role=role))
+        spoken_pieces = split_for_speech(prepared.text)
+        sources = _source_pieces(prepared, len(spoken_pieces))
+        for piece, source in zip(spoken_pieces, sources, strict=True):
+            segments.append(SpeechSegment(text=piece, voice=voice, role=role, source=source))
             spoken_chars += len(piece)
 
     return segments, spoken_chars
+
+
+def _source_pieces(prepared, count: int) -> list[str]:
+    """
+    把原文切成与朗读稿**同样多**的段 / Match the original copy piece-for-piece.
+
+    两段文本是同一段话的两种写法，按同一套规则切通常得到同样的段数，
+    那就一一配对；**对不上时按条数均分原文**，而不是放弃 —— 宁可某一段的
+    原文边界不完美，也不要某些段完全没有原文可显示。
+    Same rules usually yield the same count; otherwise split the original evenly,
+    because a slightly off boundary beats a missing one.
+
+    没有原文（改写的输入本来就是空）时返回等长的空串，让下游退回朗读稿。
+    """
+    if not prepared.source or count <= 0:
+        return [""] * max(0, count)
+
+    same_rules = split_for_speech(prepared.source)
+    if len(same_rules) == count:
+        return same_rules
+    return split_to_n(prepared.source, count)
 
 
 def _copy_tts_artifacts(

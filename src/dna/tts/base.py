@@ -131,6 +131,19 @@ class SpeechSegment:
     voice: VoiceSpec
     role: str = "narrator"
 
+    source: str = ""
+    """
+    这一段的**原文**（送 LLM 改写之前的稿子）/ the pre-rewrite copy of this piece.
+
+    字幕要用它，因为 `text` 是被朗读友好化改写过的：多音字换成了同音字、
+    `RTX 4060` 改成读法、还夹着 `[pause:400ms]` 这类合成指令 —— 那些念出来
+    是对的，**显示出来就是错字**。
+    空字符串表示调用方没提供（命令行试听、测试等），此时字幕退回 `text`。
+
+    Subtitles read this rather than `text`, which is rewritten for the ear and can
+    contain homophone substitutions and synthesiser markup. Empty means fall back.
+    """
+
     pause_ms: int | None = None
     """
     这一段之后的静音 / the silence after this piece；None = 用 `PAUSE_SECONDS` 那套默认。
@@ -203,6 +216,20 @@ class AudioClip:
         逐段的字节本来就已经在手上（合成时逐段回传的），直接写盘既准确又省一次往返。
         The service names files by piece index and voice, so two pieces sharing a voice
         collide and the later one overwrites the earlier. The bytes are already in hand.
+    """
+
+    piece_cues: list[list[tuple[float, float, str]]] = field(default_factory=list)
+    """
+    逐段字幕，**时间从 0 起算**，与 `pieces` 一一对应 / Per-piece subtitles, zero-based.
+
+    为什么逐段也要出字幕 / Why per-piece cues as well:
+        音频的逐段副本（`pieces`）已经落盘了，字幕却不落 —— 想换某一句时
+        有音频没字幕，等于还得自己在整条那条里找。两者是同一类产物，就该同进同出。
+        整条的 `cues` 保留不变，它是拼接之后的时间轴，两者用途不同：
+        逐段用于替换与剪辑，整条用于直接上时间轴。
+
+        Audio pieces are already written per segment; leaving subtitles whole-only
+        means editing one line requires hunting through the joined file.
     """
 
     @property

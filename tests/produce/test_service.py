@@ -1098,25 +1098,25 @@ def test_longform_script_cannot_be_flattened(settings: Settings) -> None:
 
 def test_subtitles_follow_the_console_split(settings: Settings) -> None:
     """
-    **字幕按操作台的拆分出**：一段一条，文本逐字就是那一段的文本。
+    **provider 给什么字幕，产物层就写什么**，一段不丢、一字不改。
 
-    操作台把分段交给 `produce(segments=...)`，字幕在 `tts/service.py` 里按
-    **每段的波形长度**算时间轴（不是服务端报的秒数——那个误差是累积的），
-    再由产物层写到音频旁边。这条链断在哪一环，表现都是「字幕跟我拆的不一样」。
+    操作台把分段交给 `produce(segments=...)`，字幕由 provider 生成
+    （生产路径是 `TTSServiceProvider`，它在**段内**按停顿再切短条），
+    产物层只负责落盘。这条用例用假 provider 直接给出时间轴，
+    验的是**中间那段搬运**：断在哪一环，表现都是「字幕跟我拆的不一样」。
     """
     from dna.tts.base import SpeechSegment, VoiceSpec
-    from dna.tts.subtitle import build_cues
 
     article_id = seed(settings)
     _write_script(settings, article_id, ProductionKind.NARRATION, "自动切出来的原稿。")
 
     class _WithCues(FakeTTS):
-        """按真实服务的做法补上 cues（`FakeTTS` 本身不出字幕）。"""
+        """直接给出字幕时间轴（`FakeTTS` 本身不出字幕）。"""
 
         def synthesize(self, segments, *, on_progress=None, run=None, rendered=None):
             clip = super().synthesize(segments, on_progress=on_progress, run=run)
-            spoken = [(1.0, seg.text) for seg in segments]
-            clip.cues = build_cues(spoken, [0.0] * len(segments))
+            clip.cues = [(float(index), float(index + 1), seg.text)
+                         for index, seg in enumerate(segments)]
             return clip
 
     voice = VoiceSpec(speaker="serena", language="chinese")
@@ -1135,6 +1135,74 @@ def test_subtitles_follow_the_console_split(settings: Settings) -> None:
     body = srt.read_text(encoding="utf-8-sig")
     assert [line for line in body.splitlines() if line and "-->" not in line
             and not line.isdigit()] == texts
+
+
+def test_piece_subtitles_land_beside_piece_audio(settings: Settings) -> None:
+    """
+    **逐段字幕与逐段音频一起落盘**，且同名同目录。
+
+    音频的逐段副本早就落盘了、字幕却没有 —— 想单独换一句话时，有那一段的
+    音频却没对应的字幕，还得回整条里找。两者是同类产物，就该同进同出。
+    Per-piece audio was written without its subtitle; the two belong together.
+
+    逐段字幕的时间**从 0 起算**（它描述这一段自己），与整条那份的累积时间轴不同。
+    """
+    import io
+    import wave
+
+    from dna.tts.base import SpeechSegment, VoiceSpec
+
+    article_id = seed(settings)
+    _write_script(settings, article_id, ProductionKind.NARRATION, "自动切出来的原稿。")
+
+    def silent_wav(seconds: float) -> bytes:
+        buffer = io.BytesIO()
+        with wave.open(buffer, "wb") as handle:
+            handle.setnchannels(1)
+            handle.setsampwidth(2)
+            handle.setframerate(24_000)
+            handle.writeframes(b"\x00\x00" * int(24_000 * seconds))
+        return buffer.getvalue()
+
+    class _WithPieces(FakeTTS):
+        """像 `TTSServiceProvider` 那样给出逐段音频与逐段字幕。
+
+        `fetch_artifacts` 直接借真实实现：产物落盘的规则（同名、同目录、
+        带 BOM）正是这条用例要验的东西，自己再写一遍就等于没有验证。
+        The real `fetch_artifacts` is reused on purpose: the naming and BOM rules
+        are exactly what is under test.
+        """
+
+        def fetch_artifacts(self, clip, dest_dir):
+            from dna.tts.service import TTSServiceProvider
+
+            return TTSServiceProvider.fetch_artifacts(self, clip, dest_dir)
+
+        def synthesize(self, segments, *, on_progress=None, run=None, rendered=None):
+            clip = super().synthesize(segments, on_progress=on_progress, run=run)
+            clip.pieces = [(f"seg_{i + 1:03d}_narrator.wav", silent_wav(1.5))
+                           for i in range(len(segments))]
+            # 契约与 `AudioClip.cues` 一致：元组，不是 dataclass
+            clip.piece_cues = [[(0.0, 1.5, seg.source or seg.text)] for seg in segments]
+            clip.cues = [(i * 1.5, (i + 1) * 1.5, seg.source or seg.text)
+                         for i, seg in enumerate(segments)]
+            return clip
+
+    voice = VoiceSpec(speaker="serena", language="chinese")
+    segments = [SpeechSegment(text="改写后的读法。", voice=voice, source="原文在这里。"),
+                SpeechSegment(text="第二段读法。", voice=voice, source="第二段原文。")]
+    result = produce(article_id, ProductionKind.NARRATION_AUDIO, settings=settings,
+                     tts=_WithPieces(), segments=segments)
+
+    assert result.ok
+    tts_dir = result.path.parent / (settings.tts_artifact_dirname or "tts")
+    piece_srts = sorted(tts_dir.glob("seg_*_narrator.srt"))
+    assert len(piece_srts) == 2, f"逐段字幕没落盘：{list(tts_dir.iterdir())}"
+    assert (tts_dir / "seg_001_narrator.wav").exists(), "逐段音频与字幕应当同目录"
+
+    body = piece_srts[0].read_text(encoding="utf-8-sig")
+    assert "原文在这里。" in body, f"逐段字幕显示的不是原文：{body!r}"
+    assert "改写后的读法。" not in body, "逐段字幕用了朗读稿"
 
 
 # --- 工作台就地编辑 / in-place editing on the workbench ---------------------------
