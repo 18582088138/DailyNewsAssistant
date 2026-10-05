@@ -66,6 +66,16 @@ class _Piece:
     number: int = 0
     pause_ms: int | None = None
 
+    source: str = ""
+    """
+    这一段的**原文** / the pre-rewrite copy of this piece.
+
+    面板里能改的是**朗读稿**（`text_box`），而字幕要显示原文 —— 少了这个字段，
+    重建 `SpeechSegment` 时原文就断了，字幕退回显示改写稿（数字变中文读法）。
+    实测：`30项` 在字幕里变成「三十项」。
+    Carried through the panel so rebuilding a segment does not lose the original copy.
+    """
+
     def text(self) -> str:
         return str(getattr(self.text_box, "value", "") or "").strip()
 
@@ -166,7 +176,7 @@ class _Panel:
             index = len(segments)
             segments.append(
                 SpeechSegment(text=text, voice=voice, role=piece.role,
-                              pause_ms=piece.pause_ms)
+                              pause_ms=piece.pause_ms, source=piece.source)
             )
             if self.state(piece) == STATE_DONE and piece.wav is not None:
                 rendered[index] = piece.wav

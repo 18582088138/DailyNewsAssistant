@@ -166,6 +166,7 @@ def _add_piece(
         base=template,
         role=segment.role if segment is not None else "narrator",
         pause_ms=segment.pause_ms if segment is not None else None,
+        source=segment.source if segment is not None else "",
     )
     panel.pieces.append(piece)
     with panel.list_box:

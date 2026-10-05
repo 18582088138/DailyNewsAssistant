@@ -1222,6 +1222,27 @@ def _console(controls, texts: list[str], base, *, role: str = "narrator"):
     return panel
 
 
+def test_the_console_carries_the_source_copy_into_plan() -> None:
+    """操作台重建 `SpeechSegment` 时必须带上 `source`。
+
+    少了它，`_generate_audio` 会走「外部给了分段」那条路，`source` 为空，
+    字幕退回显示**朗读稿** —— 实测短视频稿里的 `30项任务` 在字幕里变成
+    「三十项任务」、`50.64` 变成「五十点六四」。朗读稿是给耳朵的，
+    阿拉伯数字被写成中文读法就是为了念得准。
+    """
+    from dna.tts.base import VoiceSpec
+    from frontends.nicegui_app import tts_panel, voice_controls
+
+    base = VoiceSpec(speaker="Serena")
+    controls = _controls(voice_controls.MODE_BUILTIN, "", base)
+    panel = _console(controls, ["三十项任务，五十点六四。"], base)
+    panel.pieces[0].source = "30项任务，50.64。"
+
+    segments, _ = panel.plan()
+    assert segments, "操作台应当产出一段"
+    assert segments[0].source == "30项任务，50.64。", "操作台把原文案丢了"
+
+
 def test_builtin_mode_drops_the_reference_audio() -> None:
     """
     内置音色下参考音频必须清空。
