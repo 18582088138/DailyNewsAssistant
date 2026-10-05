@@ -27,9 +27,9 @@ from dna.produce.tasks import (
     spec,
 )
 from dna.tts.base import ProgressFn, SpeechSegment, TTSProvider
+from dna.tts.cue_split import split_to_n
 from dna.tts.factory import voice_for_role
 from dna.tts.preprocess import prepare_for_speech
-from dna.tts.cue_split import split_to_n
 from dna.tts.segment import split_for_speech
 
 logger = get_logger("produce.service")

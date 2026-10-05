@@ -41,6 +41,7 @@ from dna.tts.base import (
     TTSInfo,
 )
 from dna.tts.client import TTSServiceClient
+from dna.tts.cue_split import SplitParams
 from dna.tts.subtitle import build_cues_segmented, piece_srt_names, write_srt
 from dna.tts.supervisor import ensure_service
 
@@ -66,13 +67,20 @@ class TTSServiceProvider:
     Satisfies the `TTSProvider` protocol, so nothing above it changes.
     """
 
-    def __init__(self, settings: Settings | None = None) -> None:
+    def __init__(self, settings: Settings | None = None, *,
+                 tuning: object | None = None) -> None:
         self.settings = settings or get_settings()
         self.client = TTSServiceClient(
             self.settings.tts_service_url, timeout=self.settings.tts_request_timeout
         )
         self._info: TTSInfo | None = None
         self._speakers: list[str] | None = None
+        # 字幕切分的旋钮来自 `profile.yaml` 的 `tuning`（见 `CLAUDE.md` 配置铁律：
+        # 可调参数不许写死在代码里）。**构造时读一次**：profile 不会在一次合成
+        # 中途变化，而每段都去读盘是白费。
+        # Read once at construction: the profile does not change mid-synthesis.
+        self._split_params = SplitParams.from_tuning(
+            tuning if tuning is not None else _profile_tuning())
 
     # ------------------------------------------------------------ 身份 / identity
 
@@ -219,7 +227,8 @@ class TTSServiceProvider:
             )
 
         joined, rate, real_seconds = _join(wavs, gaps[:-1] if gaps else [])
-        whole_cues, piece_cues = build_cues_segmented(spoken, wavs, gaps)
+        whole_cues, piece_cues = build_cues_segmented(spoken, wavs, gaps,
+                                                      self._split_params)
         return AudioClip(
             cues=whole_cues,
             piece_cues=piece_cues,
@@ -325,6 +334,24 @@ def _write_piece_subtitles(clip: AudioClip, dest_dir: Path) -> list[Path]:
         if written is not None:
             saved.append(written)
     return saved
+
+
+def _profile_tuning() -> object | None:
+    """
+    读 `profile.yaml` 的 `tuning` 块 / Read the profile's tuning block.
+
+    读不到就返回 `None`，由 `SplitParams` 用默认值 —— **字幕不该因为偏好文件
+    有问题就整个不出**。这与 `safe_profile` 的立场一致：偏好是锦上添花，
+    不是产物存在的前提。
+    A broken preferences file must not take the subtitles down with it.
+    """
+    try:
+        from dna.core.config import safe_profile
+
+        return safe_profile().tuning
+    except Exception as exc:
+        logger.warning("读不到 profile，字幕切分用默认值：%s", exc)
+        return None
 
 
 def _gap_after(index: int, pieces: Sequence[SpeechSegment]) -> float:
