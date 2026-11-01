@@ -88,6 +88,10 @@ def voice_for_role(
     # 空值都会静默变成英文音色——中文稿被用英文发音习惯念出来，而日志里什么都没有。
     language = "english" if lang == "en" else "chinese"
 
+    minimax_voice = (s.minimax_voice_id or "").strip()
+    if minimax_voice:
+        return VoiceSpec(speaker=minimax_voice, language=language)
+
     # 默认走音色克隆 / cloning is the default
     #
     # 内置音色**跟着权重变**：同一个 `Serena` 在 0.6B 与 1.7B 上不是同一把嗓子，

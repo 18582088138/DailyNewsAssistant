@@ -195,6 +195,8 @@ class Settings(BaseSettings):
     tts_ref_audio_guest: str = ""
     tts_ref_text_guest: str = ""
 
+    # 配置后所有角色都复用这把 MiniMax 账号音色，不再进入参考音频克隆分支。
+    minimax_voice_id: str = ""
     tts_voice_host: str = ""
     tts_voice_guest: str = ""
 
